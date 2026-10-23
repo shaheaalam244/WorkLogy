@@ -38,4 +38,6 @@ scratch/
 **/scratch/
 .expo/
 **/.expo/
+.vite/
+**/.vite/
 
