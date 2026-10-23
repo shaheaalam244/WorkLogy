@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -8,73 +8,274 @@ import {
   TouchableOpacity,
   KeyboardAvoidingView,
   Platform,
-  ActivityIndicator
+  ActivityIndicator,
+  StatusBar,
+  Image,
+  Alert,
+  Keyboard,
+  BackHandler,
+  ScrollView
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../hooks/useAuth';
+import { api, getStoredAuthToken } from '../api/client';
 import { socketService } from '../services/socketService';
 import { COLORS, SOCKET_EVENTS } from '../constants';
 import { formatTime } from '../utils/formatters';
 import type { ChatMessage } from '../types';
 
+interface MessageState extends ChatMessage {
+  status?: 'sending' | 'sent' | 'failed';
+  clientTempId?: string;
+}
+
 export default function VendorChatDetailScreen({ route, navigation }: any) {
-  const { bookingId, otherUser, title } = route.params || {};
+  const insets = useSafeAreaInsets();
+  const topInset = Math.max(
+    insets.top,
+    Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 0
+  );
+  const bottomInset = insets.bottom;
+
+  const { conversationId: initialConvId, bookingId, otherUser, title } = route.params || {};
   const { user } = useAuth();
 
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [conversationId, setConversationId] = useState<string | null>(initialConvId || null);
+  const [messages, setMessages] = useState<MessageState[]>([]);
   const [inputText, setInputText] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isClientOnline, setIsClientOnline] = useState(false);
+
   const flatListRef = useRef<FlatList>(null);
+  const isMountedRef = useRef<boolean>(true);
+  const isNearBottomRef = useRef<boolean>(true);
+  const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
+
+  // Track whether vendor is scrolled near bottom of messages
+  const handleScroll = useCallback((event: any) => {
+    const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
+    const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
+    isNearBottomRef.current = distanceFromBottom <= 80;
+  }, []);
+
+  // Android hardware back handler
+  useEffect(() => {
+    const onBackPress = () => {
+      Keyboard.dismiss();
+      navigation.goBack();
+      return true;
+    };
+    const backSub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => {
+      backSub.remove();
+      Keyboard.dismiss();
+    };
+  }, [navigation]);
+
+  // Keyboard show/hide listeners
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvent, () => {
+      setIsKeyboardOpen(true);
+      if (isNearBottomRef.current) {
+        setTimeout(() => {
+          flatListRef.current?.scrollToEnd({ animated: true });
+        }, 50);
+      }
+    });
+
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setIsKeyboardOpen(false);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   const customerName = otherUser?.name || 'Customer';
+  const customerAvatar = otherUser?.avatar;
+  const recipientId = otherUser?._id || otherUser?.id;
+
+  // 1. Fetch Real Messages from Backend
+  const loadMessages = useCallback(async (isPolling: boolean = false) => {
+    if (!conversationId) {
+      setLoading(false);
+      return;
+    }
+
+    try {
+      if (!isPolling) setLoading(true);
+      setError(null);
+
+      const res = await api.chat.getMessages(conversationId, { limit: 50 });
+      if (!isMountedRef.current) return;
+
+      if (res?.success && Array.isArray(res.messages)) {
+        const formatted = res.messages.map((m: any) => ({
+          ...m,
+          status: 'sent' as const
+        }));
+        setMessages(formatted);
+
+        // Mark read
+        api.chat.markConversationRead(conversationId).catch(() => {});
+      }
+    } catch (err: any) {
+      if (!isMountedRef.current) return;
+      if (!isPolling) {
+        setError(err?.message || 'Could not load messages.');
+      }
+    } finally {
+      if (isMountedRef.current && !isPolling) {
+        setLoading(false);
+      }
+    }
+  }, [conversationId]);
 
   useEffect(() => {
-    setMessages([
-      {
-        _id: 'msg-v-1',
-        conversationId: bookingId || 'booking-conv',
-        sender: otherUser?._id || 'customer-1',
-        receiver: user?._id || 'vendor-1',
-        text: `Hello, regarding booking for "${title || 'service'}". When can you arrive?`,
-        read: true,
-        createdAt: new Date(Date.now() - 3600000).toISOString()
+    isMountedRef.current = true;
+    loadMessages();
+
+    // Setup socket connection
+    let socket: any = null;
+    const initSocket = async () => {
+      try {
+        if (user?._id) {
+          socket = await socketService.connect(user._id);
+
+          // Check recipient presence
+          if (recipientId) {
+            socket.emit('check_presence', [recipientId], (resp?: { onlineUserIds?: string[] }) => {
+              if (resp?.onlineUserIds && isMountedRef.current) {
+                setIsClientOnline(resp.onlineUserIds.includes(String(recipientId)));
+              }
+            });
+          }
+
+          // Listen for new messages
+          socket.on(SOCKET_EVENTS.RECEIVE_MESSAGE, (incoming: any) => {
+            if (!isMountedRef.current) return;
+            const incConvId = incoming.conversationId || incoming.conversation?._id || incoming.conversation;
+            if (incConvId && String(incConvId) === String(conversationId)) {
+              setMessages((prev) => {
+                if (prev.some((m) => m._id === incoming._id)) return prev;
+                return [...prev, { ...incoming, status: 'sent' }];
+              });
+              api.chat.markConversationRead(conversationId).catch(() => {});
+              if (isNearBottomRef.current) {
+                setTimeout(() => {
+                  flatListRef.current?.scrollToEnd({ animated: true });
+                }, 100);
+              }
+            }
+          });
+        }
+      } catch (e) {
+        // Fallback silently
       }
-    ]);
-
-    setupSocket();
-  }, [bookingId]);
-
-  const setupSocket = async () => {
-    const socket = await socketService.connect(user?._id);
-    socket.on(SOCKET_EVENTS.RECEIVE_MESSAGE, (newMsg: ChatMessage) => {
-      setMessages((prev) => [...prev, newMsg]);
-      flatListRef.current?.scrollToEnd({ animated: true });
-    });
-  };
-
-  const handleSendMessage = () => {
-    if (!inputText.trim()) return;
-
-    const newMsg: ChatMessage = {
-      _id: `msg-${Date.now()}`,
-      conversationId: bookingId || 'booking-conv',
-      sender: user?._id || 'vendor-1',
-      receiver: otherUser?._id || 'customer-1',
-      text: inputText.trim(),
-      read: false,
-      createdAt: new Date().toISOString()
     };
 
-    setMessages((prev) => [...prev, newMsg]);
-    setInputText('');
-    flatListRef.current?.scrollToEnd({ animated: true });
+    initSocket();
 
-    const socket = socketService.getSocket();
-    if (socket) {
-      socket.emit(SOCKET_EVENTS.SEND_MESSAGE, newMsg);
+    // Auto-poll messages every 6 seconds
+    const interval = setInterval(() => {
+      loadMessages(true);
+    }, 6000);
+
+    return () => {
+      isMountedRef.current = false;
+      clearInterval(interval);
+      if (socket) {
+        socket.off(SOCKET_EVENTS.RECEIVE_MESSAGE);
+      }
+    };
+  }, [conversationId, loadMessages, user?._id, recipientId]);
+
+  // 2. Send Message
+  const handleSendMessage = async (textToSend?: string, retryTempId?: string) => {
+    const text = (textToSend || inputText).trim();
+    if (!text || sending) return;
+
+    const tempId = retryTempId || `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+    if (!retryTempId) {
+      const optimisticMsg: MessageState = {
+        _id: tempId,
+        clientTempId: tempId,
+        conversationId: conversationId || '',
+        sender: user?._id || '',
+        receiver: recipientId || '',
+        text,
+        read: false,
+        status: 'sending',
+        createdAt: new Date().toISOString()
+      };
+
+      setMessages((prev) => [...prev, optimisticMsg]);
+      setInputText('');
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 50);
+    } else {
+      setMessages((prev) =>
+        prev.map((m) => (m.clientTempId === retryTempId ? { ...m, status: 'sending' } : m))
+      );
+    }
+
+    try {
+      setSending(true);
+
+      const res = await api.chat.sendMessage({
+        conversationId: conversationId || undefined,
+        recipientId: recipientId || undefined,
+        text,
+        clientTempId: tempId
+      });
+
+      if (res?.success && res.message) {
+        if (!conversationId && (res.message as any).conversation) {
+          const newConvId = (res.message as any).conversation;
+          setConversationId(typeof newConvId === 'object' ? newConvId._id : newConvId);
+        }
+
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (m.clientTempId === tempId || m._id === tempId) {
+              return { ...res.message, status: 'sent' };
+            }
+            return m;
+          })
+        );
+      }
+    } catch (err: any) {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.clientTempId === tempId || m._id === tempId) {
+            return { ...m, status: 'failed' };
+          }
+          return m;
+        })
+      );
+      Alert.alert('Send Failed', 'Could not deliver your message. Tap to retry.');
+    } finally {
+      setSending(false);
     }
   };
 
-  const renderMessageItem = ({ item }: { item: ChatMessage }) => {
-    const isMe = item.sender === user?._id || (typeof item.sender === 'object' && item.sender._id === user?._id);
+  const handleRetry = (item: MessageState) => {
+    handleSendMessage(item.text, item.clientTempId || item._id);
+  };
+
+  const renderMessageItem = ({ item }: { item: MessageState }) => {
+    const senderId = typeof item.sender === 'object' ? (item.sender as any)?._id : item.sender;
+    const isMe = String(senderId) === String(user?._id);
 
     return (
       <View style={[styles.bubbleWrapper, isMe ? styles.bubbleWrapperRight : styles.bubbleWrapperLeft]}>
@@ -82,9 +283,28 @@ export default function VendorChatDetailScreen({ route, navigation }: any) {
           <Text style={[styles.msgText, isMe ? styles.msgTextMe : styles.msgTextThem]}>
             {item.text}
           </Text>
-          <Text style={[styles.timeText, isMe ? styles.timeTextMe : styles.timeTextThem]}>
-            {formatTime(item.createdAt)}
-          </Text>
+          <View style={styles.bubbleFooter}>
+            <Text style={[styles.timeText, isMe ? styles.timeTextMe : styles.timeTextThem]}>
+              {formatTime(item.createdAt)}
+            </Text>
+            {isMe && (
+              <View style={styles.statusIndicator}>
+                {item.status === 'sending' ? (
+                  <ActivityIndicator size={10} color="rgba(255,255,255,0.7)" />
+                ) : item.status === 'failed' ? (
+                  <TouchableOpacity onPress={() => handleRetry(item)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+                    <Ionicons name="alert-circle" size={13} color="#EF4444" />
+                  </TouchableOpacity>
+                ) : (
+                  <Ionicons
+                    name={item.read ? 'checkmark-done' : 'checkmark'}
+                    size={12}
+                    color="rgba(255,255,255,0.7)"
+                  />
+                )}
+              </View>
+            )}
+          </View>
         </View>
       </View>
     );
@@ -93,47 +313,131 @@ export default function VendorChatDetailScreen({ route, navigation }: any) {
   return (
     <KeyboardAvoidingView
       style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+      behavior="padding"
+      keyboardVerticalOffset={0}
     >
-      <View style={styles.topBar}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Text style={styles.backBtnText}>‹ Back</Text>
+      {/* ── TOP HEADER ── */}
+      <View style={[styles.topBar, { paddingTop: topInset, minHeight: 56 + topInset }]}>
+        <TouchableOpacity
+          onPress={() => {
+            Keyboard.dismiss();
+            navigation.goBack();
+          }}
+          style={styles.backBtn}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="arrow-back" size={20} color="#111827" />
         </TouchableOpacity>
-        <View style={{ flex: 1, marginLeft: 10 }}>
-          <Text style={styles.clientName}>{customerName}</Text>
-          <Text style={styles.jobRef} numberOfLines={1}>{title || 'Direct Client Communication'}</Text>
+
+        {customerAvatar ? (
+          <Image source={{ uri: customerAvatar }} style={styles.topAvatar} />
+        ) : (
+          <View style={styles.topAvatarFallback}>
+            <Text style={styles.topAvatarInitial}>{customerName.charAt(0).toUpperCase()}</Text>
+          </View>
+        )}
+
+        <View style={styles.topInfo}>
+          <Text style={styles.clientName} numberOfLines={1}>
+            {customerName}
+          </Text>
+          <Text style={styles.jobRef} numberOfLines={1}>
+            {title || 'Service Booking'}
+          </Text>
         </View>
-        <View style={styles.onlineBadge}>
-          <View style={styles.onlineDot} />
-          <Text style={styles.onlineText}>Client Online</Text>
+
+        <View style={[styles.presencePill, isClientOnline ? styles.presenceOnline : styles.presenceOffline]}>
+          <View style={[styles.presenceDot, { backgroundColor: isClientOnline ? '#10B981' : '#9CA3AF' }]} />
+          <Text style={[styles.presenceText, { color: isClientOnline ? '#065F46' : '#6B7280' }]}>
+            {isClientOnline ? 'Online' : 'Offline'}
+          </Text>
         </View>
       </View>
 
-      <FlatList
-        ref={flatListRef}
-        data={messages}
-        keyExtractor={(item) => item._id}
-        renderItem={renderMessageItem}
-        contentContainerStyle={styles.messageList}
-        onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
-      />
+      {/* ── MESSAGE LIST ── */}
+      {loading ? (
+        <View style={styles.centerLoading}>
+          <ActivityIndicator size="large" color="#06684F" />
+          <Text style={styles.loadingText}>Loading messages...</Text>
+        </View>
+      ) : error ? (
+        <View style={styles.centerLoading}>
+          <Ionicons name="alert-circle-outline" size={38} color="#EF4444" />
+          <Text style={styles.errorText}>{error}</Text>
+          <TouchableOpacity style={styles.retryBtn} onPress={() => loadMessages(false)}>
+            <Text style={styles.retryBtnText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      ) : messages.length === 0 ? (
+        <ScrollView
+          style={styles.messageListFlex}
+          contentContainerStyle={[styles.centerEmpty, { flexGrow: 1 }]}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <Ionicons name="chatbubble-ellipses-outline" size={44} color="#9CA3AF" />
+          <Text style={styles.emptyTitle}>Start Conversation</Text>
+          <Text style={styles.emptySub}>
+            Send an arrival ETA, booking confirmation or answer customer questions.
+          </Text>
+        </ScrollView>
+      ) : (
+        <FlatList
+          ref={flatListRef}
+          style={styles.messageListFlex}
+          data={messages}
+          keyExtractor={(item) => item._id || item.clientTempId || String(Math.random())}
+          renderItem={renderMessageItem}
+          contentContainerStyle={styles.messageList}
+          onScroll={handleScroll}
+          scrollEventThrottle={32}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+          onLayout={() => {
+            if (isNearBottomRef.current) {
+              flatListRef.current?.scrollToEnd({ animated: false });
+            }
+          }}
+          onContentSizeChange={() => {
+            if (isNearBottomRef.current) {
+              flatListRef.current?.scrollToEnd({ animated: false });
+            }
+          }}
+          showsVerticalScrollIndicator={false}
+        />
+      )}
 
-      <View style={styles.inputContainer}>
+      {/* ── INPUT BAR ── */}
+      <View
+        style={[
+          styles.inputContainer,
+          {
+            paddingBottom: isKeyboardOpen
+              ? 8
+              : Math.max(bottomInset, 10)
+          }
+        ]}
+      >
         <TextInput
           style={styles.textInput}
           placeholder="Type an update or ETA message..."
-          placeholderTextColor="#94A3B8"
+          placeholderTextColor="#9CA3AF"
           value={inputText}
           onChangeText={setInputText}
           multiline
+          maxLength={1000}
         />
         <TouchableOpacity
-          style={[styles.sendBtn, !inputText.trim() && styles.sendBtnDisabled]}
-          onPress={handleSendMessage}
-          disabled={!inputText.trim()}
+          style={[styles.sendBtn, (!inputText.trim() || sending) && styles.sendBtnDisabled]}
+          onPress={() => handleSendMessage()}
+          disabled={!inputText.trim() || sending}
+          activeOpacity={0.8}
         >
-          <Text style={styles.sendBtnText}>Send 🚀</Text>
+          {sending ? (
+            <ActivityIndicator size="small" color="#FFFFFF" />
+          ) : (
+            <Ionicons name="send" size={16} color="#FFFFFF" />
+          )}
         </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
@@ -149,54 +453,140 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border
+    borderBottomColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2
   },
   backBtn: {
-    paddingVertical: 4
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F3F4F6',
+    marginRight: 10
   },
-  backBtnText: {
-    fontSize: 14,
+  topAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    marginRight: 10
+  },
+  topAvatarFallback: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#ECFDF5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: '#A7F3D0'
+  },
+  topAvatarInitial: {
+    fontSize: 15,
     fontWeight: '800',
-    color: COLORS.primary
+    color: '#06684F'
+  },
+  topInfo: {
+    flex: 1,
+    justifyContent: 'center'
   },
   clientName: {
     fontSize: 14,
     fontWeight: '800',
-    color: COLORS.textDark
+    color: '#111827'
   },
   jobRef: {
     fontSize: 11,
-    color: COLORS.textSecondary
+    color: '#6B7280',
+    marginTop: 1
   },
-  onlineBadge: {
+  presencePill: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#ECFDF5',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
-    gap: 5
+    gap: 4
   },
-  onlineDot: {
+  presenceOnline: {
+    backgroundColor: '#ECFDF5'
+  },
+  presenceOffline: {
+    backgroundColor: '#F3F4F6'
+  },
+  presenceDot: {
     width: 6,
     height: 6,
-    borderRadius: 3,
-    backgroundColor: '#10B981'
+    borderRadius: 3
   },
-  onlineText: {
+  presenceText: {
     fontSize: 10,
+    fontWeight: '700'
+  },
+  centerLoading: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24
+  },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 13,
+    color: '#6B7280'
+  },
+  errorText: {
+    marginTop: 8,
+    fontSize: 13,
+    color: '#EF4444',
+    textAlign: 'center'
+  },
+  retryBtn: {
+    marginTop: 12,
+    backgroundColor: '#06684F',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8
+  },
+  retryBtnText: {
+    color: '#FFFFFF',
     fontWeight: '700',
-    color: '#065F46'
+    fontSize: 12
+  },
+  centerEmpty: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 36
+  },
+  emptyTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#111827',
+    marginTop: 12
+  },
+  emptySub: {
+    fontSize: 12,
+    color: '#6B7280',
+    textAlign: 'center',
+    marginTop: 4,
+    lineHeight: 18
+  },
+  messageListFlex: {
+    flex: 1
   },
   messageList: {
-    padding: 16,
+    padding: 14,
     paddingBottom: 20
   },
   bubbleWrapper: {
-    marginVertical: 4,
+    marginVertical: 3,
     flexDirection: 'row'
   },
   bubbleWrapperLeft: {
@@ -206,20 +596,20 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end'
   },
   bubble: {
-    maxWidth: '78%',
-    borderRadius: 18,
-    paddingHorizontal: 14,
-    paddingVertical: 10
+    maxWidth: '80%',
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 8
   },
   bubbleMe: {
-    backgroundColor: COLORS.primary,
+    backgroundColor: '#06684F',
     borderBottomRightRadius: 4
   },
   bubbleThem: {
     backgroundColor: '#FFFFFF',
     borderBottomLeftRadius: 4,
     borderWidth: 1,
-    borderColor: COLORS.border
+    borderColor: '#E5E7EB'
   },
   msgText: {
     fontSize: 13,
@@ -229,52 +619,68 @@ const styles = StyleSheet.create({
     color: '#FFFFFF'
   },
   msgTextThem: {
-    color: COLORS.textDark
+    color: '#1F2937'
+  },
+  bubbleFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 4,
+    marginTop: 3
   },
   timeText: {
-    fontSize: 9,
-    alignSelf: 'flex-end',
-    marginTop: 4
+    fontSize: 9
   },
   timeTextMe: {
-    color: 'rgba(255,255,255,0.7)'
+    color: 'rgba(255,255,255,0.75)'
   },
   timeTextThem: {
-    color: COLORS.textMuted
+    color: '#9CA3AF'
+  },
+  statusIndicator: {
+    marginLeft: 2
   },
   inputContainer: {
     flexDirection: 'row',
-    padding: 12,
+    paddingHorizontal: 12,
+    paddingTop: 8,
     backgroundColor: '#FFFFFF',
     borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-    alignItems: 'center',
+    borderTopColor: '#E5E7EB',
+    alignItems: 'flex-end',
     gap: 8
   },
   textInput: {
     flex: 1,
-    maxHeight: 90,
-    backgroundColor: '#F8FAFC',
+    minHeight: 40,
+    maxHeight: 100,
+    backgroundColor: '#F3F4F6',
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: '#E5E7EB',
     borderRadius: 20,
     paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingTop: Platform.OS === 'ios' ? 10 : 8,
+    paddingBottom: Platform.OS === 'ios' ? 10 : 8,
     fontSize: 13,
-    color: COLORS.textDark
+    color: '#111827'
   },
   sendBtn: {
-    backgroundColor: COLORS.primary,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 18
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#06684F',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#06684F',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 2,
+    marginBottom: 2
   },
   sendBtnDisabled: {
-    backgroundColor: '#CBD5E1'
-  },
-  sendBtnText: {
-    color: '#FFFFFF',
-    fontWeight: '800',
-    fontSize: 12
+    backgroundColor: '#CBD5E1',
+    shadowOpacity: 0,
+    elevation: 0
   }
 });

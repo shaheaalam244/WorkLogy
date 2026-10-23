@@ -7,14 +7,22 @@ import {
   TouchableOpacity,
   Alert,
   Linking,
-  ActivityIndicator
+  ActivityIndicator,
+  Platform,
+  StatusBar
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api } from '../api/client';
 import { COLORS } from '../theme/colors';
 import { formatCurrency, formatDate, getStatusColor, formatStatusText } from '../utils/formatters';
 import type { Booking } from '../types';
 
 export default function JobDetailScreen({ route, navigation }: any) {
+  const insets = useSafeAreaInsets();
+  const topInset = Math.max(
+    insets.top,
+    Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 0
+  );
   const { bookingId } = route.params || {};
   const [booking, setBooking] = useState<Booking | null>(null);
   const [loading, setLoading] = useState(true);
@@ -79,9 +87,9 @@ export default function JobDetailScreen({ route, navigation }: any) {
   const isEmergency = booking.jobId?.isEmergency || booking.serviceTitle?.toLowerCase().includes('emergency');
 
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 60 }}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: topInset + 10 }]}>
         <View style={styles.headerTop}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerBackBtn}>
             <Text style={styles.headerBackText}>‹ Back</Text>

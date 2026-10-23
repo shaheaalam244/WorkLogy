@@ -27,16 +27,27 @@ router.get('/:bookingId/review', protect, getBookingReview);
 router.post('/direct', protect, authorize('customer', 'admin'), createDirectBooking);
 router.patch('/:id/respond', protect, authorize('vendor', 'admin'), respondDirectBooking);
 router.get('/vendor', protect, authorize('vendor', 'admin'), getVendorBookings);
+router.get('/my-bookings', protect, (req, res, next) => {
+  if (req.user?.role === 'customer') {
+    return getCustomerBookings(req, res, next);
+  }
+  return getVendorBookings(req, res, next);
+});
 router.get('/customer', protect, authorize('customer', 'admin'), getCustomerBookings);
 router.get('/my', protect, getCustomerBookings);
 router.get('/by-job/:jobId', protect, getBookingByJobId);
 router.get('/:id/start-otp', protect, authorize('customer', 'admin'), getCustomerStartOtp);
 router.post('/:id/verify-arrival', protect, authorize('vendor', 'admin'), verifyArrival);
 router.post('/:id/verify-start-otp', protect, authorize('vendor', 'admin'), verifyStartOtp);
+router.post('/:id/verify-arrival-otp', protect, authorize('vendor', 'admin'), verifyStartOtp);
 router.post('/:id/verify-start', protect, authorize('vendor', 'admin'), verifyStartOtp);
 router.post('/:id/regenerate-start-otp', protect, authorize('customer', 'admin'), regenerateStartOtp);
 router.post('/:id/approve-completion', protect, authorize('customer', 'admin'), approveBookingCompletion);
 router.patch('/:id/approve-completion', protect, authorize('customer', 'admin'), approveBookingCompletion);
+router.post('/:id/complete-signoff', protect, authorize('vendor', 'admin'), (req, res, next) => {
+  req.body.status = 'completed';
+  return updateBookingStatus(req, res, next);
+});
 router.get('/:id', protect, getBookingById);
 router.patch('/:id/status', protect, authorize('vendor', 'admin'), updateBookingStatus);
 router.patch('/:id/reschedule', protect, authorize('vendor', 'admin'), requestReschedule);

@@ -28,6 +28,7 @@ import Button from '../../components/common/Button';
 import Loader from '../../components/common/Loader';
 import ServiceStartOtpCard from '../../components/booking/ServiceStartOtpCard';
 import { customerAPI } from '../../api/customer.api';
+import { bookingAPI } from '../../api/booking.api';
 import { reviewAPI } from '../../api/review.api';
 import { formatCurrency, formatRelativeTime, formatFullAddress, formatDate } from '../../utils/formatters';
 import { getServiceImage } from '../../constants/serviceImages';
@@ -47,8 +48,10 @@ export default function CustomerBookings() {
   const [searchParams] = useSearchParams();
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'all');
   const [cancellingId, setCancellingId] = useState(null);
+  const [approvingId, setApprovingId] = useState(null);
   const [actionSuccess, setActionSuccess] = useState(null);
   const [selectedOrderForDetail, setSelectedOrderForDetail] = useState(null);
 
@@ -155,12 +158,14 @@ export default function CustomerBookings() {
   const fetchBookings = async () => {
     try {
       setLoading(true);
+      setError(null);
       const res = await customerAPI.getBookings({ status: activeTab });
       if (res?.bookings) {
         setBookings(res.bookings);
       }
     } catch (err) {
       console.error('Failed to load customer bookings:', err);
+      setError(err?.response?.data?.message || err?.message || 'Failed to load bookings. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -169,6 +174,30 @@ export default function CustomerBookings() {
   useEffect(() => {
     fetchBookings();
   }, [activeTab]);
+
+  const handleApproveCompletion = async (bookingId) => {
+    const confirmed = window.confirm(
+      'Are you satisfied with the completed service? This will sign off the job and release the escrow payment to your professional.'
+    );
+    if (!confirmed) return;
+
+    try {
+      setApprovingId(bookingId);
+      const res = await bookingAPI.approveCompletion(bookingId, {
+        note: 'Customer approved work completion from bookings dashboard.'
+      });
+      if (res?.success) {
+        setActionSuccess('Service completed! Payment has been released to your specialist.');
+        fetchBookings();
+        setTimeout(() => setActionSuccess(null), 5000);
+      }
+    } catch (err) {
+      console.error('Error approving completion:', err);
+      alert(err.response?.data?.message || 'Failed to approve completion. Please try again.');
+    } finally {
+      setApprovingId(null);
+    }
+  };
 
   const handleCancelBooking = async (bookingId) => {
     const reason = window.prompt('Please specify the cancellation reason:');
@@ -315,6 +344,19 @@ export default function CustomerBookings() {
       {loading ? (
         <div className="py-20">
           <Loader text="Loading your service requests & bookings..." />
+        </div>
+      ) : error ? (
+        <div className="bg-white border border-rose-200 rounded-3xl p-10 text-center max-w-md mx-auto shadow-2xs space-y-3">
+          <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto">
+            <AlertCircle className="w-6 h-6" />
+          </div>
+          <h3 className="text-base font-bold text-slate-900">Unable to Load Bookings</h3>
+          <p className="text-xs text-rose-600 leading-relaxed">{error}</p>
+          <div className="pt-2 flex justify-center">
+            <Button variant="primary" size="sm" onClick={fetchBookings}>
+              Try Again
+            </Button>
+          </div>
         </div>
       ) : bookings.length === 0 ? (
         <div className="bg-white border border-slate-200 rounded-3xl p-12 text-center max-w-md mx-auto shadow-2xs space-y-3">
@@ -516,6 +558,20 @@ export default function CustomerBookings() {
                           Track Job
                         </Button>
                       </Link>
+                    )}
+
+                    {/* Approve Completion for completion_pending Bookings */}
+                    {item.status === 'completion_pending' && (
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        icon={CheckCircle2}
+                        disabled={approvingId === item._id}
+                        onClick={() => handleApproveCompletion(item._id)}
+                        className="!bg-emerald-700 hover:!bg-emerald-800"
+                      >
+                        Approve & Release Payment
+                      </Button>
                     )}
 
                     {/* Rate & Review Button for Completed Bookings */}

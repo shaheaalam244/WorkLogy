@@ -25,6 +25,14 @@ class UniversalSecureStorage {
         // Fallback
       }
     }
+    if (typeof globalThis !== 'undefined' && (globalThis as any).localStorage) {
+      try {
+        (globalThis as any).localStorage.setItem(key, value);
+        return;
+      } catch {
+        // Fallback
+      }
+    }
     this.memoryFallback.set(key, value);
   }
 
@@ -38,6 +46,14 @@ class UniversalSecureStorage {
         // Fallback
       }
     }
+    if (typeof globalThis !== 'undefined' && (globalThis as any).localStorage) {
+      try {
+        const val = (globalThis as any).localStorage.getItem(key);
+        if (val !== null && val !== undefined) return val;
+      } catch {
+        // Fallback
+      }
+    }
     return this.memoryFallback.get(key) || null;
   }
 
@@ -46,6 +62,13 @@ class UniversalSecureStorage {
     if (SecureStore && typeof SecureStore.deleteItemAsync === 'function') {
       try {
         await SecureStore.deleteItemAsync(key);
+      } catch {
+        // Ignore
+      }
+    }
+    if (typeof globalThis !== 'undefined' && (globalThis as any).localStorage) {
+      try {
+        (globalThis as any).localStorage.removeItem(key);
       } catch {
         // Ignore
       }

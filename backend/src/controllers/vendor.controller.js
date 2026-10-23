@@ -54,7 +54,9 @@ export const getVendors = async (req, res, next) => {
     }
 
     if (city && city.trim() && city.trim() !== 'all') {
-      query.city = { $regex: city.trim(), $options: 'i' };
+      const parts = city.trim().split(',').map(p => p.trim()).filter(Boolean);
+      const regexPattern = parts.length > 1 ? parts.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') : city.trim();
+      query.city = { $regex: regexPattern, $options: 'i' };
     }
 
     if (category && category !== 'all') {
@@ -304,7 +306,10 @@ export const getVendorProfile = async (req, res, next) => {
         .populate('services.category');
     }
 
-    res.status(200).json({ success: true, vendor });
+    const vendorObj = vendor.toObject ? vendor.toObject() : { ...vendor };
+    vendorObj.isAvailable = vendor.availability?.isAvailableNow ?? true;
+
+    res.status(200).json({ success: true, vendor: vendorObj });
   } catch (error) {
     next(error);
   }
@@ -506,6 +511,86 @@ export const getVerificationStatus = async (req, res, next) => {
 // SERVICE LISTINGS (POST A SERVICE & MY SERVICES)
 // ==========================================
 
+export const getPublicServiceListings = async (req, res, next) => {
+  try {
+    const { category, search, city, domain, minPrice, maxPrice, sortBy, page = 1, limit = 24 } = req.query;
+    let query = { status: 'published' };
+
+    if (city && city.trim() && city.trim() !== 'all') {
+      query['location.city'] = { $regex: city.trim(), $options: 'i' };
+    }
+
+    if (domain && domain !== 'all') {
+      query.domain = { $regex: domain, $options: 'i' };
+    }
+
+    if (category && category !== 'all') {
+      if (mongoose.Types.ObjectId.isValid(category)) {
+        query.category = category;
+      } else {
+        query.$or = [
+          { domain: { $regex: category, $options: 'i' } },
+          { subcategory: { $regex: category, $options: 'i' } }
+        ];
+      }
+    }
+
+    if (search && search.trim()) {
+      const s = search.trim();
+      const textQuery = [
+        { title: { $regex: s, $options: 'i' } },
+        { shortSummary: { $regex: s, $options: 'i' } },
+        { description: { $regex: s, $options: 'i' } },
+        { subcategory: { $regex: s, $options: 'i' } },
+        { domain: { $regex: s, $options: 'i' } }
+      ];
+      if (query.$or) {
+        query.$and = [{ $or: query.$or }, { $or: textQuery }];
+        delete query.$or;
+      } else {
+        query.$or = textQuery;
+      }
+    }
+
+    if (minPrice || maxPrice) {
+      query['pricing.amount'] = {};
+      if (minPrice) query['pricing.amount'].$gte = Number(minPrice);
+      if (maxPrice) query['pricing.amount'].$lte = Number(maxPrice);
+    }
+
+    let sort = { createdAt: -1 };
+    if (sortBy === 'price_asc') sort = { 'pricing.amount': 1 };
+    if (sortBy === 'price_desc') sort = { 'pricing.amount': -1 };
+    if (sortBy === 'rating') sort = { rating: -1, reviewCount: -1 };
+
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const limitNum = Math.max(1, Math.min(50, parseInt(limit) || 24));
+    const skip = (pageNum - 1) * limitNum;
+
+    const [services, total] = await Promise.all([
+      ServiceListing.find(query)
+        .populate('vendor', 'name avatar phone email')
+        .populate('vendorProfile', 'businessName rating reviewsCount experienceYears verifiedBadge completedJobsCount isVerified hourlyRate serviceAreas')
+        .populate('category', 'name icon slug')
+        .sort(sort)
+        .skip(skip)
+        .limit(limitNum),
+      ServiceListing.countDocuments(query)
+    ]);
+
+    res.status(200).json({
+      success: true,
+      count: services.length,
+      total,
+      page: pageNum,
+      totalPages: Math.ceil(total / limitNum) || 1,
+      services
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const getMyServices = async (req, res, next) => {
   try {
     const { status } = req.query;
@@ -636,13 +721,19 @@ export const createServiceListing = async (req, res, next) => {
       location,
       availability,
       requirements,
-      status
+      status,
+      category,
+      categoryName
     } = req.body;
 
-    if (!title || !domain || !subcategory || !description) {
+    const resolvedDomain = domain || (typeof category === 'string' && category) || 'home-services';
+    const resolvedSubcategory = subcategory || categoryName || title || 'General';
+    const resolvedDesc = description || shortSummary || `${title || 'Professional Service'} provided by certified specialist.`;
+
+    if (!title || !resolvedDomain) {
       return res.status(400).json({
         success: false,
-        message: 'Title, domain, subcategory, and description are required'
+        message: 'Title is required to create a service listing'
       });
     }
 
@@ -652,10 +743,10 @@ export const createServiceListing = async (req, res, next) => {
       vendor: req.user.id,
       vendorProfile: vendorProfile?._id,
       title,
-      domain,
-      subcategory,
+      domain: resolvedDomain,
+      subcategory: resolvedSubcategory,
       shortSummary: shortSummary || '',
-      description,
+      description: resolvedDesc,
       experienceYears: Number(experienceYears) || 3,
       deliveryType: deliveryType || 'home_service',
       languages: languages || ['Hindi', 'English'],
@@ -692,6 +783,7 @@ export const getServiceListingById = async (req, res, next) => {
   try {
     const service = await ServiceListing.findById(req.params.id)
       .populate('vendor', 'name email avatar phone')
+      .populate('vendorProfile', 'businessName rating reviewsCount experienceYears verifiedBadge completedJobsCount isVerified hourlyRate serviceAreas')
       .populate('category');
 
     if (!service) {
@@ -794,37 +886,62 @@ export const getVendorEarnings = async (req, res, next) => {
     let pendingEscrow = 0;
     let settledToBank = 0;
 
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+
+    let thisMonthTotal = 0;
+
     transactions.forEach(t => {
-      grossTotal += t.grossAmount || 0;
-      platformFeesTotal += t.platformFee || 0;
-      netTotal += t.netAmount || 0;
+      const gross = t.grossAmount || 0;
+      const fee = t.platformFee || 0;
+      const net = t.netAmount || (gross - fee);
+
+      grossTotal += gross;
+      platformFeesTotal += fee;
+      netTotal += net;
+
+      const txDate = new Date(t.date || t.createdAt);
+      if (txDate >= startOfMonth) {
+        thisMonthTotal += net;
+      }
 
       if (t.paymentStatus === 'held_in_escrow' || t.settlementStatus === 'pending') {
-        pendingEscrow += t.netAmount || 0;
+        pendingEscrow += net;
       }
       if (t.paymentStatus === 'paid_to_bank' || t.settlementStatus === 'settled') {
-        settledToBank += t.netAmount || 0;
+        settledToBank += net;
       }
     });
 
     const completedBookings = bookings.filter(b => b.status === 'completed').length;
+    const hasBank = Boolean(
+      vendorProfile?.bankDetails?.accountNumber ||
+      vendorProfile?.bankAccount?.accountNumber ||
+      vendorProfile?.payoutBank?.accountNumber
+    );
 
     res.status(200).json({
       success: true,
       earnings: {
-        lifetimeGross: grossTotal || 18450,
-        platformFees: platformFeesTotal || 922.5,
-        netTotal: netTotal || 17527.5,
-        pendingEscrow: pendingEscrow || 1650,
-        settledToBank: settledToBank || 15877.5,
-        availableForPayout: settledToBank ? settledToBank : 3820,
-        completedJobsCount: completedBookings || vendorProfile?.completedJobsCount || 12,
-        bankDetails: {
-          bankName: 'HDFC Bank',
-          branch: 'Hazratganj, Lucknow',
-          accountNumberMasked: '****4812',
+        lifetimeGross: grossTotal,
+        platformFees: platformFeesTotal,
+        netTotal: netTotal,
+        totalEarnings: netTotal,
+        thisMonthEarnings: thisMonthTotal,
+        pendingEscrow: pendingEscrow,
+        settledToBank: settledToBank,
+        totalPaidOut: settledToBank,
+        availableForPayout: settledToBank,
+        completedJobsCount: completedBookings || vendorProfile?.completedJobsCount || 0,
+        bankDetails: hasBank ? {
+          bankName: vendorProfile?.bankDetails?.bankName || vendorProfile?.bankAccount?.bankName || 'Verified Bank Account',
+          branch: vendorProfile?.bankDetails?.branch || 'Local Branch',
+          accountNumberMasked: vendorProfile?.bankDetails?.accountNumber
+            ? `****${String(vendorProfile.bankDetails.accountNumber).slice(-4)}`
+            : '****4812',
           payoutSchedule: 'Every Monday Automated NEFT'
-        }
+        } : null
       }
     });
   } catch (error) {
@@ -841,65 +958,7 @@ export const getVendorTransactions = async (req, res, next) => {
       query.paymentStatus = status;
     }
 
-    let transactions = await Transaction.find(query).sort({ date: -1 });
-
-    if (transactions.length === 0) {
-      // Seed initial transactions in live DB
-      const initialTx = [
-        {
-          transactionId: 'TX-9021',
-          vendor: req.user.id,
-          customer: req.user.id,
-          jobTitle: 'Electrical Subpanel Replacement',
-          grossAmount: 1650,
-          platformFee: 82.5,
-          netAmount: 1567.5,
-          type: 'escrow_hold',
-          paymentStatus: 'held_in_escrow',
-          settlementStatus: 'pending',
-          date: new Date(Date.now() - 86400000 * 2)
-        },
-        {
-          transactionId: 'TX-8910',
-          vendor: req.user.id,
-          customer: req.user.id,
-          jobTitle: 'EV Charger Level 2 Installation',
-          grossAmount: 650,
-          platformFee: 32.5,
-          netAmount: 617.5,
-          type: 'escrow_release',
-          paymentStatus: 'paid_to_bank',
-          settlementStatus: 'settled',
-          payoutBank: {
-            bankName: 'HDFC Bank',
-            accountNumberLast4: '4812',
-            settledDate: new Date(Date.now() - 86400000 * 6)
-          },
-          date: new Date(Date.now() - 86400000 * 6)
-        },
-        {
-          transactionId: 'TX-8802',
-          vendor: req.user.id,
-          customer: req.user.id,
-          jobTitle: 'Commercial Breaker Diagnostic & Fix',
-          grossAmount: 450,
-          platformFee: 22.5,
-          netAmount: 427.5,
-          type: 'escrow_release',
-          paymentStatus: 'paid_to_bank',
-          settlementStatus: 'settled',
-          payoutBank: {
-            bankName: 'HDFC Bank',
-            accountNumberLast4: '4812',
-            settledDate: new Date(Date.now() - 86400000 * 15)
-          },
-          date: new Date(Date.now() - 86400000 * 15)
-        }
-      ];
-
-      await Transaction.insertMany(initialTx);
-      transactions = await Transaction.find(query).sort({ date: -1 });
-    }
+    const transactions = await Transaction.find(query).sort({ date: -1, createdAt: -1 });
 
     res.status(200).json({ success: true, count: transactions.length, transactions });
   } catch (error) {
@@ -937,9 +996,40 @@ export const updateVendorAvailability = async (req, res, next) => {
       });
     }
 
-    vendor.availability = { ...vendor.availability, ...req.body };
+    if (!vendor.availability) {
+      vendor.availability = {
+        days: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+        hours: { start: '08:00', end: '18:00' },
+        isAvailableNow: true
+      };
+    }
+
+    // Safely apply boolean availability toggle
+    if (typeof req.body.isAvailableNow === 'boolean') {
+      vendor.availability.isAvailableNow = req.body.isAvailableNow;
+    } else if (typeof req.body.isAvailable === 'boolean') {
+      vendor.availability.isAvailableNow = req.body.isAvailable;
+    }
+
+    // Update days array if provided
+    if (Array.isArray(req.body.days)) {
+      vendor.availability.days = req.body.days;
+    }
+
+    // Update hours if provided
+    if (req.body.hours && typeof req.body.hours === 'object') {
+      if (req.body.hours.start) vendor.availability.hours.start = req.body.hours.start;
+      if (req.body.hours.end) vendor.availability.hours.end = req.body.hours.end;
+    }
+
+    vendor.markModified('availability');
     await vendor.save();
-    res.status(200).json({ success: true, availability: vendor.availability });
+
+    res.status(200).json({
+      success: true,
+      availability: vendor.availability,
+      isAvailable: vendor.availability.isAvailableNow
+    });
   } catch (error) {
     next(error);
   }

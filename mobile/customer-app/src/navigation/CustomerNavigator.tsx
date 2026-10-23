@@ -1,10 +1,22 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import React, { useEffect, useState, useRef, useCallback, createContext, useContext } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Platform,
+  BackHandler,
+  ToastAndroid,
+  StatusBar
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import HomeScreen from '../screens/HomeScreen';
 import ExploreScreen from '../screens/ExploreScreen';
 import MyJobsScreen from '../screens/MyJobsScreen';
 import MessagesScreen from '../screens/MessagesScreen';
 import ProfileScreen from '../screens/ProfileScreen';
+import NotificationsScreen from '../screens/NotificationsScreen';
 import CategoryDetailScreen from '../screens/CategoryDetailScreen';
 import CreateJobScreen from '../screens/CreateJobScreen';
 import EmergencyScreen from '../screens/EmergencyScreen';
@@ -13,53 +25,225 @@ import ChatDetailScreen from '../screens/ChatDetailScreen';
 import ReviewModalScreen from '../screens/ReviewModalScreen';
 import LoginScreen from '../screens/LoginScreen';
 import RegisterScreen from '../screens/RegisterScreen';
+import ProfessionalProfileScreen from '../screens/ProfessionalProfileScreen';
 import { COLORS } from '../theme/colors';
+import { api } from '../api/client';
+import type { RouteEntry, AppNavigation } from '../types';
+
+export const NavigationContext = createContext<AppNavigation | null>(null);
+
+export const useNavigation = (): AppNavigation => {
+  const context = useContext(NavigationContext);
+  if (!context) {
+    throw new Error('useNavigation must be used within a NavigationProvider');
+  }
+  return context as AppNavigation;
+};
+
+const TAB_ROUTES = ['HomeTab', 'SearchTab', 'ExploreTab', 'MessagesTab', 'ProfileTab'];
+const SCREENS_WITH_CUSTOM_HEADER = ['ChatDetail', 'JobDetail'];
 
 export function CustomerAppContainer() {
-  const [currentRoute, setCurrentRoute] = React.useState<string>('HomeTab');
-  const [routeParams, setRouteParams] = React.useState<any>({});
-  const [history, setHistory] = React.useState<string[]>(['HomeTab']);
+  const insets = useSafeAreaInsets();
+  const topInset = Math.max(
+    insets.top,
+    Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 0
+  );
+  const bottomInset = insets.bottom;
 
-  const navigate = (screen: string, params: any = {}) => {
-    setRouteParams(params);
-    setHistory((prev: string[]) => [...prev, screen]);
-    setCurrentRoute(screen);
-  };
+  const [history, setHistory] = useState<RouteEntry[]>([{ name: 'HomeTab', params: {} }]);
+  const [unreadCount, setUnreadCount] = useState<number>(0);
 
-  const goBack = () => {
-    if (history.length > 1) {
-      const newHistory = [...history];
-      newHistory.pop();
-      const prevScreen = newHistory[newHistory.length - 1];
-      setHistory(newHistory);
-      setCurrentRoute(prevScreen);
-    } else {
-      setCurrentRoute('HomeTab');
+  const historyRef = useRef<RouteEntry[]>(history);
+  historyRef.current = history;
+
+  const backHandlersRef = useRef<Array<() => boolean>>([]);
+  const lastBackPressRef = useRef<number>(0);
+
+  const currentEntry = history[history.length - 1] || { name: 'HomeTab', params: {} };
+  const currentRoute = currentEntry.name;
+  const routeParams = currentEntry.params || {};
+
+  useEffect(() => {
+    fetchUnread();
+    const interval = setInterval(fetchUnread, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const fetchUnread = async () => {
+    try {
+      const res = await api.notifications.getUnreadCount();
+      if (typeof res?.count === 'number') {
+        setUnreadCount(res.count);
+      }
+    } catch {
+      // Ignore background error
     }
   };
 
-  const navigation = {
+  const registerBackHandler = useCallback((handler: () => boolean) => {
+    backHandlersRef.current.push(handler);
+    return () => {
+      backHandlersRef.current = backHandlersRef.current.filter((h) => h !== handler);
+    };
+  }, []);
+
+  const handleBack = useCallback((force: boolean = false): boolean => {
+    // 1. Check screen/modal registered handlers (topmost first)
+    if (!force && backHandlersRef.current.length > 0) {
+      for (let i = backHandlersRef.current.length - 1; i >= 0; i--) {
+        const handler = backHandlersRef.current[i];
+        if (handler && handler()) {
+          return true; // handled by custom handler (e.g. modal dismiss or unsaved changes confirmation)
+        }
+      }
+    }
+
+    // 2. If stack has more than 1 entry, pop to previous screen with its params
+    if (historyRef.current.length > 1) {
+      lastBackPressRef.current = 0; // Reset root exit timer when leaving nested screen
+      setHistory((prev) => {
+        if (prev.length <= 1) return prev;
+        const copy = [...prev];
+        copy.pop();
+        historyRef.current = copy;
+        return copy;
+      });
+      return true;
+    }
+
+    // 3. Fallback for single-entry non-Home routes (e.g. secondary tab or deep link)
+    const activeRouteName = historyRef.current[0]?.name;
+    if (activeRouteName && activeRouteName !== 'HomeTab') {
+      lastBackPressRef.current = 0; // Reset root exit timer
+      const reset = [{ name: 'HomeTab', params: {} }];
+      historyRef.current = reset;
+      setHistory(reset);
+      return true;
+    }
+
+    // 4. On root Home screen: double-press within 2s to exit on Android
+    const now = Date.now();
+    if (now - lastBackPressRef.current < 2000) {
+      BackHandler.exitApp();
+      return true;
+    }
+
+    lastBackPressRef.current = now;
+    if (Platform.OS === 'android') {
+      ToastAndroid.show('Press back again to exit', ToastAndroid.SHORT);
+    }
+    return true;
+  }, []);
+
+  // Hardware Back Button listener
+  useEffect(() => {
+    const onHardwareBack = () => {
+      return handleBack();
+    };
+
+    const backHandlerSubscription = BackHandler.addEventListener(
+      'hardwareBackPress',
+      onHardwareBack
+    );
+
+    return () => {
+      backHandlerSubscription?.remove();
+    };
+  }, [handleBack]);
+
+  const navigate = useCallback((screen: string, params: any = {}) => {
+    lastBackPressRef.current = 0; // Reset root exit timer on navigation
+    if (TAB_ROUTES.includes(screen)) {
+      if (screen === 'HomeTab') {
+        const reset = [{ name: 'HomeTab', params }];
+        historyRef.current = reset;
+        setHistory(reset);
+      } else {
+        // Tab transition keeps HomeTab at root and activates tab
+        const next = [
+          { name: 'HomeTab', params: {} },
+          { name: screen, params }
+        ];
+        historyRef.current = next;
+        setHistory(next);
+      }
+    } else {
+      setHistory((prev) => {
+        const next = [...prev, { name: screen, params }];
+        historyRef.current = next;
+        return next;
+      });
+    }
+  }, []);
+
+  const goBack = useCallback((force: boolean = false) => {
+    handleBack(force);
+  }, [handleBack]);
+
+  const canGoBack = useCallback(() => {
+    return historyRef.current.length > 1 || historyRef.current[0]?.name !== 'HomeTab';
+  }, []);
+
+  const replace = useCallback((screen: string, params: any = {}) => {
+    lastBackPressRef.current = 0;
+    setHistory((prev) => {
+      const copy = [...prev];
+      if (copy.length > 0) {
+        copy[copy.length - 1] = { name: screen, params };
+        historyRef.current = copy;
+        return copy;
+      }
+      const next = [{ name: screen, params }];
+      historyRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const resetTo = useCallback((screen: string, params: any = {}) => {
+    lastBackPressRef.current = 0;
+    const reset = [{ name: screen, params }];
+    historyRef.current = reset;
+    setHistory(reset);
+  }, []);
+
+  const navigation: AppNavigation = {
     navigate,
-    goBack
+    goBack,
+    canGoBack,
+    replace,
+    resetTo,
+    registerBackHandler,
+    currentRoute,
+    routeParams
   };
 
-  const isTabScreen = ['HomeTab', 'ExploreTab', 'MyJobsTab', 'MessagesTab', 'ProfileTab'].includes(currentRoute);
+  const isTabScreen = TAB_ROUTES.includes(currentRoute);
+  const showNavHeader = !isTabScreen && !SCREENS_WITH_CUSTOM_HEADER.includes(currentRoute);
 
   const renderScreen = () => {
     const route = { params: routeParams };
     switch (currentRoute) {
       case 'HomeTab':
         return <HomeScreen navigation={navigation} route={route} />;
+      case 'SearchTab':
       case 'ExploreTab':
         return <ExploreScreen navigation={navigation} route={route} />;
       case 'MyJobsTab':
+      case 'MyJobs':
         return <MyJobsScreen navigation={navigation} route={route} />;
       case 'MessagesTab':
         return <MessagesScreen navigation={navigation} route={route} />;
       case 'ProfileTab':
         return <ProfileScreen navigation={navigation} route={route} />;
+      case 'Notifications':
+        return <NotificationsScreen navigation={navigation} route={route} />;
       case 'CategoryDetail':
         return <CategoryDetailScreen navigation={navigation} route={route} />;
+      case 'ProfessionalProfile':
+      case 'ProfessionalDetails':
+      case 'ServiceDetails':
+        return <ProfessionalProfileScreen navigation={navigation} route={route} />;
       case 'CreateJob':
         return <CreateJobScreen navigation={navigation} route={route} />;
       case 'Emergency':
@@ -79,105 +263,158 @@ export function CustomerAppContainer() {
     }
   };
 
+  const getScreenTitle = () => {
+    switch (currentRoute) {
+      case 'Notifications':
+        return 'Alerts & Updates';
+      case 'CategoryDetail':
+        return 'Category Packages';
+      case 'ProfessionalProfile':
+      case 'ProfessionalDetails':
+        return 'Professional Details';
+      case 'ServiceDetails':
+        return 'Service Details';
+      case 'CreateJob':
+        return 'Request Service';
+      case 'Emergency':
+        return 'Emergency Dispatch';
+      case 'JobDetail':
+        return 'Booking Dossier';
+      case 'MyJobs':
+      case 'MyJobsTab':
+        return 'My Service Bookings';
+      case 'ChatDetail':
+        return 'Technician Chat';
+      case 'ReviewModal':
+        return 'Rate Experience';
+      case 'Login':
+        return 'Customer Sign In';
+      case 'Register':
+        return 'Create Account';
+      default:
+        return 'WorkLogy';
+    }
+  };
+
   return (
-    <View style={styles.container}>
-      {/* Top Back Header for Stack Screens */}
-      {!isTabScreen && (
-        <View style={styles.navHeader}>
-          <TouchableOpacity onPress={goBack} style={styles.backBtn}>
-            <Text style={styles.backBtnText}>← Back</Text>
-          </TouchableOpacity>
-          <Text style={styles.navHeaderTitle}>
-            {currentRoute === 'CategoryDetail'
-              ? 'Service Details'
-              : currentRoute === 'CreateJob'
-              ? 'Request Service'
-              : currentRoute === 'Emergency'
-              ? 'Emergency Service'
-              : currentRoute === 'JobDetail'
-              ? 'Booking Dossier'
-              : currentRoute === 'ChatDetail'
-              ? 'Technician Chat'
-              : currentRoute === 'ReviewModal'
-              ? 'Submit Review'
-              : currentRoute === 'Login'
-              ? 'Sign In'
-              : currentRoute === 'Register'
-              ? 'Sign Up'
-              : 'WorkLogy'}
-          </Text>
-          <View style={{ width: 40 }} />
-        </View>
-      )}
+    <NavigationContext.Provider value={navigation}>
+      <View style={styles.container}>
+        {/* Top Back Header for Stack Screens with safe status bar positioning */}
+        {showNavHeader && (
+          <>
+            <StatusBar
+              barStyle="dark-content"
+              backgroundColor="#FFFFFF"
+              translucent={Platform.OS === 'android'}
+            />
+            <View style={[styles.navHeader, { paddingTop: topInset, minHeight: 52 + topInset }]}>
+              <TouchableOpacity
+                onPress={() => handleBack()}
+                style={styles.backBtn}
+                activeOpacity={0.7}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              >
+                <Ionicons name="arrow-back" size={22} color={COLORS.primary} />
+                <Text style={styles.backBtnText}>Back</Text>
+              </TouchableOpacity>
+              <Text style={styles.navHeaderTitle} numberOfLines={1}>{getScreenTitle()}</Text>
+              <View style={{ width: 60 }} />
+            </View>
+          </>
+        )}
 
-      {/* Main Screen Body */}
-      <View style={styles.screenBody}>{renderScreen()}</View>
+        {/* Main Screen Body */}
+        <View style={styles.screenBody}>{renderScreen()}</View>
 
-      {/* Persistent Bottom Tab Bar */}
-      {isTabScreen && (
-        <View style={styles.bottomBar}>
-          <TouchableOpacity
-            style={styles.tabBtn}
-            onPress={() => navigate('HomeTab')}
-          >
-            <Text style={[styles.tabIcon, currentRoute === 'HomeTab' && styles.tabActiveIcon]}>
-              🏠
-            </Text>
-            <Text style={[styles.tabLabel, currentRoute === 'HomeTab' && styles.tabActiveLabel]}>
-              Home
-            </Text>
-          </TouchableOpacity>
+        {/* Persistent Bottom Tab Bar with Reference Design & Raised Center Action */}
+        {isTabScreen && (
+          <View style={[styles.bottomBar, { paddingBottom: Math.max(bottomInset, Platform.OS === 'ios' ? 12 : 6), height: 60 + Math.max(bottomInset, Platform.OS === 'ios' ? 12 : 6) }]}>
+            {/* 1. Home Tab */}
+            <TouchableOpacity
+              style={styles.tabBtn}
+              activeOpacity={0.8}
+              onPress={() => navigate('HomeTab')}
+            >
+              <Ionicons
+                name={currentRoute === 'HomeTab' ? 'home' : 'home-outline'}
+                size={22}
+                color={currentRoute === 'HomeTab' ? COLORS.secondary : COLORS.textMuted}
+              />
+              <Text style={[styles.tabLabel, currentRoute === 'HomeTab' && styles.tabActiveLabel]}>
+                Home
+              </Text>
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.tabBtn}
-            onPress={() => navigate('ExploreTab')}
-          >
-            <Text style={[styles.tabIcon, currentRoute === 'ExploreTab' && styles.tabActiveIcon]}>
-              🔍
-            </Text>
-            <Text style={[styles.tabLabel, currentRoute === 'ExploreTab' && styles.tabActiveLabel]}>
-              Explore
-            </Text>
-          </TouchableOpacity>
+            {/* 2. Search Tab */}
+            <TouchableOpacity
+              style={styles.tabBtn}
+              activeOpacity={0.8}
+              onPress={() => navigate('SearchTab')}
+            >
+              <Ionicons
+                name={['SearchTab', 'ExploreTab'].includes(currentRoute) ? 'search' : 'search-outline'}
+                size={22}
+                color={['SearchTab', 'ExploreTab'].includes(currentRoute) ? COLORS.secondary : COLORS.textMuted}
+              />
+              <Text style={[styles.tabLabel, ['SearchTab', 'ExploreTab'].includes(currentRoute) && styles.tabActiveLabel]}>
+                Search
+              </Text>
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.tabBtn}
-            onPress={() => navigate('MyJobsTab')}
-          >
-            <Text style={[styles.tabIcon, currentRoute === 'MyJobsTab' && styles.tabActiveIcon]}>
-              📋
-            </Text>
-            <Text style={[styles.tabLabel, currentRoute === 'MyJobsTab' && styles.tabActiveLabel]}>
-              My Jobs
-            </Text>
-          </TouchableOpacity>
+            {/* 3. Raised Center Action: Post Job */}
+            <TouchableOpacity
+              style={styles.postJobBtnContainer}
+              activeOpacity={0.85}
+              onPress={() => navigate('CreateJob')}
+            >
+              <View style={styles.postJobCircle}>
+                <Ionicons name="add" size={26} color="#FFFFFF" />
+              </View>
+              <Text style={styles.postJobLabel}>Post Job</Text>
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.tabBtn}
-            onPress={() => navigate('MessagesTab')}
-          >
-            <Text style={[styles.tabIcon, currentRoute === 'MessagesTab' && styles.tabActiveIcon]}>
-              💬
-            </Text>
-            <Text style={[styles.tabLabel, currentRoute === 'MessagesTab' && styles.tabActiveLabel]}>
-              Messages
-            </Text>
-          </TouchableOpacity>
+            {/* 4. Messages Tab */}
+            <TouchableOpacity
+              style={styles.tabBtn}
+              activeOpacity={0.8}
+              onPress={() => navigate('MessagesTab')}
+            >
+              <View>
+                <Ionicons
+                  name={currentRoute === 'MessagesTab' ? 'chatbubble-ellipses' : 'chatbubble-ellipses-outline'}
+                  size={22}
+                  color={currentRoute === 'MessagesTab' ? COLORS.secondary : COLORS.textMuted}
+                />
+                {unreadCount > 0 && (
+                  <View style={styles.tabBadge}>
+                    <Text style={styles.tabBadgeText}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
+                  </View>
+                )}
+              </View>
+              <Text style={[styles.tabLabel, currentRoute === 'MessagesTab' && styles.tabActiveLabel]}>
+                Messages
+              </Text>
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.tabBtn}
-            onPress={() => navigate('ProfileTab')}
-          >
-            <Text style={[styles.tabIcon, currentRoute === 'ProfileTab' && styles.tabActiveIcon]}>
-              👤
-            </Text>
-            <Text style={[styles.tabLabel, currentRoute === 'ProfileTab' && styles.tabActiveLabel]}>
-              Profile
-            </Text>
-          </TouchableOpacity>
-        </View>
-      )}
-    </View>
+            {/* 5. Profile Tab */}
+            <TouchableOpacity
+              style={styles.tabBtn}
+              activeOpacity={0.8}
+              onPress={() => navigate('ProfileTab')}
+            >
+              <Ionicons
+                name={currentRoute === 'ProfileTab' ? 'person' : 'person-outline'}
+                size={22}
+                color={currentRoute === 'ProfileTab' ? COLORS.secondary : COLORS.textMuted}
+              />
+              <Text style={[styles.tabLabel, currentRoute === 'ProfileTab' && styles.tabActiveLabel]}>
+                Profile
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
+    </NavigationContext.Provider>
   );
 }
 
@@ -190,18 +427,26 @@ const styles = StyleSheet.create({
     flex: 1
   },
   navHeader: {
-    height: 52,
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
+    borderBottomColor: '#E2E8F0',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16
+    paddingHorizontal: 14,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 3
   },
   backBtn: {
-    paddingVertical: 6,
-    paddingHorizontal: 4
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    minHeight: 40,
+    minWidth: 60
   },
   backBtnText: {
     fontSize: 14,
@@ -209,41 +454,80 @@ const styles = StyleSheet.create({
     color: COLORS.primary
   },
   navHeaderTitle: {
-    fontSize: 14,
+    fontSize: 16,
     fontWeight: '800',
-    color: COLORS.textDark
+    color: COLORS.textDark,
+    textAlign: 'center'
   },
   bottomBar: {
-    height: 64,
     backgroundColor: '#FFFFFF',
     borderTopWidth: 1,
-    borderTopColor: COLORS.border,
+    borderTopColor: '#E2E8F0',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
-    paddingBottom: 6
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 6
   },
   tabBtn: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 6
+    paddingHorizontal: 8,
+    minWidth: 54
   },
-  tabIcon: {
-    fontSize: 20,
-    opacity: 0.6
+  tabBadge: {
+    position: 'absolute',
+    top: -3,
+    right: -8,
+    backgroundColor: '#EF4444',
+    borderRadius: 8,
+    minWidth: 16,
+    height: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3
   },
-  tabActiveIcon: {
-    opacity: 1
+  tabBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '800'
   },
   tabLabel: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '600',
     color: COLORS.textMuted,
-    marginTop: 2
+    marginTop: 3
   },
   tabActiveLabel: {
-    color: COLORS.primary,
+    color: COLORS.secondary,
     fontWeight: '800'
+  },
+  postJobBtnContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: -14,
+    minWidth: 58
+  },
+  postJobCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#0F172A',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 3 }
+  },
+  postJobLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#0F172A',
+    marginTop: 2
   }
 });
 

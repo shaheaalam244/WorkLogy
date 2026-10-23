@@ -16,6 +16,7 @@
       "bundleIdentifier": "in.worklogy.customer"
     },
     "android": {
+      "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "foregroundImage": "./src/assets/adaptive-icon.png",
         "backgroundColor": "#06684F"

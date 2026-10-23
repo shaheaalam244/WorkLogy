@@ -24,10 +24,16 @@ import Contact from '../pages/public/Contact';
 import Login from '../pages/public/Login';
 import Register from '../pages/public/Register';
 import EmergencyRequest from '../pages/public/EmergencyRequest';
+import Terms from '../pages/public/Terms';
+import Privacy from '../pages/public/Privacy';
+import RefundPolicy from '../pages/public/RefundPolicy';
+import ForgotPassword from '../pages/public/ForgotPassword';
+import ResetPassword from '../pages/public/ResetPassword';
 
 // Customer Pages
 import CustomerDashboard from '../pages/customer/Dashboard';
 import CustomerExplore from '../pages/customer/Explore';
+import CustomerBookService from '../pages/customer/BookService';
 import CustomerCreateJob from '../pages/customer/CreateJob';
 import CustomerMyJobs from '../pages/customer/MyJobs';
 import CustomerJobApplications from '../pages/customer/JobApplications';
@@ -88,6 +94,7 @@ export default function AppRoutes() {
         <Route path="/" element={<Home />} />
         <Route path="/categories" element={<Categories />} />
         <Route path="/categories/:slug" element={<CategoryDetails />} />
+        <Route path="/services" element={<Categories />} />
         <Route path="/professionals" element={<Professionals />} />
         <Route path="/professionals/:id" element={<ProfessionalProfile />} />
         <Route path="/jobs" element={<Jobs />} />
@@ -96,8 +103,14 @@ export default function AppRoutes() {
         <Route path="/emergency" element={<EmergencyRequest />} />
         <Route path="/about" element={<About />} />
         <Route path="/contact" element={<Contact />} />
+        <Route path="/terms" element={<Terms />} />
+        <Route path="/privacy" element={<Privacy />} />
+        <Route path="/refund-policy" element={<RefundPolicy />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        <Route path="/book" element={<CustomerBookService />} />
       </Route>
 
       {/* Customer Portal */}
@@ -106,6 +119,7 @@ export default function AppRoutes() {
           <Route index element={<Navigate to="/customer/dashboard" replace />} />
           <Route path="dashboard" element={<CustomerDashboard />} />
           <Route path="explore" element={<CustomerExplore />} />
+          <Route path="book" element={<CustomerBookService />} />
           <Route path="emergency" element={<EmergencyRequest />} />
           <Route path="create-job" element={<CustomerCreateJob />} />
           <Route path="jobs/create" element={<CustomerCreateJob />} />

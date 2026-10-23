@@ -155,7 +155,7 @@ export default function VendorJobDetails() {
   if (loading) return <div className="py-20"><Loader text="Loading job tender specifications..." /></div>;
   if (!job) return <div className="text-center py-20 text-slate-500">Job not found.</div>;
 
-  const isAssigned = existingProposal?.status === 'accepted' || (!job?.location?.isMaskedForPrivacy && (job?.location?.street || job?.location?.coordinates?.lat));
+  const isAssigned = existingProposal?.status === 'accepted' || (job?.selectedVendor && ((job.selectedVendor?._id || job.selectedVendor).toString() === (user?._id || user?.id)?.toString())) || (!job?.location?.isMaskedForPrivacy && (job?.location?.street || job?.location?.coordinates?.lat));
   const serviceLat = job?.location?.coordinates?.lat;
   const serviceLng = job?.location?.coordinates?.lng;
   const hasCoordinates = Boolean(
@@ -356,8 +356,30 @@ export default function VendorJobDetails() {
         </div>
       </div>
 
-      {/* Instant Claim Price Confirmation Modal */}
-      {job.status === 'assigned' || job.selectedVendor ? (
+      {/* Assigned / Instant Claim Header */}
+      {isAssigned ? (
+        <div className="bg-emerald-50 border border-emerald-300 rounded-3xl p-6 sm:p-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-2xs">
+          <div className="flex items-center gap-3.5">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0">
+              <CheckCircle2 className="w-6 h-6 text-emerald-700" />
+            </div>
+            <div>
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-emerald-200 text-emerald-900">
+                You are Assigned
+              </span>
+              <h3 className="text-lg font-bold text-slate-900 mt-0.5">Contract Confirmed with Property Owner</h3>
+              <p className="text-xs text-slate-600">
+                Your price was accepted. Open your service console to verify arrival, enter customer OTP, and update progress.
+              </p>
+            </div>
+          </div>
+          <Link to={`/vendor/manage-job/${job.booking?._id || job.booking || job._id}`}>
+            <Button variant="primary" size="md" icon={ArrowRight} className="!bg-emerald-800 hover:!bg-emerald-900 shrink-0">
+              Open Job Console
+            </Button>
+          </Link>
+        </div>
+      ) : job.status === 'assigned' || job.selectedVendor ? (
         <div className="bg-slate-100 border border-slate-300 rounded-3xl p-6 sm:p-8 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-slate-200 text-slate-600 flex items-center justify-center shrink-0">
@@ -448,15 +470,23 @@ export default function VendorJobDetails() {
 
           <div className="flex items-center justify-between pt-3 border-t border-slate-100">
             <span className="text-xs text-slate-500">Submitted on {new Date(existingProposal.createdAt).toLocaleDateString()}</span>
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={submitting || existingProposal.status === 'accepted'}
-              onClick={handleWithdraw}
-              className="!text-rose-600 hover:!bg-rose-50"
-            >
-              Withdraw Offer
-            </Button>
+            {existingProposal.status === 'accepted' ? (
+              <Link to={`/vendor/manage-job/${job.booking?._id || job.booking || job._id}`}>
+                <Button variant="primary" size="sm" icon={ArrowRight} className="!bg-emerald-800 hover:!bg-emerald-900">
+                  Manage Job Console
+                </Button>
+              </Link>
+            ) : (
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={submitting}
+                onClick={handleWithdraw}
+                className="!text-rose-600 hover:!bg-rose-50"
+              >
+                Withdraw Offer
+              </Button>
+            )}
           </div>
         </div>
       ) : (

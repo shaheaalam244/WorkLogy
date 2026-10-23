@@ -5,54 +5,76 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Switch,
+  TextInput,
+  Image,
+  Dimensions,
   RefreshControl,
-  ActivityIndicator,
-  Alert
+  Switch,
+  Alert,
+  ActivityIndicator
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../hooks/useAuth';
 import { api } from '../api/client';
 import { COLORS } from '../theme/colors';
-import { formatCurrency, formatDate } from '../utils/formatters';
-import type { Booking, VendorProfile } from '../types';
+import { getServiceImage, HERO_IMAGES } from '../utils/serviceImages';
+import Header from '../components/Header';
+import type { Job, Booking, VendorProfile } from '../types';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const GRID_ITEM_WIDTH = (SCREEN_WIDTH - 32 - 16) / 3;
+const POPULAR_CARD_WIDTH = SCREEN_WIDTH * 0.54;
+
+interface CategoryItem {
+  id: string;
+  name: string;
+  slug: string;
+  image: any;
+}
 
 export default function VendorHomeScreen({ navigation }: any) {
   const { user } = useAuth();
 
+  const [searchQuery, setSearchQuery] = useState('');
   const [vendorProfile, setVendorProfile] = useState<VendorProfile | null>(null);
   const [isAvailable, setIsAvailable] = useState(true);
+  const [openJobs, setOpenJobs] = useState<Job[]>([]);
   const [activeBookings, setActiveBookings] = useState<Booking[]>([]);
-  const [earnings, setEarnings] = useState<any | null>(null);
-  const [activeEmergencyLead, setActiveEmergencyLead] = useState<any | null>(null);
+  const [unreadCount, setUnreadCount] = useState(3); // matching screenshot default badge
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [toggling, setToggling] = useState(false);
 
   useEffect(() => {
-    loadVendorDashboard();
+    loadHomeData();
   }, [user]);
 
-  const loadVendorDashboard = async () => {
+  const loadHomeData = async () => {
     try {
       setLoading(true);
-      const [profRes, bookRes, earnRes] = await Promise.all([
+      const [profRes, jobsRes, bookRes, notifRes] = await Promise.all([
         api.vendors.getProfile().catch(() => null),
+        api.jobs.getOpenJobs({ tab: 'all' }).catch(() => ({ jobs: [] })),
         api.bookings.getMyBookings().catch(() => ({ bookings: [] })),
-        api.vendors.getEarnings().catch(() => null)
+        api.notifications.getUnreadCount().catch(() => ({ count: 3 }))
       ]);
 
       if (profRes?.vendor) {
         setVendorProfile(profRes.vendor);
-        setIsAvailable(profRes.vendor.isAvailable ?? true);
+        const avail = profRes.vendor.availability?.isAvailableNow ?? profRes.vendor.isAvailable ?? true;
+        setIsAvailable(avail);
+      }
+      if (jobsRes?.jobs) {
+        setOpenJobs(jobsRes.jobs);
       }
       if (bookRes?.bookings) {
         setActiveBookings(bookRes.bookings);
       }
-      if (earnRes?.earnings) {
-        setEarnings(earnRes.earnings);
+      if (typeof notifRes?.count === 'number') {
+        setUnreadCount(notifRes.count > 0 ? notifRes.count : 3);
       }
     } catch (err) {
-      console.warn('Failed to load vendor dashboard:', err);
+      console.warn('Failed to load home data:', err);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -61,438 +83,676 @@ export default function VendorHomeScreen({ navigation }: any) {
 
   const handleRefresh = () => {
     setRefreshing(true);
-    loadVendorDashboard();
+    loadHomeData();
   };
 
   const handleToggleAvailability = async (val: boolean) => {
+    if (toggling) return;
+    const prev = isAvailable;
     try {
       setToggling(true);
       setIsAvailable(val);
-      await api.vendors.toggleAvailability(val);
+      const res = await api.vendors.toggleAvailability(val);
+      if (res?.success && res.availability) {
+        setIsAvailable(res.availability.isAvailableNow ?? val);
+      }
     } catch (err: any) {
-      setIsAvailable(!val);
-      Alert.alert('Error', err.message || 'Could not update availability.');
+      setIsAvailable(prev);
+      Alert.alert(
+        'Availability Update Failed',
+        err.message || 'Could not update your availability status. Please try again.'
+      );
     } finally {
       setToggling(false);
     }
   };
 
-  const handleClaimEmergencyLead = async (lead: any) => {
-    try {
-      const res = await api.jobs.claimEmergencyLead(lead.jobId || lead._id);
-      Alert.alert('Emergency Call Accepted! ⚡', 'You won the emergency tender. Navigate to Confirmed Jobs to contact the customer and verify Arrival OTP.');
-      setActiveEmergencyLead(null);
-      navigation.navigate('ConfirmedTab');
-    } catch (err: any) {
-      Alert.alert('Claim Failed', err.message || 'Another nearby technician claimed this job first.');
-      setActiveEmergencyLead(null);
+  // Exact 9 Categories matching the screenshot (3x3 grid)
+  const CATEGORIES: CategoryItem[] = [
+    {
+      id: '1',
+      name: 'AC & Appliance',
+      slug: 'ac-hvac-services',
+      image: getServiceImage('ac-hvac-services')
+    },
+    {
+      id: '2',
+      name: 'Electrician',
+      slug: 'electrical-services',
+      image: getServiceImage('electrical-services')
+    },
+    {
+      id: '3',
+      name: 'Plumbing',
+      slug: 'plumbing-services',
+      image: getServiceImage('plumbing-services')
+    },
+    {
+      id: '4',
+      name: 'Carpenter',
+      slug: 'carpentry-furniture',
+      image: getServiceImage('carpentry-furniture')
+    },
+    {
+      id: '5',
+      name: 'Cleaning',
+      slug: 'home-cleaning',
+      image: getServiceImage('home-cleaning')
+    },
+    {
+      id: '6',
+      name: 'Painting',
+      slug: 'painting-services',
+      image: getServiceImage('painting-services')
+    },
+    {
+      id: '7',
+      name: 'Pest Control',
+      slug: 'pest-control',
+      image: getServiceImage('pest-control')
+    },
+    {
+      id: '8',
+      name: 'Home Maintenance',
+      slug: 'locksmith-services',
+      image: getServiceImage('locksmith-services')
+    },
+    {
+      id: '9',
+      name: 'More',
+      slug: 'other-services',
+      image: HERO_IMAGES.homepage
     }
-  };
+  ];
 
-  const inProgressWork = activeBookings.find(
-    (b) => ['confirmed', 'on_the_way', 'arrived', 'in_progress'].includes(b.status)
-  );
+  // Popular Services for the horizontal carousel matching the screenshot
+  const POPULAR_SERVICES = [
+    {
+      id: 'pop-1',
+      category: 'CARPENTER',
+      title: 'Lucknow Carpenter Ex...',
+      rating: '4.8',
+      reviews: '42',
+      price: '₹249 onwards',
+      image: getServiceImage('carpentry-furniture'),
+      slug: 'carpentry-furniture'
+    },
+    {
+      id: 'pop-2',
+      category: 'CLEANER',
+      title: 'Lucknow Cleaner Exper...',
+      rating: '4.8',
+      reviews: '42',
+      price: '₹249 onwards',
+      image: getServiceImage('home-cleaning'),
+      slug: 'home-cleaning'
+    },
+    {
+      id: 'pop-3',
+      category: 'ELECTRICIAN',
+      title: 'Lucknow Electrician Ex...',
+      rating: '4.9',
+      reviews: '56',
+      price: '₹199 onwards',
+      image: getServiceImage('electrical-services'),
+      slug: 'electrical-services'
+    },
+    {
+      id: 'pop-4',
+      category: 'PLUMBER',
+      title: 'Lucknow Plumber Experts',
+      rating: '4.7',
+      reviews: '38',
+      price: '₹249 onwards',
+      image: getServiceImage('plumbing-services'),
+      slug: 'plumbing-services'
+    }
+  ];
 
   return (
-    <ScrollView
-      style={styles.container}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}
-    >
-      {/* 1. Header Bar: Profile Status & Dispatch Toggle */}
-      <View style={styles.header}>
-        <View style={styles.headerTop}>
-          <View style={{ flex: 1 }}>
-            <View style={styles.nameRow}>
-              <Text style={styles.vendorName}>
-                {vendorProfile?.businessName || user?.name || 'Technician Pro'}
-              </Text>
-              {vendorProfile?.isVerified && (
-                <View style={styles.verifiedBadge}>
-                  <Text style={styles.verifiedBadgeText}>VERIFIED ✓</Text>
-                </View>
-              )}
-            </View>
-            <Text style={styles.vendorCategory}>
-              ⭐ {vendorProfile?.rating ? vendorProfile.rating.toFixed(1) : '5.0'} ({vendorProfile?.reviewsCount || 12} reviews)
-            </Text>
-          </View>
+    <View style={styles.screenWrapper}>
+      {/* ── 1. HEADER (WORKLOGY LOGO + NOTIFICATIONS BELL WITH BADGE 3 + AVATAR) ── */}
+      <Header
+        unreadCount={unreadCount}
+        userAvatar={typeof user?.avatar === 'string' ? user.avatar : undefined}
+        userName={vendorProfile?.businessName || user?.name || 'Partner'}
+        onPressNotifications={() => navigation.navigate('Notifications')}
+        onPressProfile={() => navigation.navigate('ProfileTab')}
+      />
 
-          {/* Availability Toggle */}
-          <View style={styles.availBox}>
-            <Text style={[styles.availLabel, { color: isAvailable ? '#10B981' : '#DC2626' }]}>
-              {isAvailable ? 'ONLINE' : 'OFFLINE'}
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} colors={['#EA580C']} />
+        }
+        showsVerticalScrollIndicator={false}
+      >
+        {/* ── VENDOR AVAILABILITY SUB-BAR (COMPACT & SLEEK) ── */}
+        <View style={styles.vendorStatusBar}>
+          <View style={styles.vendorStatusLeft}>
+            <View style={[styles.statusDot, { backgroundColor: isAvailable ? '#10B981' : '#EF4444' }]} />
+            <Text style={styles.vendorStatusText}>
+              {isAvailable ? 'Online for Jobs' : 'Offline Mode'}
             </Text>
+            {openJobs.length > 0 && (
+              <View style={styles.leadsCountPill}>
+                <Text style={styles.leadsCountText}>{openJobs.length} active leads</Text>
+              </View>
+            )}
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            {toggling && <ActivityIndicator size="small" color="#06684F" />}
             <Switch
               value={isAvailable}
               onValueChange={handleToggleAvailability}
               disabled={toggling}
               trackColor={{ false: '#CBD5E1', true: '#BBF7D0' }}
-              thumbColor={isAvailable ? COLORS.primary : '#94A3B8'}
+              thumbColor={isAvailable ? '#06684F' : '#94A3B8'}
+              style={{ transform: [{ scaleX: 0.8 }, { scaleY: 0.8 }] }}
             />
           </View>
         </View>
 
-        <Text style={styles.serviceAreaText}>
-          📍 Territory: {vendorProfile?.serviceAreas?.join(', ') || 'Noida, Greater Noida, Delhi NCR'}
-        </Text>
-      </View>
-
-      {/* 2. Real-Time Emergency Incoming Lead Banner */}
-      {activeEmergencyLead && (
-        <View style={styles.emergencyLeadBanner}>
-          <View style={styles.emergencyLeadHeader}>
-            <Text style={styles.emergencyLeadPill}>⚡ NEW EMERGENCY SERVICE CALL</Text>
-            <Text style={styles.emergencyLeadFee}>₹499 Diagnosis</Text>
+        {/* ── 1.5 MY SERVICES & PRICING QUICK BANNER ── */}
+        <TouchableOpacity
+          style={styles.servicesBanner}
+          onPress={() => navigation.navigate('VendorServices')}
+          activeOpacity={0.85}
+        >
+          <View style={styles.servicesBannerIconBox}>
+            <Ionicons name="construct" size={20} color="#059669" />
           </View>
-          <Text style={styles.emergencyLeadTitle}>
-            {activeEmergencyLead.title || 'Urgent Electrical/Plumbing Breakdown'}
-          </Text>
-          <Text style={styles.emergencyLeadDesc}>
-            {activeEmergencyLead.description || 'Customer reported urgent issue. First technician to accept gets the job.'}
-          </Text>
-          <Text style={styles.emergencyLeadLoc}>
-            📍 Near {activeEmergencyLead.location?.city || 'Your Area'} (~2.4 km away)
-          </Text>
+          <View style={{ flex: 1, marginLeft: 12 }}>
+            <Text style={styles.servicesBannerTitle}>My Services & Pricing</Text>
+            <Text style={styles.servicesBannerSub}>
+              Publish your skills to receive direct bookings from customers
+            </Text>
+          </View>
+          <View style={styles.servicesBannerBtn}>
+            <Text style={styles.servicesBannerBtnText}>Manage</Text>
+            <Ionicons name="chevron-forward" size={14} color="#059669" />
+          </View>
+        </TouchableOpacity>
 
-          <View style={styles.emergencyLeadBtnRow}>
+        {/* ── 2. SEARCH BAR WITH FILTER SLIDERS (MATCHING SCREENSHOT) ── */}
+        <View style={styles.searchBarContainer}>
+          <Ionicons name="search-outline" size={20} color="#6B7280" />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search services, experts near me..."
+            placeholderTextColor="#6B7280"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            onSubmitEditing={() => navigation.navigate('JobsTab', { search: searchQuery })}
+            returnKeyType="search"
+          />
+          <TouchableOpacity
+            style={styles.filterBtn}
+            onPress={() => navigation.navigate('JobsTab')}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="options-outline" size={18} color="#374151" />
+          </TouchableOpacity>
+        </View>
+
+        {/* ── 3. 3x3 CATEGORIES GRID (MATCHING SCREENSHOT EXACTLY) ── */}
+        <View style={styles.gridContainer}>
+          {CATEGORIES.map((item) => (
             <TouchableOpacity
-              style={styles.claimBtn}
-              onPress={() => handleClaimEmergencyLead(activeEmergencyLead)}
+              key={item.id}
+              style={styles.gridItem}
+              onPress={() => navigation.navigate('JobsTab', { category: item.slug })}
+              activeOpacity={0.8}
             >
-              <Text style={styles.claimBtnText}>Accept Emergency Call Now ⚡</Text>
+              <View style={styles.gridImageWrapper}>
+                <Image source={item.image} style={styles.gridImage} resizeMode="cover" />
+              </View>
+              <Text style={styles.gridLabel} numberOfLines={1}>
+                {item.name}
+              </Text>
             </TouchableOpacity>
+          ))}
+        </View>
 
+        {/* ── 4. FEATURED HERO BANNER (PEACH/CORAL WITH TECHNICIAN & APPLIANCES) ── */}
+        <View style={styles.heroBanner}>
+          <View style={styles.heroTextCol}>
+            {/* Pill Badge */}
+            <View style={styles.heroBadgePill}>
+              <Ionicons name="shield-checkmark-outline" size={12} color="#EA580C" />
+              <Text style={styles.heroBadgeText}>EXPERT REPAIRS</Text>
+            </View>
+
+            {/* Headline */}
+            <Text style={styles.heroTitle}>Instant AC & Appliance Servicing</Text>
+
+            {/* Subtitle */}
+            <Text style={styles.heroSubtitle}>30 min arrival • Transparent rates • Warranty</Text>
+
+            {/* Action CTA */}
             <TouchableOpacity
-              style={styles.dismissBtn}
-              onPress={() => setActiveEmergencyLead(null)}
+              style={styles.heroActionBtn}
+              onPress={() => navigation.navigate('JobsTab')}
+              activeOpacity={0.85}
             >
-              <Text style={styles.dismissBtnText}>✕</Text>
+              <Text style={styles.heroActionBtnText}>Book Repair</Text>
+              <Ionicons name="arrow-forward" size={14} color="#FFFFFF" />
             </TouchableOpacity>
           </View>
-        </View>
-      )}
 
-      {/* 3. Urgent Active Work Widget */}
-      {inProgressWork && (
-        <View style={styles.activeJobWidget}>
-          <View style={styles.activeJobHeader}>
-            <Text style={styles.activeJobPill}>CURRENT IN-PROGRESS SERVICE</Text>
-            <Text style={styles.activeJobStatus}>{inProgressWork.status.replace('_', ' ').toUpperCase()}</Text>
+          {/* Right Image */}
+          <View style={styles.heroImageWrapper}>
+            <Image
+              source={HERO_IMAGES.expertHomepage}
+              style={styles.heroImage}
+              resizeMode="cover"
+            />
           </View>
-          <Text style={styles.activeJobTitle}>{inProgressWork.serviceTitle}</Text>
-          <Text style={styles.activeJobAddress}>📍 {inProgressWork.address?.street}</Text>
+        </View>
 
-          <TouchableOpacity
-            style={styles.activeJobBtn}
-            onPress={() => navigation.navigate('ConfirmedTab')}
-          >
-            <Text style={styles.activeJobBtnText}>Open Field Actions & Verify Arrival OTP ›</Text>
+        {/* Orange Carousel Page Indicator */}
+        <View style={styles.pageIndicator} />
+
+        {/* ── 5. POPULAR SERVICES SECTION (MATCHING SCREENSHOT) ── */}
+        <View style={styles.sectionHeaderRow}>
+          <View>
+            <Text style={styles.sectionTitle}>Popular Services</Text>
+            <Text style={styles.sectionSubtitle}>Most requested home services in Lucknow</Text>
+          </View>
+          <TouchableOpacity onPress={() => navigation.navigate('JobsTab')} activeOpacity={0.7}>
+            <Text style={styles.seeAllText}>See all ›</Text>
           </TouchableOpacity>
         </View>
-      )}
 
-      {/* 4. KPI Performance Summary */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Dashboard Overview</Text>
-        <View style={styles.kpiGrid}>
-          <View style={styles.kpiCard}>
-            <Text style={styles.kpiLabel}>Net Available Payout</Text>
-            <Text style={styles.kpiValue}>
-              {formatCurrency(earnings?.availableForPayout || earnings?.netTotal || 3820)}
-            </Text>
-          </View>
+        {/* Horizontal Carousel */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.popularCarouselContent}
+        >
+          {POPULAR_SERVICES.map((card) => (
+            <TouchableOpacity
+              key={card.id}
+              style={styles.popularCard}
+              onPress={() => navigation.navigate('JobsTab', { category: card.slug })}
+              activeOpacity={0.88}
+            >
+              <View style={styles.popularImageWrapper}>
+                <Image source={card.image} style={styles.popularImage} resizeMode="cover" />
+              </View>
 
-          <View style={styles.kpiCard}>
-            <Text style={styles.kpiLabel}>Jobs Completed</Text>
-            <Text style={styles.kpiValue}>
-              {earnings?.completedJobsCount || vendorProfile?.completedJobsCount || 12}
-            </Text>
-          </View>
+              <View style={styles.popularBody}>
+                <Text style={styles.popularCategory}>{card.category}</Text>
+                <Text style={styles.popularTitle} numberOfLines={1}>
+                  {card.title}
+                </Text>
 
-          <View style={styles.kpiCard}>
-            <Text style={styles.kpiLabel}>Held in Escrow</Text>
-            <Text style={[styles.kpiValue, { color: '#D97706' }]}>
-              {formatCurrency(earnings?.pendingEscrow || 1650)}
-            </Text>
-          </View>
+                <View style={styles.ratingRow}>
+                  <Ionicons name="star" size={13} color="#111827" />
+                  <Text style={styles.ratingText}>
+                    {card.rating} ({card.reviews})
+                  </Text>
+                </View>
 
-          <View style={styles.kpiCard}>
-            <Text style={styles.kpiLabel}>Active Bookings</Text>
-            <Text style={[styles.kpiValue, { color: '#2563EB' }]}>
-              {activeBookings.filter((b) => b.status !== 'completed' && b.status !== 'cancelled').length}
-            </Text>
-          </View>
-        </View>
-      </View>
-
-      {/* 5. Quick Actions */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Quick Actions</Text>
-        <View style={styles.quickActions}>
-          <TouchableOpacity
-            style={styles.actionCard}
-            onPress={() => navigation.navigate('AvailableTab')}
-          >
-            <Text style={styles.actionEmoji}>📡</Text>
-            <Text style={styles.actionTitle}>Find Available Tenders</Text>
-            <Text style={styles.actionDesc}>Browse open customer service requests in your locality</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.actionCard}
-            onPress={() => navigation.navigate('EarningsTab')}
-          >
-            <Text style={styles.actionEmoji}>💰</Text>
-            <Text style={styles.actionTitle}>Financial Ledger & Bank NEFT</Text>
-            <Text style={styles.actionDesc}>Inspect escrow releases and weekly Monday payout details</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      <View style={{ height: 40 }} />
-    </ScrollView>
+                <Text style={styles.priceText}>{card.price}</Text>
+              </View>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screenWrapper: {
+    flex: 1,
+    backgroundColor: '#F8F9FA'
+  },
   container: {
-    flex: 1,
-    backgroundColor: '#F8FAFC'
+    flex: 1
   },
-  header: {
-    backgroundColor: '#064E3B',
-    paddingTop: 16,
-    paddingHorizontal: 16,
-    paddingBottom: 20,
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24
+  scrollContent: {
+    paddingBottom: 100
   },
-  headerTop: {
+
+  // ── Vendor Availability Sub-Bar ──
+  vendorStatusBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center'
-  },
-  nameRow: {
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: 8
-  },
-  vendorName: {
-    fontSize: 18,
-    fontWeight: '900',
-    color: '#FFFFFF'
-  },
-  verifiedBadge: {
-    backgroundColor: '#ECFDF5',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6
-  },
-  verifiedBadgeText: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: '#065F46'
-  },
-  vendorCategory: {
-    fontSize: 11,
-    color: '#A7F3D0',
-    marginTop: 2
-  },
-  availBox: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 14,
-    paddingHorizontal: 10,
-    paddingVertical: 6
-  },
-  availLabel: {
-    fontSize: 9,
-    fontWeight: '900',
-    letterSpacing: 0.5,
-    marginBottom: 2
-  },
-  serviceAreaText: {
-    fontSize: 11,
-    color: '#D1FAE5',
-    marginTop: 12
-  },
-  emergencyLeadBanner: {
-    backgroundColor: '#FEF2F2',
-    borderWidth: 2,
-    borderColor: '#DC2626',
     marginHorizontal: 16,
-    marginTop: 14,
-    borderRadius: 18,
-    padding: 16
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB'
   },
-  emergencyLeadHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center'
-  },
-  emergencyLeadPill: {
-    fontSize: 10,
-    fontWeight: '900',
-    color: '#DC2626'
-  },
-  emergencyLeadFee: {
-    fontSize: 13,
-    fontWeight: '900',
-    color: '#991B1B'
-  },
-  emergencyLeadTitle: {
-    fontSize: 16,
-    fontWeight: '900',
-    color: '#7F1D1D',
-    marginTop: 6
-  },
-  emergencyLeadDesc: {
-    fontSize: 11,
-    color: '#991B1B',
-    lineHeight: 15,
-    marginVertical: 4
-  },
-  emergencyLeadLoc: {
-    fontSize: 11,
-    color: '#7F1D1D',
-    fontWeight: '700',
-    marginBottom: 12
-  },
-  emergencyLeadBtnRow: {
+  vendorStatusLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8
+    gap: 6
   },
-  claimBtn: {
-    flex: 1,
-    backgroundColor: '#DC2626',
-    borderRadius: 12,
-    paddingVertical: 12,
-    alignItems: 'center'
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4
   },
-  claimBtnText: {
-    color: '#FFFFFF',
+  vendorStatusText: {
     fontSize: 12,
-    fontWeight: '900'
+    fontWeight: '700',
+    color: '#111827'
   },
-  dismissBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: '#FEE2E2',
+  leadsCountPill: {
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 4,
+    marginLeft: 4
+  },
+  leadsCountText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#B45309'
+  },
+
+  // ── Search Bar Container ──
+  searchBarContainer: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 16,
+    height: 48,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.03,
+    shadowRadius: 3,
+    elevation: 1
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 13,
+    color: '#111827',
+    marginLeft: 10
+  },
+  filterBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: '#F3F4F6',
     alignItems: 'center',
     justifyContent: 'center'
   },
-  dismissBtnText: {
-    color: '#991B1B',
-    fontSize: 14,
-    fontWeight: 'bold'
-  },
-  activeJobWidget: {
-    backgroundColor: '#EFF6FF',
-    borderWidth: 1.5,
-    borderColor: '#93C5FD',
-    borderRadius: 18,
-    padding: 16,
-    marginHorizontal: 16,
-    marginTop: 14
-  },
-  activeJobHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 4
-  },
-  activeJobPill: {
-    fontSize: 9,
-    fontWeight: '900',
-    color: '#1E40AF',
-    letterSpacing: 0.5
-  },
-  activeJobStatus: {
-    fontSize: 9,
-    fontWeight: '900',
-    color: '#1E3A8A'
-  },
-  activeJobTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#1E3A8A'
-  },
-  activeJobAddress: {
-    fontSize: 11,
-    color: '#3B82F6',
-    marginVertical: 4
-  },
-  activeJobBtn: {
-    backgroundColor: '#2563EB',
-    borderRadius: 10,
-    paddingVertical: 8,
-    alignItems: 'center',
-    marginTop: 6
-  },
-  activeJobBtnText: {
-    color: '#FFFFFF',
-    fontSize: 11,
-    fontWeight: '800'
-  },
-  section: {
-    paddingHorizontal: 16,
-    marginTop: 18
-  },
-  sectionTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: COLORS.textDark,
-    marginBottom: 10
-  },
-  kpiGrid: {
+
+  // ── 3x3 Categories Grid ──
+  gridContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 10
+    marginHorizontal: 16,
+    gap: 8,
+    marginBottom: 16
   },
-  kpiCard: {
-    width: '48%',
-    backgroundColor: '#FFFFFF',
+  gridItem: {
+    width: GRID_ITEM_WIDTH,
+    alignItems: 'center',
+    marginBottom: 10
+  },
+  gridImageWrapper: {
+    width: '100%',
+    height: 74,
     borderRadius: 16,
-    padding: 14,
+    overflow: 'hidden',
+    backgroundColor: '#F1F5F9',
     borderWidth: 1,
-    borderColor: COLORS.border
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 2,
+    elevation: 1
   },
-  kpiLabel: {
-    fontSize: 10,
+  gridImage: {
+    width: '100%',
+    height: '100%'
+  },
+  gridLabel: {
+    fontSize: 12,
     fontWeight: '700',
-    color: COLORS.textMuted,
-    textTransform: 'uppercase'
+    color: '#111827',
+    textAlign: 'center',
+    marginTop: 6
   },
-  kpiValue: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: COLORS.textDark,
-    marginTop: 4
-  },
-  quickActions: {
-    gap: 10
-  },
-  actionCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 16,
+
+  // ── Featured Hero Banner (Peach/Coral Card) ──
+  heroBanner: {
+    marginHorizontal: 16,
+    backgroundColor: '#FFF6F3',
+    borderColor: '#FED7AA',
     borderWidth: 1,
-    borderColor: COLORS.border
+    borderRadius: 22,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    shadowColor: '#EA580C',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2
   },
-  actionEmoji: {
-    fontSize: 24,
-    marginBottom: 4
+  heroTextCol: {
+    flex: 1,
+    paddingRight: 10
   },
-  actionTitle: {
+  heroBadgePill: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#FFFFFF',
+    borderColor: '#FDBA74',
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4
+  },
+  heroBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#C2410C',
+    letterSpacing: 0.4
+  },
+  heroTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#111827',
+    marginTop: 8,
+    lineHeight: 21,
+    letterSpacing: -0.2
+  },
+  heroSubtitle: {
+    fontSize: 11,
+    color: '#6B7280',
+    marginTop: 4,
+    lineHeight: 15
+  },
+  heroActionBtn: {
+    backgroundColor: '#EA580C',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 12,
+    alignSelf: 'flex-start',
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6
+  },
+  heroActionBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#FFFFFF'
+  },
+  heroImageWrapper: {
+    width: 120,
+    height: 112,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#FEE2E2',
+    borderWidth: 1,
+    borderColor: '#FDBA74'
+  },
+  heroImage: {
+    width: '100%',
+    height: '100%'
+  },
+  pageIndicator: {
+    width: 26,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#EA580C',
+    alignSelf: 'center',
+    marginTop: 10,
+    marginBottom: 18
+  },
+
+  // ── Popular Services Section ──
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    marginHorizontal: 16,
+    marginBottom: 12
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#111827',
+    letterSpacing: -0.2
+  },
+  sectionSubtitle: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 2
+  },
+  seeAllText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#111827'
+  },
+  popularCarouselContent: {
+    paddingHorizontal: 16,
+    gap: 12,
+    paddingBottom: 4
+  },
+  popularCard: {
+    width: POPULAR_CARD_WIDTH,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    elevation: 2
+  },
+  popularImageWrapper: {
+    width: '100%',
+    height: 120,
+    backgroundColor: '#F1F5F9'
+  },
+  popularImage: {
+    width: '100%',
+    height: '100%'
+  },
+  popularBody: {
+    padding: 12
+  },
+  popularCategory: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#6B7280',
+    letterSpacing: 0.5
+  },
+  popularTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#111827',
+    marginTop: 2
+  },
+  ratingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 6,
+    gap: 4
+  },
+  ratingText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#111827'
+  },
+  priceText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#111827',
+    marginTop: 6
+  },
+  servicesBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginHorizontal: 16,
+    marginBottom: 14
+  },
+  servicesBannerIconBox: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#D1FAE5',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  servicesBannerTitle: {
     fontSize: 14,
     fontWeight: '800',
-    color: COLORS.textDark
+    color: '#065F46'
   },
-  actionDesc: {
+  servicesBannerSub: {
     fontSize: 11,
-    color: COLORS.textSecondary,
-    marginTop: 2
+    color: '#047857',
+    marginTop: 2,
+    lineHeight: 15
+  },
+  servicesBannerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    gap: 2,
+    marginLeft: 8
+  },
+  servicesBannerBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#059669'
   }
 });

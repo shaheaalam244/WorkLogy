@@ -342,27 +342,25 @@ export default function Navbar({ onOpenPostJob, onSearchTrigger }) {
     : user?.role === 'customer'
     ? [
         { label: 'Home', to: '/' },
-        { label: 'Explore Services', to: '/categories' },
-        { label: 'Emergency', to: '/emergency', isEmergency: true },
-        { label: 'Find a Professional', to: '/professionals' },
-        { label: 'My Jobs', to: '/customer/my-jobs' },
-        { label: 'How It Works', to: '/how-it-works' },
+        { label: 'Services', to: '/categories' },
+        { label: 'My Bookings', to: '/customer/bookings' },
+        { label: 'Become a Vendor', to: '/register?role=vendor' },
+        { label: 'Help & Support', to: '/contact' },
       ]
     : user?.role === 'admin'
     ? [
         { label: 'Home', to: '/' },
-        { label: 'Explore Services', to: '/categories' },
+        { label: 'Services', to: '/categories' },
         { label: 'Emergency', to: '/emergency', isEmergency: true },
         { label: 'Find Available Jobs', to: '/jobs' },
         { label: 'Admin Console', to: '/admin/dashboard' },
       ]
     : [
         { label: 'Home', to: '/' },
-        { label: 'Explore Services', to: '/categories' },
-        { label: 'Emergency', to: '/emergency', isEmergency: true },
-        { label: 'Find a Professional', to: '/professionals' },
-        { label: 'My Jobs', to: '/customer/my-jobs' },
-        { label: 'How It Works', to: '/how-it-works' },
+        { label: 'Services', to: '/categories' },
+        { label: 'My Bookings', to: '/customer/bookings' },
+        { label: 'Become a Vendor', to: '/register?role=vendor' },
+        { label: 'Help & Support', to: '/contact' },
       ];
 
   const handleSelectCity = (city) => {

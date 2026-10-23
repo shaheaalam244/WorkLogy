@@ -1,136 +1,246 @@
-# WorkLogy Mobile Applications — Architecture & System Design (`mobile/ARCHITECTURE.md`)
+# WorkLogy Mobile Applications — Verified Architecture & Technical Design (`mobile/ARCHITECTURE.md`)
 
-This document defines the high-level architecture, directory patterns, data flow contracts, and integration models for the **WorkLogy Mobile Applications**.
-
----
-
-## 1. System Overview & Two-App Architecture
-
-```text
-                               ┌──────────────────────────────────────────────┐
-                               │       WorkLogy Central Backend API           │
-                               │   Node.js • Express • MongoDB • Socket.IO    │
-                               └──────────────────────┬───────────────────────┘
-                                                      │
-                       ┌──────────────────────────────┴──────────────────────────────┐
-                       │ REST APIs & Real-Time WebSocket Events                      │
-                       ▼                                                             ▼
-        ┌──────────────────────────────┐                             ┌──────────────────────────────┐
-        │     Customer Mobile App      │                             │      Vendor Pro Mobile App   │
-        │   (mobile/customer-app)      │                             │     (mobile/vendor-app)      │
-        ├──────────────────────────────┤                             ├──────────────────────────────┤
-        │ • 30-Category Discovery      │                             │ • Online / Offline Toggle    │
-        │ • Service Request Wizard     │                             │ • Nearby Tenders Feed (Masked│
-        │ • 24/7 Rapid Emergency Radar │                             │ • FCFS Emergency Claim ⚡     │
-        │ • Arrival OTP Display        │                             │ • Full Disclosed Dossier     │
-        │ • Real-Time Client Chat      │                             │ • 6-Digit OTP Arrival Check  │
-        │ • 1-5 Star Review Modal      │                             │ • Completion Sign-off        │
-        │ • Customer Profile & Address │                             │ • Earnings & Escrow Ledger   │
-        └──────────────────────────────┘                             └──────────────────────────────┘
-```
-
-Both mobile applications are completely isolated React Native / Expo projects residing in `worklogy/mobile/`. They share the canonical backend database as their single source of truth and respect existing business logic without duplication.
+This document provides the authoritative architectural blueprint, verified directory structures, data flow models, and technical contracts for the **WorkLogy Mobile Applications** (`customer-app` and `vendor-app`).
 
 ---
 
-## 2. Directory Layout & Structure
+## 1. System Overview & Multi-Client Architecture
 
-Both apps strictly adhere to the standard directory layout:
+WorkLogy operates a unified full-stack ecosystem where multiple client platforms communicate with a single authoritative Node.js/Express backend and MongoDB Atlas database.
 
 ```text
-worklogy/mobile/
-├── customer-app/
-│   ├── src/
-│   │   ├── api/          # Typed HTTP API client (calls /api/*)
-│   │   ├── assets/       # App icons, splash images, brand vectors
-│   │   ├── components/   # Reusable UI primitives (Badges, Cards, Skeletons)
-│   │   ├── config/       # Environment & base URL resolvers
-│   │   ├── constants/    # Design tokens, storage keys, socket event names
-│   │   ├── context/      # AuthContext for session state
-│   │   ├── hooks/        # useAuth and custom reactivity hooks
-│   │   ├── navigation/   # CustomerNavigator (Tab bar + Stack routing)
-│   │   ├── screens/      # All 13 Customer screens (Home, Explore, Jobs, etc.)
-│   │   ├── services/     # Socket.IO connection manager & push listeners
-│   │   ├── storage/      # SecureStore token storage with in-memory fallback
-│   │   ├── theme/        # Colors, typography, spacing tokens
-│   │   ├── types/        # TypeScript contracts for jobs, bookings, user
-│   │   └── utils/        # Currency (INR ₹), date, status badge formatters
-│   ├── App.tsx           # Application root & safe area provider
-│   ├── app.json          # Expo configuration & bundle identifiers
-│   ├── package.json      # Independent dependencies
-│   ├── tsconfig.json     # TypeScript strict configuration
-│   └── .env.example      # Sample environment variables
-│
-└── vendor-app/
-    ├── src/
-    │   ├── api/          # Typed HTTP API client (calls /api/*)
-    │   ├── assets/       # App icons, splash images, brand vectors
-    │   ├── components/   # Reusable UI primitives (KPI cards, Modals)
-    │   ├── config/       # Environment & base URL resolvers
-    │   ├── constants/    # Design tokens, storage keys, socket event names
-    │   ├── context/      # AuthContext for session state
-    │   ├── hooks/        # useAuth and custom reactivity hooks
-    │   ├── navigation/   # VendorNavigator (Tab bar + Stack routing)
-    │   ├── screens/      # All 10 Vendor screens (Home, Tenders, Earnings, etc.)
-    │   ├── services/     # Socket.IO connection manager & push listeners
-    │   ├── storage/      # SecureStore token storage with in-memory fallback
-    │   ├── theme/        # Colors, typography, spacing tokens
-    │   ├── types/        # TypeScript contracts for jobs, bookings, user
-    │   └── utils/        # Currency (INR ₹), date, status badge formatters
-    ├── App.tsx           # Application root & safe area provider
-    ├── app.json          # Expo configuration & bundle identifiers
-    ├── package.json      # Independent dependencies
-    ├── tsconfig.json     # TypeScript strict configuration
-    └── .env.example      # Sample environment variables
+                                  ┌──────────────────────────────────────────────┐
+                                  │          WorkLogy Central Backend            │
+                                  │    Node.js (ESM) • Express • MongoDB Atlas   │
+                                  │          Socket.IO (Port 5001)               │
+                                  └──────────────────────┬───────────────────────┘
+                                                         │
+                         ┌───────────────────────────────┼──────────────────────────────┐
+                         ▼                               ▼                              ▼
+          ┌─────────────────────────────┐  ┌─────────────────────────────┐  ┌─────────────────────────────┐
+          │      Web Application        │  │     Customer Mobile App     │  │      Vendor Mobile App      │
+          │         (frontend/)         │  │   (mobile/customer-app/)    │  │    (mobile/vendor-app/)     │
+          ├─────────────────────────────┤  ├─────────────────────────────┤  ├─────────────────────────────┤
+          │ • React 18 + Vite           │  │ • React Native 0.86 + Expo  │  │ • React Native 0.86 + Expo  │
+          │ • Tailwind CSS              │  │ • 5-Tab Navigation          │  │ • 4-Tab Navigation          │
+          │ • Public Portal & Admin     │  │ • 30 Trade Catalog Discovery│  │ • Online/Offline Toggle     │
+          │ • Customer & Vendor Web     │  │ • Job Creation & Emergency  │  │ • Masked Tender Feed        │
+          │ • Desktop & Mobile Web      │  │ • 6-Digit Arrival OTP View  │  │ • FCFS Emergency Claim      │
+          │                             │  │ • Review & Escrow Tracking  │  │ • Arrival OTP Verification  │
+          │                             │  │                             │  │ • Escrow Earnings Ledger    │
+          └─────────────────────────────┘  └─────────────────────────────┘  └─────────────────────────────┘
 ```
 
 ---
 
-## 3. Authentication & RBAC Boundaries
+## 2. Verified Repository Structure
 
-1. **Authentication Mechanism**: Standard JWT (JSON Web Tokens) issued upon `POST /api/auth/login` or `POST /api/auth/register`.
-2. **Secure Token Storage**: The JWT token is securely saved in `Expo SecureStore` under the key `worklogy_auth_token`. On subsequent app launches, `restoreSession()` fetches `/api/auth/me` to hydrate the user profile.
-3. **Role Enforcement**:
-   - `Customer App`: Accesses `/api/jobs/my-jobs`, `/api/bookings/my-bookings`, `/api/reviews`. Restricted from vendor tender feeds or contractor management.
-   - `Vendor App`: Accesses `/api/jobs/open`, `/api/vendors/availability`, `/api/vendors/earnings`, `/api/bookings/:id/verify-arrival-otp`. Enforces vendor verification status and role checks on the backend.
+```text
+/Users/shaheaalam/Desktop/worklogy/
+├── backend/                   # Express REST API, Mongoose Models, Socket.IO Server (Port 5001)
+├── frontend/                  # React 18 + Vite Customer/Vendor/Admin Web App (Port 5173)
+├── mobile/
+│   ├── AGENTS.md              # Master operating rules & governance for mobile coding agents
+│   ├── ARCHITECTURE.md        # This document: Verified mobile technical architecture
+│   ├── MEMORY.md              # Durable engineering decisions, API contracts & bug post-mortems
+│   ├── README.md              # Developer setup, execution, and build guide
+│   ├── REQUIREMENTS.md        # Granular functional & non-functional requirements (REQ-C/REQ-V)
+│   ├── TASKS.md               # Prioritized implementation backlog & status
+│   │
+│   ├── customer-app/          # Standalone Customer Expo Project
+│   │   ├── src/
+│   │   │   ├── api/           # client.ts (Typed HTTP calls to /api/*)
+│   │   │   ├── assets/        # icons, splash, services/ (33 high-res PNG photography assets)
+│   │   │   ├── components/    # Header.tsx, LocationModal.tsx, UI badges
+│   │   │   ├── config/        # index.ts (EXPO_PUBLIC_API_URL resolver)
+│   │   │   ├── constants/     # Storage keys, design tokens
+│   │   │   ├── context/       # AuthContext.tsx (User state, login, register, logout)
+│   │   │   ├── hooks/         # useAuth.ts
+│   │   │   ├── navigation/    # CustomerNavigator.tsx (5 tabs: Home, Search, Post Job, Messages, Profile)
+│   │   │   ├── screens/       # 14 Customer Screens (HomeScreen, CategoryDetail, CreateJob, Emergency, etc.)
+│   │   │   ├── services/      # socket.ts (Socket.IO client integration)
+│   │   │   ├── storage/       # secureStorage.ts (SecureStore with in-memory fallback)
+│   │   │   ├── theme/         # colors.ts (WorkLogy palette tokens)
+│   │   │   ├── types/         # index.ts (TypeScript interfaces for Job, Booking, User)
+│   │   │   └── utils/         # categoryIcons.tsx, serviceImages.ts, formatters.ts
+│   │   ├── App.tsx            # Root component with SafeAreaProvider & StatusBar
+│   │   ├── app.json           # Expo manifest (bundle: com.worklogy.customer)
+│   │   ├── package.json       # Expo SDK 57, React Native 0.86, React 19
+│   │   └── tsconfig.json      # TypeScript compiler configuration
+│   │
+│   └── vendor-app/            # Standalone Vendor Pro Expo Project
+│       ├── src/
+│       │   ├── api/           # client.ts (Typed HTTP calls to /api/*)
+│       │   ├── assets/        # icons, splash, services/ (33 high-res PNG photography assets)
+│       │   ├── components/    # Header.tsx, KPI cards, Status badges
+│       │   ├── config/        # index.ts (EXPO_PUBLIC_API_URL resolver)
+│       │   ├── constants/     # Storage keys, design tokens
+│       │   ├── context/       # AuthContext.tsx (Vendor auth state, availability sync)
+│       │   ├── hooks/         # useAuth.ts
+│       │   ├── navigation/    # VendorNavigator.tsx (4 tabs: Home, Jobs, Earnings, Profile)
+│       │   ├── screens/       # 11 Vendor Screens (VendorHomeScreen, JobsScreen, Earnings, Dossier, etc.)
+│       │   ├── services/      # socket.ts (Socket.IO client integration)
+│       │   ├── storage/       # secureStorage.ts (SecureStore with in-memory fallback)
+│       │   ├── theme/         # colors.ts (Deep navy, warm off-white, forest green palette)
+│       │   ├── types/         # index.ts (TypeScript interfaces for Job, Booking, VendorProfile)
+│       │   └── utils/         # categoryIcons.tsx, serviceImages.ts, formatters.ts
+│       ├── App.tsx            # Root component with SafeAreaView & dark-content StatusBar
+│       ├── app.json           # Expo manifest (bundle: com.worklogy.vendor)
+│       ├── package.json       # Expo SDK 57, React Native 0.86, React 19
+│       └── tsconfig.json      # TypeScript compiler configuration
+```
 
 ---
 
-## 4. Critical Business Workflows
+## 3. Technology Stack & Core Dependencies
 
-### A. Address Privacy & Masking Rules
-- **Tender Feed (`AvailableJobsScreen`)**: Contractors only see approximate localities (e.g. `Near Sector 62, Noida (~2.4 km away)`). Exact customer house numbers and street addresses remain masked to protect homeowner privacy.
-- **Confirmed Assignments (`ConfirmedJobsScreen`)**: Once a booking is assigned to a specific contractor, the full address (`houseNumber`, `street`, `landmark`, `pincode`) is unmasked alongside direct customer calling and messaging controls.
+Both mobile projects use identical, modern React Native dependencies:
 
-### B. First-Acceptance-Wins (FCFS) Emergency Dispatch
-1. Customer initiates an emergency request via `EmergencyScreen`.
-2. Backend receives `POST /api/jobs` with `urgency: 'emergency'` and broadcasts an `emergency_broadcast` WebSocket event to all nearby, available certified vendors.
-3. Technicians receive a high-priority alert on `VendorHomeScreen` and `AvailableJobsScreen`.
-4. The first contractor to tap **"Accept Emergency Call Now ⚡"** claims the assignment atomically via `POST /api/jobs/:id/claim-instant`.
-5. Once claimed, the server broadcasts `job_taken` over Socket.IO, which immediately dismisses the prompt on all other contractor devices. If a second vendor attempts to claim simultaneously, the server responds with `HTTP 409 Conflict`.
-
-### C. 6-Digit Physical Arrival OTP Verification
-1. When a booking is confirmed, the customer is assigned a secure 6-digit Arrival OTP (`booking.arrivalOtp`).
-2. The technician travels to the customer's location and requests the code upon physical arrival.
-3. The technician inputs the code via the **"Enter Arrival OTP 🔑"** modal, calling `POST /api/bookings/:id/verify-arrival-otp`.
-4. Only upon successful cryptographic match does the server mark `isOtpVerified: true` and transition the job status to `in_progress`.
-
-### D. Financials & Transparent Escrow
-All payments are secured in escrow. The Vendor App displays:
-- **Lifetime Gross Billing**: Total customer amount.
-- **WorkLogy Platform Fee**: Transparent 5–10% deduction.
-- **Pending Escrow**: Value of active jobs awaiting completion.
-- **Net Disbursed**: Automated weekly NEFT settlements to verified bank accounts every Monday.
-
----
-
-## 5. Network & API Configuration
-
-| Environment | Base URL Pattern | Note |
+| Dependency | Version | Purpose |
 | :--- | :--- | :--- |
-| **Simulator (iOS)** | `http://localhost:5001/api` | Direct localhost loopback |
-| **Emulator (Android)**| `http://10.0.2.2:5001/api` | Android host loopback alias |
-| **Physical Device (Expo Go)** | `http://192.168.x.x:5001/api` | Reachable LAN IP of development machine |
-| **Staging / Production** | `https://api.worklogy.in/api` | Fully qualified HTTPS endpoint |
+| `expo` | `~57.0.31` | Managed Expo SDK environment, asset loading, build tooling |
+| `react` | `19.2.3` | Core UI library |
+| `react-native` | `0.86.3` | Native runtime primitives |
+| `@expo/vector-icons` | `^15.1.1` | Vector icon families (Ionicons, MaterialCommunityIcons, Feather, FontAwesome5) |
+| `socket.io-client` | `^4.8.1` | Real-time WebSocket connection to backend for instant leads & messaging |
+| `expo-status-bar` | `~57.0.1` | Native status bar styling control |
+| `typescript` | `~5.6.3` | Static type checking and strict interface adherence |
 
-The base URL is loaded through `config/index.ts` from `EXPO_PUBLIC_API_URL`.
+---
+
+## 4. Navigation Architecture
+
+Both applications use clean, state-driven router containers that provide zero-native-linking overhead, deep stack history, and type-safe route parameters.
+
+### Customer App Navigation (`CustomerNavigator.tsx`)
+- **Fixed 5-Item Bottom Navigation Bar**:
+  1. `HomeTab`: Brand header, search, 3x3 category grid, featured repairs card, popular services carousel.
+  2. `SearchTab` (`ExploreTab`): Full 30-category directory with trade group filtering.
+  3. `PostJobTab` (`CreateJob`): Multi-step service request wizard.
+  4. `MessagesTab`: Real-time conversation list and customer-vendor chat.
+  5. `ProfileTab`: Saved addresses, account details, active role switcher.
+- **Stack Screens**: `CategoryDetail`, `Emergency`, `MyJobs`, `JobDetail`, `ChatDetail`, `Notifications`, `ReviewModal`, `Login`, `Register`.
+
+### Vendor App Navigation (`VendorNavigator.tsx`)
+- **Fixed 4-Item Bottom Navigation Bar**:
+  1. `VendorHomeTab`: Compact header, online/offline availability switch, 3x3 category grid, featured repair card, popular services carousel.
+  2. `JobsTab`: Unified tender manager with 6 filter tabs (`new`, `quoted`, `accepted`, `in_progress`, `completed`, `cancelled`) and interactive Quotation Modal.
+  3. `EarningsTab`: 4 KPI financial cards, Monday NEFT settlement notice, 10% platform fee transaction ledger.
+  4. `ProfileTab`: Contractor profile card, KYC statutory verification modal, business editing, territory controls.
+- **Stack Screens**: `Notifications`, `VendorJobDetail`, `ChatDetail`, `VendorLogin`, `VendorRegister`.
+
+---
+
+## 5. Authentication & Session Management
+
+1. **JWT Auth Protocol**: Login (`POST /api/auth/login`) or Register (`POST /api/auth/register`) issues a cryptographically signed JWT token with a 30-day validity window.
+2. **Universal Secure Storage Adapter** (`src/storage/secureStorage.ts`):
+   - Dynamically loads `expo-secure-store` when available on native devices.
+   - Transparently falls back to an in-memory key-value map in headless/Node test environments.
+   - Prevents keychain crashes during CI, test runs, and headless scripts.
+3. **Session Restoration**: On app launch, `AuthProvider` reads `worklogy_auth_token` and calls `GET /api/auth/me`. If valid, user state is hydrated; if expired (401), tokens are cleared and the user is redirected to the login view.
+4. **Role Isolation**:
+   - Customers receive role `'customer'` and are restricted by backend middleware `authorize('vendor')`.
+   - Vendors receive role `'vendor'` and must maintain an approved profile record (`VendorProfile`) to submit quotations.
+
+---
+
+## 6. Shared API Client & Network Architecture
+
+Both apps communicate with the central backend via `src/api/client.ts`:
+
+- **Base URL Resolution** (`src/config/index.ts`): Reads `process.env.EXPO_PUBLIC_API_URL`.
+  - iOS Simulator: `http://localhost:5001/api`
+  - Android Emulator: `http://10.0.2.2:5001/api`
+  - Physical Devices: `http://<LAN_IP>:5001/api`
+  - Staging/Production: `https://api.worklogy.in/api`
+- **Automatic Bearer Token Injection**: Every request with `requiresAuth: true` pulls the token from `secureStorage` and appends `Authorization: Bearer <token>`.
+- **Structured Error Handling**: HTTP error responses (`400`, `401`, `403`, `404`, `409`, `500`) are parsed and re-thrown with human-readable error messages extracted from `response.data.message` or `response.data.error`.
+
+---
+
+## 7. Shared Data Model & The 11 Job Statuses
+
+All clients observe the central MongoDB `Job` and `Booking` lifecycle:
+
+| Status Enum | Meaning & Business Rule | Customer Action | Vendor Action |
+| :--- | :--- | :--- | :--- |
+| `open` | Tender broadcast to eligible local contractors | Can cancel | Can submit quote or instant claim |
+| `pending_acceptance` | Quotation submitted by contractor | Can accept / reject quote | Can withdraw proposal |
+| `awaiting_confirmation`| Customer selected quote; payment held in escrow | Review price breakdown | Await contract lock |
+| `confirmed` / `scheduled`| Contract confirmed; 6-digit Arrival OTP generated | View scheduled time & OTP | View unmasked address; Start Journey |
+| `on_the_way` | Contractor en route to service location | Track live status; Prepare OTP | Launch Google Maps navigation |
+| `arrived` | Contractor arrived physically at site | Disclose 6-digit Arrival OTP | Enter 6-digit OTP into dialog |
+| `in_progress` | Arrival OTP verified; work underway | Observe progress | Perform service; record work notes |
+| `completion_pending` | Contractor marked work complete | Review work & Approve Sign-off | Await customer approval |
+| `completed` | Sign-off confirmed; escrow released | Submit 1–5 Star Review | View earnings in ledger |
+| `cancelled` | Request cancelled before execution | View cancellation policy | View cancellation reason |
+| `disputed` | Dispute filed for arbitration | Contact WorkLogy Support | Provide work evidence to admin |
+
+---
+
+## 8. Real-Time WebSocket Infrastructure
+
+Powered by `socket.io-client` connecting to `http://<host>:5001`:
+
+- `emergency_broadcast`: Emitted when an emergency job is posted; received by nearby available vendors.
+- `job_taken`: Emitted upon atomic first-acceptance of an emergency lead; immediately dismisses the lead on all other contractor screens.
+- `booking_confirmed`: Notifies the winning vendor that their quote was accepted.
+- `job_status_updated`: Pushes state changes (`on_the_way`, `arrived`, `in_progress`, `completed`) to customer tracking screens in real time.
+- `chat_message`: Delivers live chat bubbles between customer and technician.
+
+---
+
+## 9. Image & Asset Management Architecture
+
+1. **Authentic Photography Assets**:
+   - 33 high-resolution landscape PNG assets stored in `src/assets/services/` for every canonical trade category (Electrician, Plumber, AC Repair, Cleaning, Carpenter, Painting, Locksmith, etc.).
+   - Homepage heroes (`Expert Homepage.png`, `SmilingHomepage.png`, `Homepage.png`).
+2. **Category Media Mappers**:
+   - `src/utils/serviceImages.ts`: Resolves category slugs and trade keywords to local bundled assets with resilient fallback to `Homepage.png`.
+   - `src/utils/categoryIcons.tsx`: Maps canonical trade categories to native vector icons with custom background colors and icons. Guarantees zero raw-string rendering crashes.
+
+---
+
+## 10. Verified Build, Test & Lint Commands
+
+### Customer Mobile App (`mobile/customer-app/`):
+```bash
+# 1. Type check
+npx tsc --noEmit
+
+# 2. Local dev server
+npx expo start
+
+# 3. Android Metro bundle verification
+npx expo export -p android --no-bytecode
+```
+
+### Vendor Mobile App (`mobile/vendor-app/`):
+```bash
+# 1. Type check
+npx tsc --noEmit
+
+# 2. Local dev server
+npx expo start
+
+# 3. Android Metro bundle verification
+npx expo export -p android --no-bytecode
+```
+
+### Web Frontend Regressions (`frontend/`):
+```bash
+# 1. Unit tests
+node --test src/utils/*.test.js
+
+# 2. Production build
+npm run build
+```
+
+---
+
+## 11. Known Technical Constraints & Distinctions
+
+1. **Physical Device Network Binding**: Physical mobile devices running Expo Go cannot reach `localhost:5001`. The development computer's LAN IP (e.g. `192.168.1.15:5001`) must be specified in `.env`.
+2. **React 19 Export Compatibility**: React 19 types deprecate certain top-level namespace properties (`React.Fragment`). Use pure `View` containers or named imports to preserve bundler stability.
+3. **Atomic Concurrency Boundary**: Instant emergency claims are strictly server-authoritative (`Job.findOneAndUpdate({ _id, status: 'open', selectedVendor: null })`). Frontend clients must gracefully handle `HTTP 409 Conflict`.

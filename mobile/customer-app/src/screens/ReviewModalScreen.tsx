@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,25 @@ export default function ReviewModalScreen({ route, navigation }: any) {
   const [title, setTitle] = useState('');
   const [comment, setComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    const isDirty = () => comment.trim().length > 0 || title.trim().length > 0;
+
+    const unregister = navigation?.registerBackHandler?.(() => {
+      if (isDirty()) {
+        Alert.alert('Discard Review?', 'You have entered feedback. Are you sure you want to discard your review?', [
+          { text: 'Keep Editing', style: 'cancel' },
+          { text: 'Discard', style: 'destructive', onPress: () => navigation.goBack(true) }
+        ]);
+        return true;
+      }
+      return false;
+    });
+
+    return () => {
+      unregister?.();
+    };
+  }, [comment, title, navigation]);
 
   const handleSubmit = async () => {
     if (!comment.trim()) {

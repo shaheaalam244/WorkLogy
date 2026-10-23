@@ -52,18 +52,30 @@ export default function ConfirmedJobsScreen({ navigation }: any) {
   });
 
   useEffect(() => {
+    if (!user) {
+      setLoading(false);
+      setBookings([]);
+      return;
+    }
     loadBookings();
-  }, [activeTab]);
+  }, [user, activeTab]);
 
   const loadBookings = async () => {
+    if (!user) {
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
     try {
       setLoading(true);
       const res = await api.bookings.getMyBookings();
       if (res?.bookings) {
         setBookings(res.bookings);
       }
-    } catch (err) {
-      console.warn('Failed to load vendor bookings:', err);
+    } catch (err: any) {
+      if (!err?.message?.includes('token missing') && !err?.message?.includes('Not authorized')) {
+        console.warn('Failed to load vendor bookings:', err);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -344,7 +356,7 @@ export default function ConfirmedJobsScreen({ navigation }: any) {
       ) : (
         <FlatList
           data={filteredBookings}
-          keyExtractor={(item) => item._id}
+          keyExtractor={(item: Booking) => item._id}
           renderItem={renderBookingCard}
           contentContainerStyle={styles.listContent}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}
@@ -368,7 +380,7 @@ export default function ConfirmedJobsScreen({ navigation }: any) {
               keyboardType="number-pad"
               maxLength={6}
               value={otpModal.otpCode}
-              onChangeText={(val) => setOtpModal((prev) => ({ ...prev, otpCode: val }))}
+              onChangeText={(val: string) => setOtpModal((prev) => ({ ...prev, otpCode: val }))}
               autoFocus
             />
 
@@ -415,7 +427,7 @@ export default function ConfirmedJobsScreen({ navigation }: any) {
               multiline
               numberOfLines={4}
               value={completeModal.notes}
-              onChangeText={(val) => setCompleteModal((prev) => ({ ...prev, notes: val }))}
+              onChangeText={(val: string) => setCompleteModal((prev) => ({ ...prev, notes: val }))}
             />
 
             <View style={styles.modalBtnRow}>

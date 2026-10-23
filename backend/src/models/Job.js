@@ -178,6 +178,7 @@ const JobSchema = new mongoose.Schema(
 );
 
 JobSchema.index({ status: 1, category: 1, isDeleted: 1, createdAt: -1 });
+JobSchema.index({ customer: 1, isDeleted: 1, createdAt: -1 });
 JobSchema.index({ selectedVendor: 1, status: 1, isDeleted: 1 });
 JobSchema.index({ 'location.city': 1, status: 1 });
 

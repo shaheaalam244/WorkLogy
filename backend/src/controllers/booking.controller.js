@@ -5,6 +5,7 @@ import User from '../models/User.js';
 import Transaction from '../models/Transaction.js';
 import VendorProfile from '../models/VendorProfile.js';
 import Notification from '../models/Notification.js';
+import Review from '../models/Review.js';
 import { getIO } from '../config/socket.js';
 import { decryptCustomerOtp, verifyOtpMatch, generateSecureOtp, hashOtp } from '../utils/otp.js';
 import { notifyBookingConfirmed, notifyStatusChange, notifyCancellation } from '../services/notification.service.js';
@@ -20,6 +21,8 @@ export const createDirectBooking = async (req, res, next) => {
   try {
     const {
       vendorId,
+      service,
+      serviceId,
       serviceTitle,
       category,
       serviceType,
@@ -41,14 +44,25 @@ export const createDirectBooking = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'You cannot book yourself as a professional' });
     }
 
-    // Verify vendor exists
-    const vendorUser = await User.findById(vendorId);
+    // Verify vendor exists (resolving either User ID or VendorProfile ID)
+    let resolvedVendorUserId = vendorId;
+    let vendorUser = await User.findById(vendorId);
+    let vendorProfile = null;
+
+    if (!vendorUser) {
+      vendorProfile = await VendorProfile.findById(vendorId);
+      if (vendorProfile && vendorProfile.user) {
+        resolvedVendorUserId = vendorProfile.user;
+        vendorUser = await User.findById(vendorProfile.user);
+      }
+    } else {
+      vendorProfile = await VendorProfile.findOne({ user: vendorId });
+    }
+
     if (!vendorUser || (vendorUser.role !== 'vendor' && vendorUser.role !== 'admin')) {
       return res.status(404).json({ success: false, message: 'Selected professional not found or inactive' });
     }
 
-    // Verify vendor profile
-    const vendorProfile = await VendorProfile.findOne({ user: vendorId });
     if (!vendorProfile) {
       return res.status(404).json({ success: false, message: 'Professional profile is not configured' });
     }
@@ -56,7 +70,7 @@ export const createDirectBooking = async (req, res, next) => {
     // Check for duplicate pending direct bookings between this customer and vendor
     const existingPending = await Booking.findOne({
       customer: req.user.id,
-      vendor: vendorId,
+      vendor: resolvedVendorUserId,
       status: 'pending_acceptance',
       serviceTitle: serviceTitle || 'Home Service'
     });
@@ -79,7 +93,8 @@ export const createDirectBooking = async (req, res, next) => {
       bookingReference: bookingRef,
       bookingType: 'direct_professional',
       customer: req.user.id,
-      vendor: vendorId,
+      vendor: resolvedVendorUserId,
+      service: service || serviceId || undefined,
       serviceTitle: serviceTitle || 'Direct Professional Service',
       category: category || (vendorProfile.categories?.[0]?.name) || 'Home Services',
       serviceType: serviceType || 'repair',
@@ -296,7 +311,13 @@ export const getVendorBookings = async (req, res, next) => {
     let query = { vendor: req.user.id };
 
     if (status && status !== 'all') {
-      query.status = status;
+      if (status === 'scheduled' || status === 'confirmed') {
+        query.status = { $in: ['scheduled', 'confirmed', 'assigned', 'awaiting_confirmation'] };
+      } else if (status === 'in_progress') {
+        query.status = { $in: ['in_progress', 'on_the_way', 'arrived', 'completion_pending'] };
+      } else {
+        query.status = status;
+      }
     }
 
     let bookings = await Booking.find(query)
@@ -413,7 +434,8 @@ export const getBookingById = async (req, res, next) => {
       .populate('customer', 'name email phone avatar')
       .populate('vendor', 'name email phone avatar')
       .populate('job')
-      .populate('service');
+      .populate('service')
+      .populate('review');
 
     if (!booking) {
       return res.status(404).json({ success: false, message: 'Booking not found' });
@@ -459,7 +481,8 @@ export const getBookingByJobId = async (req, res, next) => {
       .populate('customer', 'name email phone avatar')
       .populate('vendor', 'name email phone avatar')
       .populate('job')
-      .populate('service');
+      .populate('service')
+      .populate('review');
 
     if (!booking) {
       // If no booking found, check if job exists and belongs to customer
@@ -667,6 +690,139 @@ export const updateBookingStatus = async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'Not authorized to modify this booking' });
     }
 
+    // Safety guard: prevent altering already completed bookings
+    if (booking.status === 'completed') {
+      return res.status(400).json({
+        success: false,
+        message: 'This booking has already been completed and settled. Its status cannot be altered.'
+      });
+    }
+
+    // Cancellation Workflow
+    if (status === 'cancelled') {
+      booking.status = 'cancelled';
+      if (booking.pricing) {
+        booking.pricing.paymentStatus = 'refunded';
+      }
+      const fullReason = note || 'Cancelled by service contractor';
+      booking.statusHistory.push({
+        status: 'cancelled',
+        updatedBy: req.user.id,
+        timestamp: new Date(),
+        note: fullReason
+      });
+
+      // Update associated Job
+      if (booking.job) {
+        const jobIdStr = (booking.job._id || booking.job).toString();
+        await Job.findByIdAndUpdate(jobIdStr, {
+          $set: {
+            status: 'cancelled',
+            cancellationReason: fullReason,
+            dispatchExpiredAt: new Date()
+          },
+          $push: {
+            eventHistory: {
+              event: 'cancelled',
+              note: fullReason,
+              actor: req.user.id,
+              timestamp: new Date()
+            }
+          }
+        });
+
+        // Socket.IO emission
+        const io = getIO();
+        if (io) {
+          const cancelPayload = {
+            jobId: jobIdStr,
+            bookingId: booking._id.toString(),
+            title: booking.serviceTitle,
+            status: 'cancelled',
+            reason: fullReason,
+            cancelledAt: new Date().toISOString()
+          };
+          io.emit('job_cancelled', cancelPayload);
+          io.emit('job_status_updated', { jobId: jobIdStr, status: 'cancelled' });
+          io.to('job_' + jobIdStr).emit('job_cancelled', cancelPayload);
+          io.to('user_' + (booking.customer._id || booking.customer).toString()).emit('job_cancelled', cancelPayload);
+        }
+      }
+
+      // Notify customer
+      try {
+        await notifyCancellation({
+          customerId: booking.customer._id || booking.customer,
+          vendorId: req.user.id,
+          booking,
+          reason: fullReason,
+          cancelledBy: 'vendor'
+        });
+      } catch (notifErr) {
+        console.warn('Notification error on cancel:', notifErr.message);
+      }
+
+      await booking.save();
+
+      return res.status(200).json({
+        success: true,
+        message: 'Booking cancelled successfully and customer notified.',
+        booking
+      });
+    }
+
+    // On The Way Workflow
+    if (status === 'on_the_way') {
+      if (['cancelled'].includes(booking.status)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Cannot depart for a cancelled booking.'
+        });
+      }
+      booking.status = 'on_the_way';
+      booking.statusHistory.push({
+        status: 'on_the_way',
+        updatedBy: req.user.id,
+        timestamp: new Date(),
+        note: note || 'Specialist has departed and is on the way to the service location.'
+      });
+
+      try {
+        await notifyStatusChange({
+          recipientId: booking.customer._id || booking.customer,
+          senderId: req.user.id,
+          booking,
+          jobTitle: booking.serviceTitle,
+          newStatus: 'on_the_way',
+          customMessage: `Your service professional is on the way to your location for "${booking.serviceTitle}".`
+        });
+      } catch (notifErr) {
+        console.warn('Notification error on on_the_way:', notifErr.message);
+      }
+
+      const io = getIO();
+      if (io) {
+        io.to('user_' + (booking.customer._id || booking.customer).toString()).emit('booking_status_updated', {
+          bookingId: booking._id,
+          status: 'on_the_way'
+        });
+        if (booking.job) {
+          io.to('job_' + (booking.job._id || booking.job).toString()).emit('job_status_updated', {
+            jobId: booking.job._id || booking.job,
+            status: 'on_the_way'
+          });
+        }
+      }
+
+      await booking.save();
+
+      return res.status(200).json({
+        success: true,
+        message: 'Customer notified that you are on the way to the location.',
+        booking
+      });
+    }
+
     if (status === 'in_progress') {
       const bWithOtp = await Booking.findById(req.params.id).select('+startOtp.codeHash');
       if (bWithOtp?.startOtp?.codeHash && !bWithOtp?.startOtp?.isConsumed) {
@@ -709,7 +865,6 @@ export const updateBookingStatus = async (req, res, next) => {
       } catch (notifErr) {
         console.warn('Notification error on completion_pending:', notifErr.message);
       }
-
     }
 
     if (status === 'completed') {
@@ -726,6 +881,7 @@ export const updateBookingStatus = async (req, res, next) => {
         existingTx.type = 'escrow_release';
         existingTx.paymentStatus = 'paid_to_bank';
         existingTx.settlementStatus = 'settled';
+        if (!existingTx.payoutBank) existingTx.payoutBank = {};
         existingTx.payoutBank.settledDate = new Date();
         await existingTx.save();
       } else {

@@ -25,6 +25,7 @@ import { useAuth } from '../hooks/useAuth';
 import { useSocketContext } from '../context/SocketContext';
 import { useNotifications } from '../context/NotificationContext';
 import Navbar from '../components/common/Navbar';
+import MobileNavigation from '../components/common/MobileNavigation';
 import chatAPI from '../api/chat.api';
 
 export default function CustomerLayout() {
@@ -321,12 +322,14 @@ export default function CustomerLayout() {
           </aside>
 
           {/* Main Content Area: Independently Scrolling on the Right */}
-          <main className="customer-main flex-1 min-w-0 h-full overflow-y-auto py-6 sm:py-8 pr-1 lg:pr-2 customer-main-scroll">
+          <main className="customer-main flex-1 min-w-0 h-full overflow-y-auto py-6 sm:py-8 pr-1 lg:pr-2 pb-20 lg:pb-8 customer-main-scroll">
             <Outlet />
           </main>
         </div>
       </div>
 
+      {/* Persistent Mobile Bottom Navigation */}
+      <MobileNavigation />
     </div>
   );
 }

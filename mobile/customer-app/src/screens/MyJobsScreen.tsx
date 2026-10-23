@@ -23,18 +23,30 @@ export default function MyJobsScreen({ navigation }: any) {
   const [activeTab, setActiveTab] = useState<'all' | 'active' | 'completed' | 'cancelled'>('active');
 
   useEffect(() => {
+    if (!user) {
+      setLoading(false);
+      setBookings([]);
+      return;
+    }
     loadBookings();
   }, [user, activeTab]);
 
   const loadBookings = async () => {
+    if (!user) {
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
     try {
       setLoading(true);
       const res = await api.bookings.getMyBookings();
       if (res?.bookings) {
         setBookings(res.bookings);
       }
-    } catch (err) {
-      console.warn('Failed to load bookings:', err);
+    } catch (err: any) {
+      if (!err?.message?.includes('token missing') && !err?.message?.includes('Not authorized')) {
+        console.warn('Failed to load bookings:', err);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -72,17 +84,35 @@ export default function MyJobsScreen({ navigation }: any) {
   const filteredBookings = bookings.filter((b) => {
     if (activeTab === 'all') return true;
     if (activeTab === 'active') {
-      return ['confirmed', 'on_the_way', 'arrived', 'in_progress', 'payment_pending', 'pending'].includes(b.status);
+      return [
+        'open',
+        'quotations_received',
+        'pending_acceptance',
+        'awaiting_confirmation',
+        'assigned',
+        'confirmed',
+        'scheduled',
+        'on_the_way',
+        'arrived',
+        'in_progress',
+        'completion_pending',
+        'payment_pending',
+        'pending'
+      ].includes(b.status);
     }
     if (activeTab === 'completed') return b.status === 'completed';
-    if (activeTab === 'cancelled') return ['cancelled', 'disputed'].includes(b.status);
+    if (activeTab === 'cancelled') return ['cancelled', 'declined', 'disputed'].includes(b.status);
     return true;
   });
 
-  const renderBookingCard = ({ item }: { item: Booking }) => {
-    const isEmergency = item.jobId?.isEmergency || item.serviceTitle?.toLowerCase().includes('emergency');
+  const renderBookingCard = ({ item }: { item: any }) => {
+    const isEmergency = item.jobId?.isEmergency || item.urgency === 'emergency' || item.serviceTitle?.toLowerCase().includes('emergency');
     const isCompleted = item.status === 'completed';
-    const canCancel = ['pending', 'confirmed'].includes(item.status);
+    const canCancel = ['pending', 'pending_acceptance', 'open', 'confirmed', 'scheduled'].includes(item.status);
+    const amount = item.pricing?.amount ?? item.totalAmount ?? item.amount ?? 0;
+    const title = item.serviceTitle || item.title || 'Home Service';
+    const refCode = item.bookingReference || (item._id ? `#${item._id.slice(-6).toUpperCase()}` : '');
+    const vendorName = item.vendor?.businessName || item.vendor?.name || item.vendorName;
 
     return (
       <View style={styles.card}>
@@ -94,7 +124,12 @@ export default function MyJobsScreen({ navigation }: any) {
                 <Text style={styles.emergencyPillText}>EMERGENCY ⚡</Text>
               </View>
             )}
-            <Text style={styles.bookingId}>#{item._id.slice(-6).toUpperCase()}</Text>
+            {item.isJobRequest && (
+              <View style={[styles.emergencyPill, { backgroundColor: '#E0E7FF' }]}>
+                <Text style={[styles.emergencyPillText, { color: '#3730A3' }]}>POSTED JOB</Text>
+              </View>
+            )}
+            <Text style={styles.bookingId}>{refCode}</Text>
           </View>
           <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.status) + '15' }]}>
             <Text style={[styles.statusBadgeText, { color: getStatusColor(item.status) }]}>
@@ -104,10 +139,21 @@ export default function MyJobsScreen({ navigation }: any) {
         </View>
 
         {/* Title */}
-        <Text style={styles.serviceTitle}>{item.serviceTitle}</Text>
+        <Text style={styles.serviceTitle}>{title}</Text>
         <Text style={styles.serviceDate}>
-          📅 {formatDate(item.scheduledDate || item.createdAt)} • {item.scheduledTime || 'Immediate Arrival'}
+          📅 {formatDate(item.scheduledDate || item.date || item.createdAt)} • {item.timeSlot || item.scheduledTime || 'Flexible'}
         </Text>
+
+        {/* Vendor or Applicant info */}
+        {vendorName ? (
+          <Text style={{ fontSize: 13, color: '#475569', marginTop: 4, fontWeight: '600' }}>
+            Specialist: {vendorName}
+          </Text>
+        ) : item.isJobRequest && (item.applicantsCount || 0) > 0 ? (
+          <Text style={{ fontSize: 13, color: '#059669', marginTop: 4, fontWeight: '700' }}>
+            💬 {item.applicantsCount} Professional Quotes Received
+          </Text>
+        ) : null}
 
         {/* Arrival OTP Display for Customer */}
         {item.arrivalOtp && !item.isOtpVerified && (
@@ -125,7 +171,9 @@ export default function MyJobsScreen({ navigation }: any) {
 
         {/* Amount & Actions */}
         <View style={styles.cardFooter}>
-          <Text style={styles.amountText}>{formatCurrency(item.totalAmount)}</Text>
+          <Text style={styles.amountText}>
+            {amount > 0 ? formatCurrency(amount) : 'Quote Based'}
+          </Text>
           <View style={styles.actionRow}>
             {canCancel && (
               <TouchableOpacity style={styles.cancelBtn} onPress={() => handleCancel(item._id)}>
@@ -173,7 +221,21 @@ export default function MyJobsScreen({ navigation }: any) {
       </View>
 
       {/* Bookings List */}
-      {loading ? (
+      {!user ? (
+        <View style={styles.emptyContainer}>
+          <Text style={styles.emptyEmoji}>🔒</Text>
+          <Text style={styles.emptyTitle}>Sign in to view your orders</Text>
+          <Text style={styles.emptySubtitle}>
+            Log in to manage bookings, view 6-digit arrival security PINs, and track active services in real time.
+          </Text>
+          <TouchableOpacity
+            style={styles.bookNowBtn}
+            onPress={() => navigation.navigate('Login')}
+          >
+            <Text style={styles.bookNowBtnText}>Log In to WorkLogy</Text>
+          </TouchableOpacity>
+        </View>
+      ) : loading ? (
         <View style={styles.centerContainer}>
           <ActivityIndicator size="large" color={COLORS.primary} />
           <Text style={styles.loadingText}>Fetching orders...</Text>
@@ -197,7 +259,7 @@ export default function MyJobsScreen({ navigation }: any) {
       ) : (
         <FlatList
           data={filteredBookings}
-          keyExtractor={(item) => item._id}
+          keyExtractor={(item: Booking) => item._id}
           renderItem={renderBookingCard}
           contentContainerStyle={styles.listContent}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}
@@ -256,6 +318,7 @@ const styles = StyleSheet.create({
   },
   listContent: {
     padding: 16,
+    paddingBottom: 100,
     gap: 12
   },
   card: {

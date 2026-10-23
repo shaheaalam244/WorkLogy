@@ -9,20 +9,30 @@ import { getServiceImage } from '../../constants/serviceImages';
 
 export default function VendorCard({ vendor, onBookDirect }) {
   const { user } = useAuth();
+  const isVendor = user?.role === 'vendor';
   const experienceYears = vendor.experienceYears || vendor.yearsOfExperience || 1;
   const completedJobs = vendor.completedJobsCount || 0;
   const city = vendor.city || vendor.serviceArea?.city || (vendor.serviceAreas?.[0]?.city) || 'Lucknow';
+  const isAvailable = vendor.isAvailable !== false;
 
   return (
-    <div className="bg-white border border-slate-200 hover:border-slate-300 rounded-2xl p-5 shadow-sm hover:shadow-md transition-all duration-200 flex flex-col justify-between group">
+    <div className="bg-white border border-slate-200 hover:border-[#06684F] rounded-2xl p-5 shadow-sm hover:shadow-md transition-all duration-200 flex flex-col justify-between group">
       <div>
         <div className="flex items-start justify-between gap-3 mb-4">
           <div className="flex items-center gap-3 min-w-0 flex-1">
-            <img
-              src={vendor.user?.avatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=200&q=80'}
-              alt={vendor.businessName}
-              className="w-14 h-14 rounded-xl object-cover shrink-0 border border-slate-200 group-hover:border-emerald-600 transition shadow-2xs"
-            />
+            <div className="relative shrink-0">
+              <img
+                src={vendor.user?.avatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=200&q=80'}
+                alt={vendor.businessName}
+                className="w-14 h-14 rounded-xl object-cover border border-slate-200 group-hover:border-emerald-600 transition shadow-2xs"
+              />
+              {isAvailable && (
+                <span
+                  title="Available for bookings"
+                  className="absolute -bottom-1 -right-1 w-3.5 h-3.5 bg-emerald-500 border-2 border-white rounded-full"
+                />
+              )}
+            </div>
             <div className="min-w-0 flex-1">
               <h3 className="font-bold text-slate-900 text-base leading-snug group-hover:text-emerald-800 transition-colors truncate">
                 {vendor.businessName}
@@ -106,9 +116,9 @@ export default function VendorCard({ vendor, onBookDirect }) {
               Book Now
             </Button>
           ) : (
-            <Link to={`/customer/explore?vendorId=${vendor._id}`}>
-              <Button variant="primary" size="sm">
-                Book Now
+            <Link to={`/customer/book?vendorId=${vendor._id}`}>
+              <Button variant="primary" size="sm" className="bg-[#06684F] hover:bg-[#055742] text-white">
+                Book Service
               </Button>
             </Link>
           )

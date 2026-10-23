@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -9,16 +9,27 @@ import {
   Linking,
   ActivityIndicator,
   TextInput,
-  Modal
+  Modal,
+  Image,
+  Dimensions
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { api } from '../api/client';
 import { COLORS } from '../theme/colors';
-import { formatCurrency, getStatusColor, formatStatusText } from '../utils/formatters';
-import type { Booking } from '../types';
+import { formatCurrency, getStatusColor, formatStatusText, formatDate } from '../utils/formatters';
+import { getServiceImage } from '../utils/serviceImages';
+import type { Booking, Job } from '../types';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 export default function VendorJobDetailScreen({ route, navigation }: any) {
-  const initialBooking: Booking = route.params?.booking;
-  const [booking, setBooking] = useState<Booking>(initialBooking);
+  const initialBooking: Booking | undefined = route.params?.booking;
+  const bookingId: string | undefined = route.params?.bookingId;
+  const jobId: string | undefined = route.params?.jobId;
+
+  const [booking, setBooking] = useState<Booking | null>(initialBooking || null);
+  const [job, setJob] = useState<Job | null>(null);
+  const [loading, setLoading] = useState(!initialBooking);
 
   // OTP modal
   const [otpModal, setOtpModal] = useState({
@@ -34,25 +45,41 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
     submitting: false
   });
 
-  if (!booking) {
-    return (
-      <View style={styles.center}>
-        <Text style={styles.errorText}>No booking details provided.</Text>
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-          <Text style={styles.backBtnText}>Go Back</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
+  useEffect(() => {
+    loadDossier();
+  }, [bookingId, jobId]);
+
+  const loadDossier = async () => {
+    try {
+      if (bookingId) {
+        setLoading(true);
+        const res = await api.bookings.getById(bookingId);
+        if (res?.booking) {
+          setBooking(res.booking);
+        }
+      } else if (jobId) {
+        setLoading(true);
+        const res = await api.jobs.getJobDetails(jobId);
+        if (res?.job) {
+          setJob(res.job);
+        }
+      }
+    } catch (err: any) {
+      console.warn('Failed to load dossier:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleUpdateStatus = async (nextStatus: string) => {
+    if (!booking) return;
     try {
       const res = await api.bookings.updateStatus(booking._id, nextStatus);
       Alert.alert('Status Updated', `Job marked as ${nextStatus.replace(/_/g, ' ')}.`);
       if (res?.booking) {
         setBooking(res.booking);
       } else {
-        setBooking((prev) => ({ ...prev, status: nextStatus as any }));
+        setBooking((prev: any) => ({ ...prev, status: nextStatus }));
       }
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to update job status.');
@@ -60,6 +87,7 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
   };
 
   const handleVerifyOtp = async () => {
+    if (!booking) return;
     if (!otpModal.code || otpModal.code.trim().length !== 6) {
       Alert.alert('Invalid OTP', 'Please enter the 6-digit Arrival OTP from customer.');
       return;
@@ -73,7 +101,7 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
       if (res?.booking) {
         setBooking(res.booking);
       } else {
-        setBooking((prev) => ({ ...prev, status: 'in_progress', isOtpVerified: true }));
+        setBooking((prev: any) => ({ ...prev, status: 'in_progress', isOtpVerified: true }));
       }
     } catch (err: any) {
       Alert.alert('Verification Failed', err.message || 'Invalid Arrival OTP.');
@@ -82,6 +110,7 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
   };
 
   const handleSignoff = async () => {
+    if (!booking) return;
     try {
       setCompleteModal((prev) => ({ ...prev, submitting: true }));
       const res = await api.bookings.completeSignoff(booking._id, {
@@ -92,7 +121,7 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
       if (res?.booking) {
         setBooking(res.booking);
       } else {
-        setBooking((prev) => ({ ...prev, status: 'completed' }));
+        setBooking((prev: any) => ({ ...prev, status: 'completed' }));
       }
     } catch (err: any) {
       Alert.alert('Sign-off Error', err.message || 'Failed to complete signoff.');
@@ -100,73 +129,109 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
     }
   };
 
-  const customerName = booking.customer?.name || 'Customer';
-  const customerPhone = booking.customer?.phone || '';
-  const fullAddress = `${booking.address?.houseNumber ? booking.address.houseNumber + ', ' : ''}${booking.address?.street || ''}, ${booking.address?.city || ''} ${booking.address?.pincode ? '- ' + booking.address.pincode : ''}`;
+  if (loading) {
+    return (
+      <View style={styles.centerLoading}>
+        <ActivityIndicator size="large" color={COLORS.primary} />
+        <Text style={styles.loadingText}>Loading Job Dossier...</Text>
+      </View>
+    );
+  }
 
-  const isEmergency = booking.jobId?.isEmergency || booking.serviceTitle?.toLowerCase().includes('emergency');
-  const isOtpNeeded = ['confirmed', 'on_the_way', 'arrived'].includes(booking.status) && !booking.isOtpVerified;
+  // Fallback if neither booking nor job was found
+  if (!booking && !job) {
+    return (
+      <View style={styles.centerLoading}>
+        <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
+        <Text style={styles.errorTitle}>Job Dossier Not Found</Text>
+        <Text style={styles.errorSubtitle}>Could not load details for the requested reference.</Text>
+        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
+          <Text style={styles.backBtnText}>Return to Jobs</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
-  const grossAmount = booking.totalAmount || 0;
+  // Normalization for Booking vs Open Job
+  const isBooking = !!booking;
+  const title = isBooking ? booking.serviceTitle : job?.title;
+  const status = isBooking ? booking.status : (job?.urgency === 'emergency' ? 'emergency' : 'open');
+  const catSlug = isBooking ? (booking.jobId?.category as any)?.slug || booking.serviceTitle : (job?.category as any)?.slug || job?.title;
+  const heroImage = getServiceImage(catSlug || title);
+
+  const customerName = isBooking ? (booking.customer?.name || 'Customer') : (job?.customer?.name || 'Verified Homeowner');
+  const customerPhone = isBooking ? (booking.customer?.phone || '') : (job?.contactPhone || job?.customer?.phone || '');
+  const locality = isBooking
+    ? `${booking.address?.houseNumber ? booking.address.houseNumber + ', ' : ''}${booking.address?.street || ''}, ${booking.address?.city || ''}`
+    : `${job?.location?.locality ? job.location.locality + ', ' : ''}${job?.location?.city || job?.address?.city || 'Lucknow'}`;
+
+  const isEmergency = isBooking ? (booking.jobId?.isEmergency || booking.serviceTitle?.toLowerCase().includes('emergency')) : (job?.urgency === 'emergency');
+  const isOtpNeeded = isBooking && ['confirmed', 'on_the_way', 'arrived'].includes(booking.status) && !booking.isOtpVerified;
+
+  const grossAmount = isBooking ? (booking.totalAmount || 0) : (job?.budget?.amount || job?.pricing?.amount || 0);
   const platformFee = Math.round(grossAmount * 0.1);
   const netTakeHome = grossAmount - platformFee;
 
   return (
-    <ScrollView style={styles.container}>
-      {/* Header Bar */}
-      <View style={styles.header}>
-        <View style={styles.headerTop}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerBackBtn}>
-            <Text style={styles.headerBackText}>‹ Back</Text>
-          </TouchableOpacity>
-          <View style={[styles.statusBadge, { backgroundColor: getStatusColor(booking.status) + '15' }]}>
-            <Text style={[styles.statusBadgeText, { color: getStatusColor(booking.status) }]}>
-              {formatStatusText(booking.status)}
+    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+      {/* ── 1. SERVICE HERO BANNER (MATCHING SCREENSHOTS) ── */}
+      <View style={styles.heroContainer}>
+        <Image source={heroImage} style={styles.heroImage} resizeMode="cover" />
+        <TouchableOpacity style={styles.heroBackBtn} onPress={() => navigation.goBack()}>
+          <Ionicons name="arrow-back" size={20} color="#FFFFFF" />
+        </TouchableOpacity>
+        <View style={styles.statusPill}>
+          <Text style={styles.statusPillText}>{status.replace(/_/g, ' ').toUpperCase()}</Text>
+        </View>
+      </View>
+
+      {/* ── 2. HEADER DETAILS CARD ── */}
+      <View style={styles.card}>
+        <Text style={styles.categoryBadge}>{(catSlug || 'Home Service').toUpperCase()}</Text>
+        <Text style={styles.title}>{title}</Text>
+        <Text style={styles.localityText}>📍 {locality}</Text>
+
+        {isEmergency && (
+          <View style={styles.emergencyNotice}>
+            <Ionicons name="flash" size={16} color="#DC2626" />
+            <View style={{ flex: 1, marginLeft: 8 }}>
+              <Text style={styles.emergencyNoticeTitle}>24/7 EMERGENCY CALL</Text>
+              <Text style={styles.emergencyNoticeSub}>Immediate response requested. Standard arrival within 30-45 minutes.</Text>
+            </View>
+          </View>
+        )}
+      </View>
+
+      {/* ── 3. CUSTOMER DOSSIER & CONTACT ── */}
+      <View style={styles.card}>
+        <Text style={styles.cardHeading}>Customer Information</Text>
+        <View style={styles.customerRow}>
+          <View style={styles.customerAvatar}>
+            <Text style={styles.customerAvatarText}>{customerName.charAt(0).toUpperCase()}</Text>
+          </View>
+          <View style={{ flex: 1, marginLeft: 12 }}>
+            <Text style={styles.customerName}>{customerName}</Text>
+            <Text style={styles.customerPhone}>
+              {customerPhone ? `📞 ${customerPhone}` : 'Verified Customer (Phone unmasked upon booking)'}
             </Text>
           </View>
         </View>
 
-        <Text style={styles.title}>{booking.serviceTitle}</Text>
-        <Text style={styles.bookingId}>Order #{booking._id.slice(-8).toUpperCase()}</Text>
-      </View>
-
-      {/* Emergency Notice */}
-      {isEmergency && (
-        <View style={styles.emergencyBox}>
-          <Text style={styles.emergencyIcon}>⚡</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.emergencyTitle}>EMERGENCY DISPATCH TENDER</Text>
-            <Text style={styles.emergencyDesc}>Immediate response requested. Standard arrival within 30-45 minutes.</Text>
-          </View>
-        </View>
-      )}
-
-      {/* Client Dossier */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Customer & Contact</Text>
-        <View style={styles.card}>
-          <View style={styles.customerRow}>
-            <View style={styles.customerAvatar}>
-              <Text style={styles.customerAvatarText}>{customerName.charAt(0).toUpperCase()}</Text>
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.customerName}>{customerName}</Text>
-              <Text style={styles.customerPhone}>📞 {customerPhone || 'WorkLogy Verified Client'}</Text>
-            </View>
-          </View>
-
-          <View style={styles.actionBtnRow}>
+        {isBooking && (
+          <View style={styles.contactRow}>
             {customerPhone ? (
               <TouchableOpacity
-                style={styles.contactBtn}
+                style={styles.callBtn}
                 onPress={() => Linking.openURL(`tel:${customerPhone}`)}
+                activeOpacity={0.8}
               >
-                <Text style={styles.contactBtnText}>Call Customer 📞</Text>
+                <Ionicons name="call" size={15} color="#FFFFFF" />
+                <Text style={styles.callBtnText}>Call Customer</Text>
               </TouchableOpacity>
             ) : null}
 
             <TouchableOpacity
-              style={[styles.contactBtn, { backgroundColor: '#3B82F6' }]}
+              style={styles.chatBtn}
               onPress={() =>
                 navigation.navigate('ChatDetail', {
                   bookingId: booking._id,
@@ -174,197 +239,254 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
                   title: booking.serviceTitle
                 })
               }
+              activeOpacity={0.8}
             >
-              <Text style={styles.contactBtnText}>Open Chat 💬</Text>
+              <Ionicons name="chatbubble-ellipses" size={15} color="#152B3C" />
+              <Text style={styles.chatBtnText}>Open Chat</Text>
             </TouchableOpacity>
           </View>
+        )}
 
-          {/* Full Unmasked Address */}
-          <View style={styles.addressBox}>
-            <Text style={styles.addressLabel}>Service Delivery Address:</Text>
-            <Text style={styles.addressText}>{fullAddress || 'Address on file'}</Text>
-            <TouchableOpacity
-              style={styles.mapsBtn}
-              onPress={() => {
-                const q = encodeURIComponent(`${booking.address?.houseNumber || ''} ${booking.address?.street || ''}, ${booking.address?.city || ''}`);
-                Linking.openURL(`https://maps.google.com/?q=${q}`);
-              }}
-            >
-              <Text style={styles.mapsBtnText}>Navigate via Google Maps 🗺️</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+        {isBooking && (
+          <TouchableOpacity
+            style={styles.mapsBtn}
+            onPress={() => {
+              const q = encodeURIComponent(`${booking.address?.houseNumber || ''} ${booking.address?.street || ''}, ${booking.address?.city || ''}`);
+              Linking.openURL(`https://maps.google.com/?q=${q}`);
+            }}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="navigate" size={15} color="#2563EB" />
+            <Text style={styles.mapsBtnText}>Navigate via Google Maps</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
-      {/* Arrival OTP Section */}
+      {/* ── 4. PHYSICAL ARRIVAL OTP VERIFICATION ── */}
       {isOtpNeeded && (
-        <View style={styles.section}>
-          <View style={styles.otpCard}>
-            <Text style={styles.otpTitle}>🔐 Physical Arrival Verification</Text>
-            <Text style={styles.otpDesc}>
-              Before you begin technical repairs, ask the client for the 6-digit Arrival OTP shown on their screen.
-            </Text>
+        <View style={[styles.card, styles.otpCard]}>
+          <View style={styles.otpHeader}>
+            <Ionicons name="key" size={20} color="#D97706" />
+            <Text style={styles.otpTitle}>Service Arrival Verification</Text>
+          </View>
+          <Text style={styles.otpDesc}>
+            Ask the homeowner for their 6-digit Arrival OTP to verify physical presence and unlock the "In Progress" work state.
+          </Text>
+          <TouchableOpacity
+            style={styles.otpActionBtn}
+            onPress={() => setOtpModal({ open: true, code: '', submitting: false })}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.otpActionBtnText}>Enter 6-Digit Arrival OTP</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* ── 5. FINANCIAL & ESCROW SUMMARY ── */}
+      <View style={styles.card}>
+        <Text style={styles.cardHeading}>Financial Breakdown (₹ INR)</Text>
+        <View style={styles.feeRow}>
+          <Text style={styles.feeLabel}>Gross Job Quotation</Text>
+          <Text style={styles.feeVal}>{formatCurrency(grossAmount)}</Text>
+        </View>
+        <View style={styles.feeRow}>
+          <Text style={styles.feeLabel}>WorkLogy Platform Fee (10%)</Text>
+          <Text style={[styles.feeVal, { color: '#DC2626' }]}>-{formatCurrency(platformFee)}</Text>
+        </View>
+        <View style={styles.divider} />
+        <View style={styles.feeRow}>
+          <Text style={styles.netLabel}>Net Contractor Payout</Text>
+          <Text style={styles.netVal}>{formatCurrency(netTakeHome)}</Text>
+        </View>
+        <Text style={styles.escrowNotice}>
+          🔒 Escrow Protected: Funds are released automatically to your verified bank account upon customer sign-off.
+        </Text>
+      </View>
+
+      {/* ── 6. WORKFLOW STATUS CONTROLS ── */}
+      {isBooking && (
+        <View style={styles.card}>
+          <Text style={styles.cardHeading}>Workflow Controls</Text>
+
+          {booking.status === 'confirmed' && (
             <TouchableOpacity
-              style={styles.otpBtn}
-              onPress={() => setOtpModal({ open: true, code: '', submitting: false })}
+              style={[styles.workflowBtn, { backgroundColor: '#2563EB' }]}
+              onPress={() => handleUpdateStatus('on_the_way')}
+              activeOpacity={0.85}
             >
-              <Text style={styles.otpBtnText}>Enter Arrival OTP 🔑</Text>
+              <Ionicons name="car" size={16} color="#FFFFFF" />
+              <Text style={styles.workflowBtnText}>Mark as "On The Way"</Text>
+            </TouchableOpacity>
+          )}
+
+          {booking.status === 'on_the_way' && (
+            <TouchableOpacity
+              style={[styles.workflowBtn, { backgroundColor: '#7C3AED' }]}
+              onPress={() => handleUpdateStatus('arrived')}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="location" size={16} color="#FFFFFF" />
+              <Text style={styles.workflowBtnText}>Mark as "Arrived at Customer Site"</Text>
+            </TouchableOpacity>
+          )}
+
+          {booking.status === 'in_progress' && (
+            <TouchableOpacity
+              style={[styles.workflowBtn, { backgroundColor: '#059669' }]}
+              onPress={() => setCompleteModal({ open: true, notes: '', submitting: false })}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="checkmark-done" size={16} color="#FFFFFF" />
+              <Text style={styles.workflowBtnText}>Complete Work & Request Customer Sign-off</Text>
+            </TouchableOpacity>
+          )}
+
+          {booking.status === 'completion_pending' && (
+            <View style={styles.waitingSignoff}>
+              <Ionicons name="time-outline" size={20} color="#D97706" />
+              <Text style={styles.waitingSignoffText}>
+                Work marked complete. Awaiting homeowner's sign-off and payment release.
+              </Text>
+            </View>
+          )}
+
+          {booking.status === 'completed' && (
+            <View style={styles.completedNotice}>
+              <Ionicons name="checkmark-circle" size={24} color="#059669" />
+              <Text style={styles.completedNoticeText}>
+                Job completed and verified! Earnings credited to your WorkLogy weekly payout ledger.
+              </Text>
+            </View>
+          )}
+        </View>
+      )}
+
+      {/* ── 6b. OPEN JOB ACTION CONTROLS (FOR TENDER CLAIMS / PROPOSALS) ── */}
+      {!isBooking && job && (
+        <View style={styles.card}>
+          <Text style={styles.cardHeading}>Available Actions</Text>
+          <View style={{ gap: 10 }}>
+            <TouchableOpacity
+              style={[styles.workflowBtn, { backgroundColor: '#059669' }]}
+              onPress={() => {
+                Alert.alert(
+                  isEmergency ? 'Claim Emergency Job ⚡' : 'Accept Assignment',
+                  `Are you ready to accept "${job.title}"?`,
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    {
+                      text: 'Accept Job',
+                      onPress: async () => {
+                        try {
+                          if (isEmergency) {
+                            await api.jobs.claimEmergencyLead(job._id);
+                          } else {
+                            await api.jobs.acceptJob(job._id);
+                          }
+                          Alert.alert('Job Confirmed! 🎉', 'You have accepted this assignment.');
+                          navigation.navigate('JobsTab', { initialTab: 'accepted' });
+                        } catch (err: any) {
+                          Alert.alert('Error', err.message || 'Could not claim job.');
+                        }
+                      }
+                    }
+                  ]
+                );
+              }}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="flash" size={16} color="#FFFFFF" />
+              <Text style={styles.workflowBtnText}>
+                {isEmergency ? 'Claim Emergency Lead ⚡' : 'Accept Job Assignment'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.workflowBtn, { backgroundColor: '#1E40AF' }]}
+              onPress={() => {
+                navigation.navigate('JobsTab', { initialTab: 'new' });
+              }}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="send" size={16} color="#FFFFFF" />
+              <Text style={styles.workflowBtnText}>Submit Quotation from Board</Text>
             </TouchableOpacity>
           </View>
         </View>
       )}
 
-      {/* Financial Details */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Payment & Earnings Breakdown</Text>
-        <View style={styles.card}>
-          <View style={styles.feeRow}>
-            <Text style={styles.feeLabel}>Gross Job Billing</Text>
-            <Text style={styles.feeValue}>{formatCurrency(grossAmount)}</Text>
-          </View>
-          <View style={styles.feeRow}>
-            <Text style={styles.feeLabel}>WorkLogy Service Fee (10%)</Text>
-            <Text style={[styles.feeValue, { color: '#DC2626' }]}>-{formatCurrency(platformFee)}</Text>
-          </View>
-          <View style={styles.divider} />
-          <View style={styles.feeRow}>
-            <Text style={styles.totalFeeLabel}>Net Contractor Take-Home</Text>
-            <Text style={styles.totalFeeValue}>{formatCurrency(netTakeHome)}</Text>
-          </View>
-          <View style={styles.escrowNotice}>
-            <Text style={styles.escrowText}>
-              🛡️ Payment status: {booking.pricing?.paymentStatus?.replace(/_/g, ' ') || 'Held in Escrow'}. Funds disburse to your verified bank account upon client signoff.
-            </Text>
-          </View>
-        </View>
-      </View>
-
-      {/* Status Controls */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Workflow Status Controls</Text>
-        {booking.status === 'confirmed' && (
-          <TouchableOpacity
-            style={[styles.statusActionBtn, { backgroundColor: '#2563EB' }]}
-            onPress={() => handleUpdateStatus('on_the_way')}
-          >
-            <Text style={styles.statusActionBtnText}>Start Journey (On The Way) 🚗</Text>
-          </TouchableOpacity>
-        )}
-
-        {booking.status === 'on_the_way' && (
-          <TouchableOpacity
-            style={[styles.statusActionBtn, { backgroundColor: '#D97706' }]}
-            onPress={() => handleUpdateStatus('arrived')}
-          >
-            <Text style={styles.statusActionBtnText}>Mark Arrived at Location 📍</Text>
-          </TouchableOpacity>
-        )}
-
-        {booking.status === 'in_progress' && (
-          <TouchableOpacity
-            style={[styles.statusActionBtn, { backgroundColor: COLORS.primary }]}
-            onPress={() => setCompleteModal({ open: true, notes: '', submitting: false })}
-          >
-            <Text style={styles.statusActionBtnText}>Complete Work & Sign Off ✅</Text>
-          </TouchableOpacity>
-        )}
-
-        {booking.status === 'completed' && (
-          <View style={styles.completedBadgeBox}>
-            <Text style={styles.completedBadgeText}>✓ Work Complete & Handover Verified</Text>
-          </View>
-        )}
-      </View>
-
       <View style={{ height: 40 }} />
 
-      {/* OTP Modal */}
-      <Modal visible={otpModal.open} transparent animationType="fade">
+      {/* ── ARRIVAL OTP MODAL ── */}
+      <Modal visible={otpModal.open} transparent animationType="slide">
         <View style={styles.modalOverlay}>
-          <View style={styles.modalBox}>
-            <Text style={styles.modalEmoji}>🔐</Text>
-            <Text style={styles.modalTitle}>Enter Arrival OTP</Text>
-            <Text style={styles.modalSubtitle}>
-              Ask the customer for the 6-digit OTP displayed on their WorkLogy app to unlock the job.
-            </Text>
-
-            <TextInput
-              style={styles.otpInput}
-              placeholder="e.g. 123456"
-              placeholderTextColor="#94A3B8"
-              keyboardType="number-pad"
-              maxLength={6}
-              value={otpModal.code}
-              onChangeText={(val) => setOtpModal((prev) => ({ ...prev, code: val }))}
-              autoFocus
-            />
-
-            <View style={styles.modalBtnRow}>
-              <TouchableOpacity
-                style={styles.modalCancelBtn}
-                onPress={() => setOtpModal({ open: false, code: '', submitting: false })}
-                disabled={otpModal.submitting}
-              >
-                <Text style={styles.modalCancelBtnText}>Cancel</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.modalSubmitBtn}
-                onPress={handleVerifyOtp}
-                disabled={otpModal.submitting}
-              >
-                {otpModal.submitting ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <Text style={styles.modalSubmitBtnText}>Verify OTP</Text>
-                )}
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Enter Arrival OTP</Text>
+              <TouchableOpacity onPress={() => setOtpModal({ ...otpModal, open: false })}>
+                <Ionicons name="close" size={24} color={COLORS.textDark} />
               </TouchableOpacity>
             </View>
+            <Text style={styles.modalSub}>
+              Please enter the 6-digit verification code provided by the customer at the site.
+            </Text>
+            <TextInput
+              style={styles.otpInput}
+              keyboardType="numeric"
+              maxLength={6}
+              value={otpModal.code}
+              onChangeText={(t) => setOtpModal({ ...otpModal, code: t })}
+              placeholder="0 0 0 0 0 0"
+              placeholderTextColor="#9CA3AF"
+            />
+            <TouchableOpacity
+              style={styles.submitOtpBtn}
+              onPress={handleVerifyOtp}
+              disabled={otpModal.submitting}
+            >
+              {otpModal.submitting ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={styles.submitOtpBtnText}>Verify OTP & Start Job</Text>
+              )}
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
-      {/* Sign-off Modal */}
+      {/* ── COMPLETION MODAL ── */}
       <Modal visible={completeModal.open} transparent animationType="slide">
         <View style={styles.modalOverlay}>
-          <View style={styles.modalBox}>
-            <Text style={styles.modalEmoji}>🛠️</Text>
-            <Text style={styles.modalTitle}>Complete Service Sign-Off</Text>
-            <Text style={styles.modalSubtitle}>
-              Document the repair actions taken to finalize this order for escrow payout.
-            </Text>
-
-            <TextInput
-              style={styles.textArea}
-              placeholder="Describe repairs completed, parts replaced..."
-              placeholderTextColor="#94A3B8"
-              multiline
-              numberOfLines={4}
-              value={completeModal.notes}
-              onChangeText={(val) => setCompleteModal((prev) => ({ ...prev, notes: val }))}
-            />
-
-            <View style={styles.modalBtnRow}>
-              <TouchableOpacity
-                style={styles.modalCancelBtn}
-                onPress={() => setCompleteModal({ open: false, notes: '', submitting: false })}
-                disabled={completeModal.submitting}
-              >
-                <Text style={styles.modalCancelBtnText}>Cancel</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.modalSubmitBtn, { backgroundColor: COLORS.primary }]}
-                onPress={handleSignoff}
-                disabled={completeModal.submitting}
-              >
-                {completeModal.submitting ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <Text style={styles.modalSubmitBtnText}>Sign Off & Submit</Text>
-                )}
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Service Sign-Off</Text>
+              <TouchableOpacity onPress={() => setCompleteModal({ ...completeModal, open: false })}>
+                <Ionicons name="close" size={24} color={COLORS.textDark} />
               </TouchableOpacity>
             </View>
+            <Text style={styles.modalSub}>
+              Describe the completed service and any components replaced for the customer's warranty record.
+            </Text>
+            <TextInput
+              style={[styles.otpInput, styles.completeTextInput]}
+              multiline
+              numberOfLines={3}
+              value={completeModal.notes}
+              onChangeText={(t) => setCompleteModal({ ...completeModal, notes: t })}
+              placeholder="Work summary, repairs made, warranty notes..."
+              placeholderTextColor="#9CA3AF"
+            />
+            <TouchableOpacity
+              style={styles.submitOtpBtn}
+              onPress={handleSignoff}
+              disabled={completeModal.submitting}
+            >
+              {completeModal.submitting ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={styles.submitOtpBtnText}>Submit Sign-Off & Close Work</Text>
+              )}
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -375,129 +497,111 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8FAFC'
+    backgroundColor: COLORS.background
   },
-  center: {
-    flex: 1,
+  heroContainer: {
+    width: '100%',
+    height: 180,
+    backgroundColor: '#0F172A',
+    position: 'relative'
+  },
+  heroImage: {
+    width: '100%',
+    height: '100%'
+  },
+  heroBackBtn: {
+    position: 'absolute',
+    top: 14,
+    left: 14,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(0,0,0,0.5)',
     alignItems: 'center',
-    justifyContent: 'center',
-    padding: 20
+    justifyContent: 'center'
   },
-  errorText: {
-    fontSize: 14,
-    color: COLORS.textSecondary
+  statusPill: {
+    position: 'absolute',
+    bottom: 12,
+    right: 14,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6
   },
-  backBtn: {
-    marginTop: 12,
-    backgroundColor: COLORS.primary,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8
-  },
-  backBtnText: {
-    color: '#FFFFFF',
-    fontWeight: '700'
-  },
-  header: {
-    backgroundColor: '#FFFFFF',
-    paddingTop: 16,
-    paddingHorizontal: 16,
-    paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border
-  },
-  headerTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8
-  },
-  headerBackBtn: {
-    paddingVertical: 4
-  },
-  headerBackText: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: COLORS.primary
-  },
-  statusBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8
-  },
-  statusBadgeText: {
-    fontSize: 10,
-    fontWeight: '800'
-  },
-  title: {
-    fontSize: 18,
-    fontWeight: '900',
-    color: COLORS.textDark
-  },
-  bookingId: {
+  statusPillText: {
     fontSize: 11,
-    color: COLORS.textMuted,
-    marginTop: 2
-  },
-  emergencyBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FEE2E2',
-    borderWidth: 1,
-    borderColor: '#F87171',
-    marginHorizontal: 16,
-    marginTop: 14,
-    borderRadius: 14,
-    padding: 12,
-    gap: 10
-  },
-  emergencyIcon: {
-    fontSize: 22
-  },
-  emergencyTitle: {
-    fontSize: 12,
-    fontWeight: '900',
-    color: '#991B1B'
-  },
-  emergencyDesc: {
-    fontSize: 10,
-    color: '#7F1D1D',
-    marginTop: 2
-  },
-  section: {
-    paddingHorizontal: 16,
-    marginTop: 16
-  },
-  sectionTitle: {
-    fontSize: 14,
     fontWeight: '800',
-    color: COLORS.textDark,
-    marginBottom: 8
+    color: '#FFFFFF'
   },
   card: {
     backgroundColor: '#FFFFFF',
+    marginHorizontal: 16,
+    marginTop: 12,
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
     borderColor: COLORS.border
   },
-  customerRow: {
+  categoryBadge: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: COLORS.primary,
+    letterSpacing: 0.5
+  },
+  title: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: COLORS.textDark,
+    marginTop: 2
+  },
+  localityText: {
+    fontSize: 12,
+    color: COLORS.textMuted,
+    marginTop: 4
+  },
+  emergencyNotice: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12
+    backgroundColor: '#FFF1F2',
+    borderColor: '#FECDD3',
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 12
+  },
+  emergencyNoticeTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#991B1B'
+  },
+  emergencyNoticeSub: {
+    fontSize: 11,
+    color: '#881337',
+    marginTop: 1
+  },
+  cardHeading: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: COLORS.textDark,
+    marginBottom: 10
+  },
+  customerRow: {
+    flexDirection: 'row',
+    alignItems: 'center'
   },
   customerAvatar: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: COLORS.primary,
+    backgroundColor: '#E0E7FF',
     alignItems: 'center',
     justifyContent: 'center'
   },
   customerAvatarText: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: 'bold'
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#3730A3'
   },
   customerName: {
     fontSize: 14,
@@ -506,230 +610,257 @@ const styles = StyleSheet.create({
   },
   customerPhone: {
     fontSize: 12,
-    color: COLORS.textSecondary,
+    color: COLORS.textMuted,
     marginTop: 2
   },
-  actionBtnRow: {
+  contactRow: {
     flexDirection: 'row',
     gap: 10,
-    marginTop: 14
+    marginTop: 12
   },
-  contactBtn: {
+  callBtn: {
     flex: 1,
-    backgroundColor: '#059669',
-    borderRadius: 10,
-    paddingVertical: 10,
-    alignItems: 'center'
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.primary,
+    paddingVertical: 9,
+    borderRadius: 8,
+    gap: 6
   },
-  contactBtnText: {
-    color: '#FFFFFF',
+  callBtnText: {
     fontSize: 12,
-    fontWeight: '800'
+    fontWeight: '800',
+    color: '#FFFFFF'
   },
-  addressBox: {
-    marginTop: 14,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#F1F5F9'
+  chatBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F3F4F6',
+    paddingVertical: 9,
+    borderRadius: 8,
+    gap: 6
   },
-  addressLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: COLORS.textMuted,
-    textTransform: 'uppercase'
-  },
-  addressText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: COLORS.textDark,
-    marginTop: 2
+  chatBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#152B3C'
   },
   mapsBtn: {
-    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: '#EFF6FF',
+    paddingVertical: 9,
     borderRadius: 8,
-    paddingVertical: 8,
-    alignItems: 'center'
+    marginTop: 10,
+    gap: 6
   },
   mapsBtnText: {
-    fontSize: 11,
-    fontWeight: '800',
+    fontSize: 12,
+    fontWeight: '700',
     color: '#2563EB'
   },
   otpCard: {
-    backgroundColor: '#FEF3C7',
-    borderWidth: 1.5,
-    borderColor: '#F59E0B',
-    borderRadius: 16,
-    padding: 16
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FDE68A'
+  },
+  otpHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 6
   },
   otpTitle: {
     fontSize: 14,
-    fontWeight: '900',
+    fontWeight: '800',
     color: '#92400E'
   },
   otpDesc: {
-    fontSize: 11,
-    color: '#B45309',
-    marginTop: 4,
-    lineHeight: 16,
-    marginBottom: 12
-  },
-  otpBtn: {
-    backgroundColor: '#D97706',
-    borderRadius: 10,
-    paddingVertical: 10,
-    alignItems: 'center'
-  },
-  otpBtnText: {
-    color: '#FFFFFF',
     fontSize: 12,
-    fontWeight: '800'
+    color: '#B45309',
+    lineHeight: 16
+  },
+  otpActionBtn: {
+    backgroundColor: '#D97706',
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginTop: 10
+  },
+  otpActionBtnText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#FFFFFF'
   },
   feeRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: 6
+    marginBottom: 6
   },
   feeLabel: {
     fontSize: 12,
-    color: COLORS.textSecondary
+    color: COLORS.textMuted
   },
-  feeValue: {
+  feeVal: {
     fontSize: 13,
     fontWeight: '700',
     color: COLORS.textDark
   },
   divider: {
     height: 1,
-    backgroundColor: '#F1F5F9',
+    backgroundColor: COLORS.borderLight,
     marginVertical: 8
   },
-  totalFeeLabel: {
+  netLabel: {
     fontSize: 13,
     fontWeight: '800',
     color: COLORS.textDark
   },
-  totalFeeValue: {
+  netVal: {
     fontSize: 15,
-    fontWeight: '900',
-    color: COLORS.primary
+    fontWeight: '800',
+    color: '#065F46'
   },
   escrowNotice: {
-    marginTop: 10,
-    backgroundColor: '#F8FAFC',
-    borderRadius: 8,
-    padding: 8
+    fontSize: 11,
+    color: COLORS.textMuted,
+    marginTop: 8,
+    lineHeight: 15
   },
-  escrowText: {
-    fontSize: 10,
-    color: COLORS.textSecondary,
-    lineHeight: 14
-  },
-  statusActionBtn: {
-    borderRadius: 12,
-    paddingVertical: 14,
+  workflowBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginVertical: 6
+    justifyContent: 'center',
+    paddingVertical: 11,
+    borderRadius: 8,
+    gap: 6
   },
-  statusActionBtnText: {
-    color: '#FFFFFF',
+  workflowBtnText: {
     fontSize: 13,
-    fontWeight: '800'
+    fontWeight: '800',
+    color: '#FFFFFF'
   },
-  completedBadgeBox: {
-    backgroundColor: '#ECFDF5',
-    borderRadius: 12,
-    paddingVertical: 12,
-    alignItems: 'center'
+  waitingSignoff: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF3C7',
+    padding: 10,
+    borderRadius: 8,
+    gap: 8
   },
-  completedBadgeText: {
-    color: '#065F46',
+  waitingSignoffText: {
     fontSize: 12,
-    fontWeight: '800'
+    fontWeight: '700',
+    color: '#92400E',
+    flex: 1
+  },
+  completedNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ECFDF5',
+    padding: 12,
+    borderRadius: 8,
+    gap: 8
+  },
+  completedNoticeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#065F46',
+    flex: 1
+  },
+  centerLoading: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 32
+  },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 13,
+    color: COLORS.textMuted
+  },
+  errorTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: COLORS.textDark,
+    marginTop: 10
+  },
+  errorSubtitle: {
+    fontSize: 12,
+    color: COLORS.textMuted,
+    marginTop: 4
+  },
+  backBtn: {
+    marginTop: 14,
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8
+  },
+  backBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#FFFFFF'
   },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20
+    justifyContent: 'flex-end'
   },
-  modalBox: {
-    width: '100%',
+  modalCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    padding: 22,
-    alignItems: 'center'
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 18
   },
-  modalEmoji: {
-    fontSize: 36,
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: 8
   },
   modalTitle: {
-    fontSize: 18,
-    fontWeight: '900',
+    fontSize: 17,
+    fontWeight: '800',
     color: COLORS.textDark
   },
-  modalSubtitle: {
+  modalSub: {
     fontSize: 12,
-    color: COLORS.textSecondary,
-    textAlign: 'center',
-    marginTop: 4,
-    marginBottom: 16,
-    lineHeight: 18
+    color: COLORS.textMuted,
+    lineHeight: 17,
+    marginBottom: 12
   },
   otpInput: {
-    width: '80%',
-    height: 52,
-    borderWidth: 2,
-    borderColor: '#D97706',
-    borderRadius: 14,
-    fontSize: 24,
-    fontWeight: '900',
-    textAlign: 'center',
-    letterSpacing: 8,
-    color: COLORS.textDark,
-    backgroundColor: '#FFFBEB',
-    marginBottom: 20
-  },
-  textArea: {
-    width: '100%',
+    backgroundColor: '#F8FAFC',
     borderWidth: 1,
     borderColor: COLORS.border,
-    borderRadius: 12,
-    padding: 12,
-    fontSize: 13,
-    color: COLORS.textDark,
-    textAlignVertical: 'top',
-    height: 90,
-    marginBottom: 20
-  },
-  modalBtnRow: {
-    flexDirection: 'row',
-    gap: 12,
-    width: '100%'
-  },
-  modalCancelBtn: {
-    flex: 1,
+    borderRadius: 8,
+    paddingHorizontal: 14,
     paddingVertical: 12,
-    borderRadius: 12,
-    backgroundColor: '#F1F5F9',
-    alignItems: 'center'
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: 4,
+    textAlign: 'center',
+    color: COLORS.textDark
   },
-  modalCancelBtnText: {
+  completeTextInput: {
     fontSize: 13,
-    fontWeight: '700',
-    color: COLORS.textSecondary
+    letterSpacing: 0,
+    textAlign: 'left',
+    height: 70,
+    textAlignVertical: 'top'
   },
-  modalSubmitBtn: {
-    flex: 1,
+  submitOtpBtn: {
+    backgroundColor: COLORS.primary,
     paddingVertical: 12,
-    borderRadius: 12,
-    backgroundColor: '#D97706',
-    alignItems: 'center'
+    borderRadius: 8,
+    alignItems: 'center',
+    marginTop: 14
   },
-  modalSubmitBtnText: {
+  submitOtpBtnText: {
     fontSize: 13,
     fontWeight: '800',
     color: '#FFFFFF'

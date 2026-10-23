@@ -1174,8 +1174,11 @@ export const getMyCustomerJobs = async (req, res, next) => {
     const jobs = await Job.find({ customer: req.user.id, isDeleted: { $ne: true } })
       .populate('category', 'name slug icon')
       .populate('selectedVendor', 'name avatar email phone')
-      .populate('booking')
-      .sort({ createdAt: -1 });
+      .populate('booking', '_id status bookingReference scheduledDate pricing')
+      .select('-notifiedVendors -declinedVendors -eventHistory -assignmentHistory')
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
 
     res.status(200).json({ success: true, jobs });
   } catch (error) {

@@ -9,11 +9,14 @@ import {
   Alert,
   Modal,
   TextInput,
+  Image,
   ActivityIndicator
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../hooks/useAuth';
 import { api } from '../api/client';
 import { COLORS } from '../theme/colors';
+import Header from '../components/Header';
 import type { VendorProfile } from '../types';
 
 export default function VendorProfileScreen({ navigation }: any) {
@@ -22,27 +25,46 @@ export default function VendorProfileScreen({ navigation }: any) {
   const [isAvailable, setIsAvailable] = useState(true);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
 
-  // Document Verification Request Modal State
-  const [verifyModal, setVerifyModal] = useState({
-    open: false,
-    idType: 'Aadhaar Card',
-    idNumber: '',
-    consent: true,
-    submitting: false
-  });
+  // Verification Modal State
+  const [verifyModalOpen, setVerifyModalOpen] = useState(false);
+  const [idType, setIdType] = useState('Aadhaar Card');
+  const [idNumber, setIdNumber] = useState('');
+  const [consent, setConsent] = useState(true);
+  const [submittingDocs, setSubmittingDocs] = useState(false);
+
+  // Edit Profile Modal State
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [businessName, setBusinessName] = useState('');
+  const [bio, setBio] = useState('');
+  const [serviceAreas, setServiceAreas] = useState('');
+  const [experienceYears, setExperienceYears] = useState('5');
+  const [savingProfile, setSavingProfile] = useState(false);
 
   useEffect(() => {
-    loadProfile();
+    loadProfileData();
   }, [user]);
 
-  const loadProfile = async () => {
+  const loadProfileData = async () => {
     try {
       setLoading(true);
-      const res = await api.vendors.getProfile();
-      if (res?.vendor) {
-        setProfile(res.vendor);
-        setIsAvailable(res.vendor.isAvailable ?? true);
+      const [profRes, notifRes] = await Promise.all([
+        api.vendors.getProfile().catch(() => null),
+        api.notifications.getUnreadCount().catch(() => ({ count: 0 }))
+      ]);
+
+      if (profRes?.vendor) {
+        setProfile(profRes.vendor);
+        const avail = profRes.vendor.availability?.isAvailableNow ?? profRes.vendor.isAvailable ?? true;
+        setIsAvailable(avail);
+        setBusinessName(profRes.vendor.businessName || '');
+        setBio(profRes.vendor.bio || '');
+        setServiceAreas(profRes.vendor.serviceAreas?.join(', ') || 'Gomti Nagar, Aliganj, Lucknow');
+        setExperienceYears(profRes.vendor.experienceYears?.toString() || '5');
+      }
+      if (notifRes?.count) {
+        setUnreadCount(notifRes.count);
       }
     } catch (err) {
       console.warn('Failed to load vendor profile:', err);
@@ -52,568 +74,724 @@ export default function VendorProfileScreen({ navigation }: any) {
   };
 
   const handleToggleAvailability = async (val: boolean) => {
+    if (updating) return;
+    const prev = isAvailable;
     try {
       setUpdating(true);
       setIsAvailable(val);
-      await api.vendors.toggleAvailability(val);
-      Alert.alert(
-        val ? 'Online for Dispatch' : 'Offline Mode',
-        val
-          ? 'You are now online and will receive emergency calls and live job tender notifications in your service territory.'
-          : 'You are now offline. You will not receive new tender broadcasts until you turn availability back on.'
-      );
+      const res = await api.vendors.toggleAvailability(val);
+      if (res?.success && res.availability) {
+        setIsAvailable(res.availability.isAvailableNow ?? val);
+      }
     } catch (err: any) {
-      setIsAvailable(!val);
-      Alert.alert('Error', err.message || 'Failed to update availability.');
+      setIsAvailable(prev);
+      Alert.alert(
+        'Availability Update Failed',
+        err.message || 'Could not update your availability status. Please try again.'
+      );
     } finally {
       setUpdating(false);
     }
   };
 
-  const handleSubmitVerificationDocs = async () => {
-    if (!verifyModal.idNumber.trim()) {
+  const handleSubmitVerification = async () => {
+    if (!idNumber.trim()) {
       Alert.alert('Document Number Required', 'Please enter your government document identification number.');
       return;
     }
 
     try {
-      setVerifyModal((prev) => ({ ...prev, submitting: true }));
+      setSubmittingDocs(true);
       await api.vendors.requestVerification({
-        idType: verifyModal.idType,
-        documentUrl: `https://worklogy.in/docs/${verifyModal.idNumber.trim()}`,
-        statutoryConsent: verifyModal.consent
+        idType,
+        documentUrl: `https://worklogy.in/docs/${idNumber.trim()}`,
+        statutoryConsent: consent
       });
 
       Alert.alert(
         'Documents Submitted 📄',
-        'Your verification documents have been received and are now awaiting review by the WorkLogy Compliance & Trust Team. Verification decisions are strictly admin-authorized.'
+        'Your identity documents have been submitted to the WorkLogy Compliance Team for administrative verification.'
       );
-      setVerifyModal({ open: false, idType: 'Aadhaar Card', idNumber: '', consent: true, submitting: false });
-      loadProfile();
+      setVerifyModalOpen(false);
+      loadProfileData();
     } catch (err: any) {
-      Alert.alert('Submission Error', err.message || 'Failed to submit verification request.');
-      setVerifyModal((prev) => ({ ...prev, submitting: false }));
+      Alert.alert('Submission Error', err.message || 'Could not submit verification.');
+    } finally {
+      setSubmittingDocs(false);
     }
   };
 
-  const handleSwitchToCustomer = async () => {
+  const handleSaveProfile = async () => {
     try {
-      await switchRole('customer');
-      Alert.alert('Switched to Customer Mode', 'You are now browsing WorkLogy as a service customer.');
+      setSavingProfile(true);
+      const areas = serviceAreas.split(',').map((s) => s.trim()).filter(Boolean);
+      await api.vendors.updateProfile({
+        businessName,
+        bio,
+        serviceAreas: areas,
+        experienceYears: parseInt(experienceYears, 10) || 5
+      });
+
+      Alert.alert('Success', 'Your professional profile has been updated.');
+      setEditModalOpen(false);
+      loadProfileData();
     } catch (err: any) {
-      Alert.alert('Switch Failed', err.message || 'Could not switch portal.');
+      Alert.alert('Update Failed', err.message || 'Could not update profile.');
+    } finally {
+      setSavingProfile(false);
     }
   };
 
   const handleLogout = () => {
-    Alert.alert('Log Out', 'Are you sure you want to log out of your WorkLogy Pro account?', [
+    Alert.alert('Confirm Logout', 'Are you sure you want to sign out of WorkLogy Pro?', [
       { text: 'Cancel', style: 'cancel' },
       {
-        text: 'Log Out',
+        text: 'Sign Out',
         style: 'destructive',
         onPress: async () => {
           await logout();
+          navigation.navigate('VendorLogin');
         }
       }
     ]);
   };
 
-  const isVerified = profile?.isVerified || profile?.verificationStatus === 'verified';
-  const isPending = profile?.verificationStatus === 'in_review' || profile?.verificationStatus === 'submitted';
+  // Verification status mapping
+  const getVerificationState = () => {
+    if (profile?.isVerified) return { label: 'Verified', bg: '#ECFDF5', color: '#047857', icon: 'shield-checkmark' };
+    if (profile?.verificationStatus === 'submitted' || profile?.verificationStatus === 'in_review') {
+      return { label: 'Under Review', bg: '#FEF3C7', color: '#B45309', icon: 'time' };
+    }
+    if (profile?.verificationStatus === 'rejected') {
+      return { label: 'Action Required', bg: '#FEE2E2', color: '#B91C1C', icon: 'alert-circle' };
+    }
+    return { label: 'Not Submitted', bg: '#F3F4F6', color: '#4B5563', icon: 'document-text-outline' };
+  };
+
+  const vState = getVerificationState();
 
   return (
-    <ScrollView style={styles.container}>
-      {/* 1. Header Profile Banner */}
-      <View style={styles.header}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>
-            {(profile?.businessName || user?.name || 'V').charAt(0).toUpperCase()}
-          </Text>
-        </View>
+    <View style={styles.container}>
+      <Header
+        unreadCount={unreadCount}
+        userName={profile?.businessName || user?.name || 'Pro'}
+        onPressNotifications={() => navigation.navigate('Notifications')}
+        onPressProfile={() => {}}
+      />
 
-        <Text style={styles.name}>{profile?.businessName || user?.name || 'WorkLogy Professional'}</Text>
-        <Text style={styles.email}>{user?.email}</Text>
-        <Text style={styles.phone}>📞 {user?.phone || 'Contact on file'}</Text>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* ── 1. VENDOR PROFILE CARD ── */}
+        <View style={styles.profileCard}>
+          <View style={styles.avatarRow}>
+            <View style={styles.avatarWrapper}>
+              <View style={styles.avatarCircle}>
+                <Text style={styles.avatarLetter}>
+                  {(profile?.businessName || user?.name || 'P').charAt(0).toUpperCase()}
+                </Text>
+              </View>
+              {profile?.isVerified && (
+                <View style={styles.verifiedPin}>
+                  <Ionicons name="checkmark" size={12} color="#FFFFFF" />
+                </View>
+              )}
+            </View>
 
-        {/* Verification Status Badge */}
-        <View style={styles.verificationBadgeContainer}>
-          {isVerified ? (
-            <View style={[styles.statusBadge, styles.badgeVerified]}>
-              <Text style={styles.statusBadgeVerifiedText}>✓ VERIFIED CONTRACTOR</Text>
+            <View style={styles.infoCol}>
+              <Text style={styles.businessName}>
+                {profile?.businessName || user?.name || 'Aalam Electrical Services'}
+              </Text>
+              <Text style={styles.tradeTitle}>
+                {profile?.categories?.length
+                  ? (profile.categories as any).map((c: any) => c.name || c).join(', ')
+                  : 'Multi-Skilled Contractor'}
+              </Text>
+              <View style={styles.ratingRow}>
+                <Ionicons name="star" size={14} color="#F59E0B" />
+                <Text style={styles.ratingText}>
+                  {profile?.rating ? profile.rating.toFixed(1) : '4.9'} ({profile?.reviewsCount || 42} reviews)
+                </Text>
+                <Text style={styles.bullet}>•</Text>
+                <Text style={styles.expText}>{profile?.experienceYears || 6} yrs exp</Text>
+              </View>
             </View>
-          ) : isPending ? (
-            <View style={[styles.statusBadge, styles.badgePending]}>
-              <Text style={styles.statusBadgePendingText}>⏳ VERIFICATION IN REVIEW</Text>
+          </View>
+
+          {/* Territory & Verification Status Bar */}
+          <View style={styles.territoryRow}>
+            <Ionicons name="location-outline" size={14} color={COLORS.textMuted} />
+            <Text style={styles.territoryText} numberOfLines={1}>
+              {profile?.serviceAreas?.join(', ') || 'Gomti Nagar, Aliganj, Lucknow'}
+            </Text>
+          </View>
+
+          <View style={styles.statusDivider} />
+
+          <View style={styles.cardFooter}>
+            <View style={[styles.verificationPill, { backgroundColor: vState.bg }]}>
+              <Ionicons name={vState.icon as any} size={13} color={vState.color} />
+              <Text style={[styles.verificationText, { color: vState.color }]}>
+                {vState.label}
+              </Text>
             </View>
-          ) : (
-            <TouchableOpacity
-              style={[styles.statusBadge, styles.badgeUnverified]}
-              onPress={() => setVerifyModal((prev) => ({ ...prev, open: true }))}
-            >
-              <Text style={styles.statusBadgeUnverifiedText}>⚠️ UNVERIFIED • UPLOAD KYC DOCS ↗</Text>
+
+            <TouchableOpacity style={styles.editBtn} onPress={() => setEditModalOpen(true)}>
+              <Ionicons name="pencil" size={12} color={COLORS.textDark} />
+              <Text style={styles.editBtnText}>Edit Profile</Text>
             </TouchableOpacity>
-          )}
-        </View>
-      </View>
-
-      {/* 2. Dispatch Availability Switch */}
-      <View style={styles.section}>
-        <View style={styles.availCard}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.availTitle}>Job Dispatch Availability</Text>
-            <Text style={styles.availDesc}>
-              {isAvailable
-                ? 'Online: Receiving emergency alerts & tenders in your service radius.'
-                : 'Offline: Tender radar paused. Not receiving new assignments.'}
-            </Text>
-          </View>
-          <Switch
-            value={isAvailable}
-            onValueChange={handleToggleAvailability}
-            disabled={updating}
-            trackColor={{ false: '#CBD5E1', true: '#BBF7D0' }}
-            thumbColor={isAvailable ? COLORS.primary : '#94A3B8'}
-          />
-        </View>
-      </View>
-
-      {/* 3. Trades & Territory Coverage */}
-      <View style={styles.section}>
-        <Text style={styles.sectionHeader}>Trades & Territory Coverage</Text>
-        <View style={styles.infoCard}>
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Primary Category</Text>
-            <Text style={styles.infoVal}>
-              {(profile?.categories as any)?.[0]?.name || 'Electrical & Technical Services'}
-            </Text>
-          </View>
-          <View style={styles.infoDivider} />
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Skills & Sub-Trades</Text>
-            <Text style={styles.infoVal}>
-              {profile?.servicesOffered?.join(', ') || 'Wiring, DB Board, Inverter, Earthing, MCB'}
-            </Text>
-          </View>
-          <View style={styles.infoDivider} />
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Operating Territory</Text>
-            <Text style={styles.infoVal}>
-              {profile?.serviceAreas?.join(', ') || 'Noida, Greater Noida, Delhi NCR'}
-            </Text>
           </View>
         </View>
-      </View>
 
-      {/* 4. Reputation & Ratings */}
-      <View style={styles.section}>
-        <Text style={styles.sectionHeader}>Reputation & Verification</Text>
-        <View style={styles.statsGrid}>
-          <View style={styles.statBox}>
-            <Text style={styles.statVal}>⭐ {profile?.rating ? profile.rating.toFixed(1) : '5.0'}</Text>
-            <Text style={styles.statLabel}>Client Rating</Text>
-          </View>
-          <View style={styles.statBox}>
-            <Text style={styles.statVal}>{profile?.reviewsCount || 14}</Text>
-            <Text style={styles.statLabel}>Verified Reviews</Text>
-          </View>
-          <View style={styles.statBox}>
-            <Text style={styles.statVal}>{profile?.completedJobsCount || 18}</Text>
-            <Text style={styles.statLabel}>Jobs Done</Text>
+        {/* ── 2. AVAILABILITY & DISPATCH TOGGLE ── */}
+        <View style={styles.sectionCard}>
+          <View style={styles.toggleRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.toggleTitle}>Availability for Service Dispatch</Text>
+              <Text style={styles.toggleSubtitle}>
+                {isAvailable
+                  ? 'ONLINE: Receiving job opportunities and emergency calls'
+                  : 'OFFLINE: Hidden from instant customer booking radars'}
+              </Text>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              {updating && <ActivityIndicator size="small" color={COLORS.primary} />}
+              <Switch
+                value={isAvailable}
+                onValueChange={handleToggleAvailability}
+                disabled={updating}
+                trackColor={{ false: '#CBD5E1', true: '#A7F3D0' }}
+                thumbColor={isAvailable ? COLORS.primary : '#94A3B8'}
+              />
+            </View>
           </View>
         </View>
-      </View>
 
-      {/* 5. Account Actions */}
-      <View style={styles.section}>
-        <Text style={styles.sectionHeader}>Account & Switch Portals</Text>
+        {/* ── 3. MENU ITEMS ── */}
+        <View style={styles.sectionCard}>
+          <Text style={styles.menuGroupHeading}>Service Management</Text>
 
-        <TouchableOpacity style={styles.menuRow} onPress={handleSwitchToCustomer}>
-          <Text style={styles.menuEmoji}>🔄</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.menuTitle}>Switch to Customer Portal</Text>
-            <Text style={styles.menuSubtitle}>Book home services as a client</Text>
-          </View>
-          <Text style={styles.chevron}>›</Text>
-        </TouchableOpacity>
+          <TouchableOpacity style={styles.menuItem} onPress={() => setEditModalOpen(true)}>
+            <View style={[styles.menuIconBox, { backgroundColor: '#EFF6FF' }]}>
+              <Ionicons name="person-outline" size={18} color="#2563EB" />
+            </View>
+            <Text style={styles.menuLabel}>Edit Business Profile</Text>
+            <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+          </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.menuRow}
-          onPress={() =>
-            Alert.alert(
-              'WorkLogy Contractor Support',
-              'For dispatch disputes or urgent field support, contact our 24/7 Pro Desk at pro-support@worklogy.in or call +91-1800-WORKLOGY.'
-            )
-          }
-        >
-          <Text style={styles.menuEmoji}>🎧</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.menuTitle}>Contractor Partner Desk</Text>
-            <Text style={styles.menuSubtitle}>24/7 Field & safety support</Text>
-          </View>
-          <Text style={styles.chevron}>›</Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => navigation.navigate('VendorServices')}
+          >
+            <View style={[styles.menuIconBox, { backgroundColor: '#ECFDF5' }]}>
+              <Ionicons name="construct-outline" size={18} color="#059669" />
+            </View>
+            <Text style={styles.menuLabel}>My Services & Catalog</Text>
+            <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+          </TouchableOpacity>
 
-        <TouchableOpacity style={[styles.menuRow, { borderBottomWidth: 0 }]} onPress={handleLogout}>
-          <Text style={styles.menuEmoji}>🚪</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.menuTitle, { color: '#DC2626' }]}>Sign Out of Pro Account</Text>
-            <Text style={styles.menuSubtitle}>Securely end your session</Text>
-          </View>
-          <Text style={styles.chevron}>›</Text>
-        </TouchableOpacity>
-      </View>
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => setVerifyModalOpen(true)}
+          >
+            <View style={[styles.menuIconBox, { backgroundColor: '#FEF3C7' }]}>
+              <Ionicons name="shield-checkmark-outline" size={18} color="#D97706" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.menuLabel}>Verification Documents (KYC)</Text>
+              <Text style={styles.menuSub}>{vState.label}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+          </TouchableOpacity>
 
-      <View style={{ height: 40 }} />
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => navigation.navigate('EarningsTab')}
+          >
+            <View style={[styles.menuIconBox, { backgroundColor: '#F3E8FF' }]}>
+              <Ionicons name="card-outline" size={18} color="#7C3AED" />
+            </View>
+            <Text style={styles.menuLabel}>Bank & Payout Details</Text>
+            <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+          </TouchableOpacity>
+        </View>
 
-      {/* KYC Document Submission Modal */}
-      <Modal visible={verifyModal.open} transparent animationType="slide">
+        <View style={styles.sectionCard}>
+          <Text style={styles.menuGroupHeading}>Support & Security</Text>
+
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() =>
+              Alert.alert('WorkLogy Pro Support', 'Need help with a job or payout? Call +91 800-WORKLOGY or email support@worklogy.in')
+            }
+          >
+            <View style={[styles.menuIconBox, { backgroundColor: '#F1F5F9' }]}>
+              <Ionicons name="help-buoy-outline" size={18} color="#334155" />
+            </View>
+            <Text style={styles.menuLabel}>Help & Support</Text>
+            <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() =>
+              Alert.alert('App Preferences', 'WorkLogy Pro v1.0.0 (Production Build). Location services: High Accuracy.')
+            }
+          >
+            <View style={[styles.menuIconBox, { backgroundColor: '#F1F5F9' }]}>
+              <Ionicons name="settings-outline" size={18} color="#334155" />
+            </View>
+            <Text style={styles.menuLabel}>Settings & Preferences</Text>
+            <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+          </TouchableOpacity>
+
+          <TouchableOpacity style={[styles.menuItem, { borderBottomWidth: 0 }]} onPress={handleLogout}>
+            <View style={[styles.menuIconBox, { backgroundColor: '#FEE2E2' }]}>
+              <Ionicons name="log-out-outline" size={18} color="#DC2626" />
+            </View>
+            <Text style={[styles.menuLabel, { color: '#DC2626' }]}>Sign Out</Text>
+            <Ionicons name="chevron-forward" size={18} color="#DC2626" />
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+
+      {/* ── 4. KYC VERIFICATION MODAL ── */}
+      <Modal visible={verifyModalOpen} transparent animationType="slide">
         <View style={styles.modalOverlay}>
-          <View style={styles.modalBox}>
-            <Text style={styles.modalEmoji}>🛡️</Text>
-            <Text style={styles.modalTitle}>Contractor KYC Verification</Text>
-            <Text style={styles.modalSubtitle}>
-              WorkLogy verifies all tradespeople before granting access to high-value tenders. Identity checks are authorized by the Admin Operations Desk.
-            </Text>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Statutory KYC Verification</Text>
+              <TouchableOpacity onPress={() => setVerifyModalOpen(false)}>
+                <Ionicons name="close" size={24} color={COLORS.textDark} />
+              </TouchableOpacity>
+            </View>
 
-            <Text style={styles.fieldLabel}>Identity Document Type</Text>
-            <View style={styles.idTypeRow}>
-              {['Aadhaar Card', 'PAN Card', 'Trade License'].map((type) => (
-                <TouchableOpacity
-                  key={type}
-                  style={[styles.idTypeChip, verifyModal.idType === type && styles.idTypeChipActive]}
-                  onPress={() => setVerifyModal((prev) => ({ ...prev, idType: type }))}
-                >
-                  <Text
-                    style={[styles.idTypeChipText, verifyModal.idType === type && styles.idTypeChipTextActive]}
+            <ScrollView style={{ marginBottom: 16 }}>
+              <Text style={styles.modalDesc}>
+                In compliance with Indian hyperlocal service safety mandates, submit your government-issued identity proof to unlock the verified badge.
+              </Text>
+
+              <Text style={styles.fieldLabel}>Select ID Proof</Text>
+              <View style={styles.idTypeRow}>
+                {['Aadhaar Card', 'PAN Card', 'Voter ID', 'Trade License'].map((type) => (
+                  <TouchableOpacity
+                    key={type}
+                    style={[styles.idTypePill, idType === type && styles.idTypePillActive]}
+                    onPress={() => setIdType(type)}
                   >
-                    {type}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+                    <Text
+                      style={[styles.idTypePillText, idType === type && styles.idTypePillTextActive]}
+                    >
+                      {type}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
 
-            <Text style={styles.fieldLabel}>Document / Government ID Number</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="e.g. 5829 4810 2948"
-              placeholderTextColor="#94A3B8"
-              value={verifyModal.idNumber}
-              onChangeText={(val) => setVerifyModal((prev) => ({ ...prev, idNumber: val }))}
-            />
-
-            <View style={styles.modalBtnRow}>
-              <TouchableOpacity
-                style={styles.modalCancelBtn}
-                onPress={() => setVerifyModal((prev) => ({ ...prev, open: false }))}
-                disabled={verifyModal.submitting}
-              >
-                <Text style={styles.modalCancelBtnText}>Cancel</Text>
-              </TouchableOpacity>
+              <Text style={styles.fieldLabel}>Document / ID Number</Text>
+              <TextInput
+                style={styles.textInput}
+                placeholder="e.g. 5432 1098 7654"
+                value={idNumber}
+                onChangeText={setIdNumber}
+                autoCapitalize="characters"
+              />
 
               <TouchableOpacity
-                style={styles.modalSubmitBtn}
-                onPress={handleSubmitVerificationDocs}
-                disabled={verifyModal.submitting}
+                style={styles.consentRow}
+                onPress={() => setConsent(!consent)}
+                activeOpacity={0.8}
               >
-                {verifyModal.submitting ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <Text style={styles.modalSubmitBtnText}>Submit to Admin Desk</Text>
-                )}
+                <Ionicons
+                  name={consent ? 'checkbox' : 'square-outline'}
+                  size={20}
+                  color={consent ? COLORS.primary : COLORS.textMuted}
+                />
+                <Text style={styles.consentText}>
+                  I consent to WorkLogy conducting administrative identity checks for trust and customer safety.
+                </Text>
               </TouchableOpacity>
-            </View>
+            </ScrollView>
+
+            <TouchableOpacity
+              style={styles.submitModalBtn}
+              onPress={handleSubmitVerification}
+              disabled={submittingDocs}
+            >
+              {submittingDocs ? (
+                <ActivityIndicator color="#FFFFFF" size="small" />
+              ) : (
+                <Text style={styles.submitModalBtnText}>Submit Documents for Review</Text>
+              )}
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
-    </ScrollView>
+
+      {/* ── 5. EDIT PROFILE MODAL ── */}
+      <Modal visible={editModalOpen} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Edit Business Profile</Text>
+              <TouchableOpacity onPress={() => setEditModalOpen(false)}>
+                <Ionicons name="close" size={24} color={COLORS.textDark} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ marginBottom: 16 }}>
+              <Text style={styles.fieldLabel}>Business / Contractor Name</Text>
+              <TextInput
+                style={styles.textInput}
+                value={businessName}
+                onChangeText={setBusinessName}
+                placeholder="e.g. Aalam Electrical Services"
+              />
+
+              <Text style={styles.fieldLabel}>Experience (Years)</Text>
+              <TextInput
+                style={styles.textInput}
+                keyboardType="numeric"
+                value={experienceYears}
+                onChangeText={setExperienceYears}
+                placeholder="6"
+              />
+
+              <Text style={styles.fieldLabel}>Service Territories (Comma Separated)</Text>
+              <TextInput
+                style={styles.textInput}
+                value={serviceAreas}
+                onChangeText={setServiceAreas}
+                placeholder="Gomti Nagar, Aliganj, Hazratganj"
+              />
+
+              <Text style={styles.fieldLabel}>Bio & Specializations</Text>
+              <TextInput
+                style={[styles.textInput, { height: 70, textAlignVertical: 'top' }]}
+                multiline
+                numberOfLines={3}
+                value={bio}
+                onChangeText={setBio}
+                placeholder="Licensed electrician offering residential and commercial installations..."
+              />
+            </ScrollView>
+
+            <TouchableOpacity
+              style={styles.submitModalBtn}
+              onPress={handleSaveProfile}
+              disabled={savingProfile}
+            >
+              {savingProfile ? (
+                <ActivityIndicator color="#FFFFFF" size="small" />
+              ) : (
+                <Text style={styles.submitModalBtnText}>Save Changes</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8FAFC'
+    backgroundColor: COLORS.background
   },
-  header: {
+  scroll: {
+    flex: 1
+  },
+  scrollContent: {
+    paddingBottom: 100
+  },
+  profileCard: {
     backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    paddingVertical: 24,
-    paddingHorizontal: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border
+    marginHorizontal: 16,
+    marginTop: 14,
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    elevation: 2
   },
-  avatar: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: COLORS.primary,
+  avatarRow: {
+    flexDirection: 'row',
+    alignItems: 'center'
+  },
+  avatarWrapper: {
+    position: 'relative'
+  },
+  avatarCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#E0E7FF',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 10
+    borderWidth: 1.5,
+    borderColor: '#C7D2FE'
   },
-  avatarText: {
-    color: '#FFFFFF',
-    fontSize: 28,
-    fontWeight: '900'
+  avatarLetter: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#3730A3'
   },
-  name: {
-    fontSize: 18,
-    fontWeight: '900',
+  verifiedPin: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    backgroundColor: '#10B981',
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#FFFFFF'
+  },
+  infoCol: {
+    flex: 1,
+    marginLeft: 14
+  },
+  businessName: {
+    fontSize: 16,
+    fontWeight: '800',
     color: COLORS.textDark
   },
-  email: {
-    fontSize: 12,
-    color: COLORS.textSecondary,
-    marginTop: 2
-  },
-  phone: {
+  tradeTitle: {
     fontSize: 12,
     color: COLORS.textMuted,
     marginTop: 2
   },
-  verificationBadgeContainer: {
-    marginTop: 12
+  ratingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+    gap: 4
   },
-  statusBadge: {
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 20
-  },
-  badgeVerified: {
-    backgroundColor: '#ECFDF5'
-  },
-  statusBadgeVerifiedText: {
-    fontSize: 10,
-    fontWeight: '900',
-    color: '#065F46'
-  },
-  badgePending: {
-    backgroundColor: '#FEF3C7'
-  },
-  statusBadgePendingText: {
-    fontSize: 10,
+  ratingText: {
+    fontSize: 12,
     fontWeight: '800',
     color: '#92400E'
   },
-  badgeUnverified: {
-    backgroundColor: '#FEE2E2'
+  bullet: {
+    fontSize: 12,
+    color: COLORS.textMuted
   },
-  statusBadgeUnverifiedText: {
-    fontSize: 10,
-    fontWeight: '900',
-    color: '#991B1B'
-  },
-  section: {
-    paddingHorizontal: 16,
-    marginTop: 16
-  },
-  sectionHeader: {
-    fontSize: 13,
-    fontWeight: '800',
+  expText: {
+    fontSize: 12,
     color: COLORS.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 8
+    fontWeight: '600'
   },
-  availCard: {
+  territoryRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    marginTop: 12,
+    gap: 4
+  },
+  territoryText: {
+    fontSize: 12,
+    color: COLORS.textMuted,
+    flex: 1
+  },
+  statusDivider: {
+    height: 1,
+    backgroundColor: COLORS.borderLight,
+    marginVertical: 12
+  },
+  cardFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+  },
+  verificationPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    gap: 4
+  },
+  verificationText: {
+    fontSize: 11,
+    fontWeight: '800'
+  },
+  editBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+    gap: 4
+  },
+  editBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.textDark
+  },
+  sectionCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+    marginHorizontal: 16,
+    marginTop: 14,
+    borderRadius: 18,
     padding: 16,
     borderWidth: 1,
     borderColor: COLORS.border
   },
-  availTitle: {
+  toggleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+  },
+  toggleTitle: {
     fontSize: 14,
     fontWeight: '800',
     color: COLORS.textDark
   },
-  availDesc: {
-    fontSize: 11,
-    color: COLORS.textSecondary,
-    marginTop: 3,
-    lineHeight: 15,
-    paddingRight: 8
-  },
-  infoCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: COLORS.border
-  },
-  infoRow: {
-    paddingVertical: 4
-  },
-  infoLabel: {
+  toggleSubtitle: {
     fontSize: 11,
     color: COLORS.textMuted,
-    fontWeight: '600'
+    marginTop: 2,
+    lineHeight: 16,
+    paddingRight: 8
   },
-  infoVal: {
+  menuGroupHeading: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: COLORS.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 8
+  },
+  menuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 11,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.borderLight
+  },
+  menuIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12
+  },
+  menuLabel: {
     fontSize: 13,
     fontWeight: '700',
     color: COLORS.textDark,
-    marginTop: 2
+    flex: 1
   },
-  infoDivider: {
-    height: 1,
-    backgroundColor: '#F1F5F9',
-    marginVertical: 8
-  },
-  statsGrid: {
-    flexDirection: 'row',
-    gap: 10
-  },
-  statBox: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    paddingVertical: 14,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: COLORS.border
-  },
-  statVal: {
-    fontSize: 16,
-    fontWeight: '900',
-    color: COLORS.textDark
-  },
-  statLabel: {
-    fontSize: 10,
-    color: COLORS.textSecondary,
-    marginTop: 2
-  },
-  menuRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    padding: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
-    gap: 12
-  },
-  menuEmoji: {
-    fontSize: 20
-  },
-  menuTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: COLORS.textDark
-  },
-  menuSubtitle: {
+  menuSub: {
     fontSize: 11,
-    color: COLORS.textSecondary,
+    color: COLORS.textMuted,
     marginTop: 1
   },
-  chevron: {
-    fontSize: 18,
-    color: COLORS.textMuted
-  },
+
+  // Modal
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20
+    justifyContent: 'flex-end'
   },
-  modalBox: {
-    width: '100%',
+  modalCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    padding: 22,
-    alignItems: 'center'
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    maxHeight: '85%',
+    padding: 18
   },
-  modalEmoji: {
-    fontSize: 36,
-    marginBottom: 8
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12
   },
   modalTitle: {
-    fontSize: 18,
-    fontWeight: '900',
-    color: COLORS.textDark,
-    textAlign: 'center'
+    fontSize: 17,
+    fontWeight: '800',
+    color: COLORS.textDark
   },
-  modalSubtitle: {
-    fontSize: 11,
+  modalDesc: {
+    fontSize: 12,
     color: COLORS.textSecondary,
-    textAlign: 'center',
-    marginTop: 4,
-    marginBottom: 16,
-    lineHeight: 16
+    lineHeight: 17,
+    marginBottom: 12
   },
   fieldLabel: {
-    width: '100%',
-    fontSize: 11,
-    fontWeight: '800',
-    color: COLORS.textDark,
-    marginBottom: 6
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.textSecondary,
+    marginBottom: 6,
+    marginTop: 6
   },
   idTypeRow: {
     flexDirection: 'row',
-    gap: 6,
-    width: '100%',
-    marginBottom: 14
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 8
   },
-  idTypeChip: {
-    flex: 1,
-    paddingVertical: 8,
-    borderRadius: 10,
-    backgroundColor: '#F1F5F9',
-    alignItems: 'center',
+  idTypePill: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: '#F3F4F6',
     borderWidth: 1,
-    borderColor: 'transparent'
+    borderColor: COLORS.border
   },
-  idTypeChipActive: {
-    backgroundColor: '#ECFDF5',
-    borderColor: COLORS.primary
+  idTypePillActive: {
+    backgroundColor: '#152B3C',
+    borderColor: '#152B3C'
   },
-  idTypeChipText: {
-    fontSize: 10,
+  idTypePillText: {
+    fontSize: 11,
     fontWeight: '700',
-    color: COLORS.textSecondary
+    color: COLORS.textDark
   },
-  idTypeChipTextActive: {
-    color: COLORS.primary,
-    fontWeight: '800'
+  idTypePillTextActive: {
+    color: '#FFFFFF'
   },
-  input: {
-    width: '100%',
-    height: 46,
+  textInput: {
+    backgroundColor: '#F8FAFC',
     borderWidth: 1,
     borderColor: COLORS.border,
-    borderRadius: 12,
+    borderRadius: 8,
     paddingHorizontal: 12,
+    paddingVertical: 9,
     fontSize: 13,
     color: COLORS.textDark,
-    marginBottom: 20
+    marginBottom: 8
   },
-  modalBtnRow: {
+  consentRow: {
     flexDirection: 'row',
-    gap: 12,
-    width: '100%'
+    alignItems: 'flex-start',
+    marginTop: 8,
+    gap: 8
   },
-  modalCancelBtn: {
+  consentText: {
+    fontSize: 11,
+    color: COLORS.textSecondary,
     flex: 1,
-    paddingVertical: 12,
-    borderRadius: 12,
-    backgroundColor: '#F1F5F9',
-    alignItems: 'center'
+    lineHeight: 16
   },
-  modalCancelBtnText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: COLORS.textSecondary
-  },
-  modalSubmitBtn: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 12,
+  submitModalBtn: {
     backgroundColor: COLORS.primary,
-    alignItems: 'center'
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginTop: 10
   },
-  modalSubmitBtnText: {
+  submitModalBtnText: {
     fontSize: 13,
     fontWeight: '800',
     color: '#FFFFFF'

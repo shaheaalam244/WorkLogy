@@ -1,23 +1,33 @@
 import React from 'react';
-import { SafeAreaView, StatusBar, StyleSheet } from 'react-native';
+import { View, StatusBar, StyleSheet, Platform } from 'react-native';
+import { registerRootComponent } from 'expo';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import VendorAppContainer from './src/navigation/VendorNavigator';
 import { AuthProvider } from './src/context/AuthContext';
 import { COLORS } from './src/theme/colors';
 
 export default function App() {
   return (
-    <AuthProvider>
-      <SafeAreaView style={styles.safeArea}>
-        <StatusBar barStyle="light-content" backgroundColor="#064E3B" />
-        <VendorAppContainer />
-      </SafeAreaView>
-    </AuthProvider>
+    <SafeAreaProvider>
+      <AuthProvider>
+        <View style={styles.root}>
+          <StatusBar
+            barStyle="dark-content"
+            backgroundColor="transparent"
+            translucent={Platform.OS === 'android'}
+          />
+          <VendorAppContainer />
+        </View>
+      </AuthProvider>
+    </SafeAreaProvider>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
+  root: {
     flex: 1,
-    backgroundColor: '#F8FAFC'
+    backgroundColor: COLORS.background
   }
 });
+
+registerRootComponent(App);

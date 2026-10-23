@@ -23,6 +23,7 @@ class SocketService {
 
     this.socket.on(SOCKET_EVENTS.CONNECT, () => {
       if (userId && this.socket) {
+        this.socket.emit('join_user', userId);
         this.socket.emit('join_user_room', { userId });
       }
     });

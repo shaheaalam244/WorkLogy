@@ -39,6 +39,11 @@ export const reviewAPI = {
   checkEligibility: async (vendorId) => {
     const res = await api.get(`/reviews/eligible/${vendorId}`);
     return res.data;
+  },
+
+  getRecentReviews: async (params = {}) => {
+    const res = await api.get('/reviews/recent', { params });
+    return res.data;
   }
 };
 

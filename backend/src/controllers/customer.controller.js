@@ -13,52 +13,64 @@ export const getCustomerDashboardSummary = async (req, res, next) => {
   try {
     const customerId = req.user.id;
 
-    // 1. Fetch customer's jobs (populated with category, selected vendor, and booking)
-    const customerJobs = await Job.find({ customer: customerId, isDeleted: { $ne: true } })
-      .populate('category', 'name slug icon')
-      .populate('selectedVendor', 'name avatar email phone businessName rating')
-      .populate('booking')
-      .sort({ createdAt: -1 });
+    // Run all independent DB queries in parallel to eliminate serial Atlas roundtrips.
+    // Steps 1, 2, 4, and 5 are fully independent — they can be fetched concurrently.
+    // Step 3 (applications) depends on the job IDs from step 1, so it is deferred.
+    const [customerJobs, customerBookings, transactions, profileResult] = await Promise.all([
+      // 1. Fetch customer's jobs
+      Job.find({ customer: customerId, isDeleted: { $ne: true } })
+        .populate('category', 'name slug icon')
+        .populate('selectedVendor', 'name avatar email phone businessName rating')
+        .populate('booking')
+        .sort({ createdAt: -1 })
+        .limit(100),
 
-    // 2. Fetch customer's bookings (populated with vendor, job, and service)
-    const customerBookings = await Booking.find({ customer: customerId })
-      .populate('vendor', 'name email phone avatar businessName rating')
-      .populate({
-        path: 'job',
-        select: 'title budget urgency location category preferredDate preferredTime status',
-        populate: { path: 'category', select: 'name icon' }
-      })
-      .populate('service', 'title pricing domain')
-      .sort({ scheduledDate: 1, createdAt: -1 });
+      // 2. Fetch customer's bookings
+      Booking.find({ customer: customerId })
+        .populate('vendor', 'name email phone avatar businessName rating')
+        .populate({
+          path: 'job',
+          select: 'title budget urgency location category preferredDate preferredTime status',
+          populate: { path: 'category', select: 'name icon' }
+        })
+        .populate('service', 'title pricing domain')
+        .sort({ scheduledDate: 1, createdAt: -1 }),
 
-    // 3. Fetch applications submitted to customer's open jobs only
+      // 4. Fetch customer transactions
+      Transaction.find({ customer: customerId })
+        .populate('vendor', 'name avatar businessName')
+        .populate('booking')
+        .sort({ createdAt: -1 })
+        .limit(20),
+
+      // 5. Customer Profile
+      CustomerProfile.findOne({ user: customerId }).populate('savedVendors')
+    ]);
+
+    // Ensure profile exists (create lazily if first time)
+    let profile = profileResult;
+    if (!profile) {
+      profile = await CustomerProfile.create({ user: customerId });
+    }
+
+    // 3. Fetch applications for open jobs (depends on customerJobs result)
     const openJobIds = customerJobs
       .filter(j => j.status === 'open')
       .map(j => j._id);
 
-    const pendingApplications = await Application.find({
-      job: { $in: openJobIds },
-      status: 'submitted'
-    })
-      .populate('vendor', 'name email phone avatar businessName rating')
-      .populate({
-        path: 'job',
-        select: 'title budget category location preferredDate preferredTime status',
-        populate: { path: 'category', select: 'name icon' }
-      })
-      .sort({ createdAt: -1 });
-
-    // 4. Fetch customer transactions from Transaction model
-    let transactions = await Transaction.find({ customer: customerId })
-      .populate('vendor', 'name avatar businessName')
-      .populate('booking')
-      .sort({ createdAt: -1 });
-
-    // 5. Customer Profile (Saved vendors & addresses count)
-    let profile = await CustomerProfile.findOne({ user: customerId }).populate('savedVendors');
-    if (!profile) {
-      profile = await CustomerProfile.create({ user: customerId });
-    }
+    const pendingApplications = openJobIds.length > 0
+      ? await Application.find({
+          job: { $in: openJobIds },
+          status: 'submitted'
+        })
+          .populate('vendor', 'name email phone avatar businessName rating')
+          .populate({
+            path: 'job',
+            select: 'title budget category location preferredDate preferredTime status',
+            populate: { path: 'category', select: 'name icon' }
+          })
+          .sort({ createdAt: -1 })
+      : [];
 
     // 6. Build Deduplicated Order Registry
     // If a job is linked to a booking, the booking is the canonical active fulfillment record.
@@ -390,29 +402,9 @@ export const getCustomerBookings = async (req, res, next) => {
       }));
     }
 
-    // Guarantee OTP for active bookings
-    for (const b of bookings) {
-      if (['confirmed', 'scheduled', 'assigned', 'on_the_way', 'arrived'].includes(b.status)) {
-        if (!b.startOtp?.otp || b.startOtp?.isConsumed) {
-          if (!b.startOtp?.isConsumed) {
-            const otp = Math.floor(100000 + Math.random() * 900000).toString();
-            const codeHash = hashOtp(otp);
-            const expiresAt = new Date(Date.now() + 7 * 86400000);
-            b.startOtp = {
-              otp,
-              codeHash,
-              expiresAt,
-              attempts: 0,
-              maxAttempts: 5,
-              isConsumed: false
-            };
-            await Booking.findByIdAndUpdate(b._id, {
-              startOtp: b.startOtp
-            });
-          }
-        }
-      }
-    }
+    // Note: OTP generation for active bookings is handled at booking creation/assignment time.
+    // Performing DB writes inside a read endpoint on every page load is a performance anti-pattern.
+    // Active bookings without an OTP will display a 'Request OTP' affordance instead.
 
     // Fetch any reviews submitted by this customer for these bookings
     const bookingIds = bookings.map(b => b._id);

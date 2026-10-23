@@ -26,7 +26,13 @@ export default function LoginScreen({ navigation }: any) {
 
     try {
       await login({ email: email.trim(), password: password.trim() });
-      navigation.navigate('HomeTab');
+      if (navigation.canGoBack && navigation.canGoBack()) {
+        navigation.goBack(true);
+      } else if (navigation.resetTo) {
+        navigation.resetTo('HomeTab');
+      } else {
+        navigation.navigate('HomeTab');
+      }
     } catch (err: any) {
       Alert.alert('Login Failed', err.message || 'Invalid credentials or suspended account.');
     }
@@ -68,6 +74,19 @@ export default function LoginScreen({ navigation }: any) {
           value={password}
           onChangeText={setPassword}
         />
+
+        {/* Quick Demo Customer Account */}
+        <TouchableOpacity
+          style={styles.demoPill}
+          onPress={() => {
+            setEmail('customer@worklogy.com');
+            setPassword('password123');
+          }}
+          activeOpacity={0.75}
+        >
+          <Text style={styles.demoPillLabel}>⚡ Fill Demo Account:</Text>
+          <Text style={styles.demoPillVal}>Alex Johnson (customer@worklogy.com)</Text>
+        </TouchableOpacity>
 
         <TouchableOpacity
           style={styles.loginBtn}
@@ -160,6 +179,26 @@ const styles = StyleSheet.create({
     color: COLORS.textDark,
     marginBottom: 14,
     backgroundColor: '#F8FAFC'
+  },
+  demoPill: {
+    backgroundColor: '#ECFDF5',
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#A7F3D0'
+  },
+  demoPillLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#065F46',
+    textTransform: 'uppercase',
+    marginBottom: 2
+  },
+  demoPillVal: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#059669'
   },
   loginBtn: {
     backgroundColor: COLORS.primary,

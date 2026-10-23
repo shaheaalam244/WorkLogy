@@ -6,13 +6,15 @@ import {
   respondToReview,
   checkReviewEligibility,
   getBookingReview,
-  getAwaitingReviews
+  getAwaitingReviews,
+  getRecentReviews
 } from '../controllers/review.controller.js';
 import { protect } from '../middleware/auth.middleware.js';
 import { authorize } from '../middleware/role.middleware.js';
 
 const router = express.Router();
 
+router.get('/recent', getRecentReviews);
 router.post('/', protect, authorize('customer', 'admin'), createReview);
 router.get('/awaiting', protect, authorize('customer', 'admin'), getAwaitingReviews);
 router.get('/eligible/:vendorId', protect, authorize('customer', 'admin'), checkReviewEligibility);

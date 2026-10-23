@@ -12,6 +12,7 @@ import {
   updateVendorAvailability,
   getVendorCalendar,
   getVendorDashboardStats,
+  getPublicServiceListings,
   getMyServices,
   createServiceListing,
   getServiceListingById,
@@ -26,6 +27,8 @@ const router = express.Router();
 
 // Public routes
 router.get('/', getVendors);
+router.get('/services', getPublicServiceListings);
+router.get('/services/public/:id', getServiceListingById);
 
 // Protected vendor routes
 router.get('/profile', protect, authorize('vendor', 'admin'), getVendorProfile);
@@ -40,7 +43,7 @@ router.get('/dashboard-stats', protect, authorize('vendor', 'admin'), getVendorD
 // Services management
 router.get('/services/my', protect, authorize('vendor', 'admin'), getMyServices);
 router.post('/services', protect, authorize('vendor', 'admin'), createServiceListing);
-router.get('/services/:id', protect, authorize('vendor', 'admin'), getServiceListingById);
+router.get('/services/:id', getServiceListingById);
 router.put('/services/:id', protect, authorize('vendor', 'admin'), updateServiceListing);
 router.patch('/services/:id/status', protect, authorize('vendor', 'admin'), updateServiceListingStatus);
 router.delete('/services/:id', protect, authorize('vendor', 'admin'), deleteServiceListing);

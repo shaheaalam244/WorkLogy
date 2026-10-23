@@ -68,6 +68,12 @@ const UserSchema = new mongoose.Schema(
       emailStatusUpdates: { type: Boolean, default: true },
       emailCancellations: { type: Boolean, default: true },
       emailMarketing: { type: Boolean, default: false }
+    },
+    resetPasswordToken: {
+      type: String
+    },
+    resetPasswordExpire: {
+      type: Date
     }
   },
 

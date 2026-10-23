@@ -34,7 +34,11 @@ export default function RegisterScreen({ navigation }: any) {
         phone: phone.trim() || undefined,
         password: password.trim()
       });
-      navigation.navigate('HomeTab');
+      if (navigation.resetTo) {
+        navigation.resetTo('HomeTab');
+      } else {
+        navigation.navigate('HomeTab');
+      }
     } catch (err: any) {
       Alert.alert('Registration Failed', err.message || 'Could not register customer profile.');
     }
@@ -113,7 +117,17 @@ export default function RegisterScreen({ navigation }: any) {
 
           <View style={styles.footerRow}>
             <Text style={styles.footerText}>Already have an account? </Text>
-            <TouchableOpacity onPress={() => navigation.navigate('Login')}>
+            <TouchableOpacity
+              onPress={() => {
+                if (navigation.canGoBack && navigation.canGoBack()) {
+                  navigation.goBack();
+                } else if (navigation.replace) {
+                  navigation.replace('Login');
+                } else {
+                  navigation.navigate('Login');
+                }
+              }}
+            >
               <Text style={styles.loginLink}>Sign In Here</Text>
             </TouchableOpacity>
           </View>

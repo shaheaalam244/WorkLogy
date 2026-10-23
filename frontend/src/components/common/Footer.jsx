@@ -81,8 +81,8 @@ export default function Footer() {
             </h4>
             <ul className="space-y-2.5 text-xs text-slate-400">
               <li>
-                <Link to="/how-it-works" className="hover:text-emerald-400 transition-colors">
-                  How It Works
+                <Link to="/categories" className="hover:text-emerald-400 transition-colors">
+                  All Services
                 </Link>
               </li>
               <li>
@@ -91,53 +91,57 @@ export default function Footer() {
                 </Link>
               </li>
               <li>
-                <Link to="/customer/create-job" className="hover:text-emerald-400 transition-colors inline-flex items-center gap-1">
-                  <span>Post a Job Free</span>
-                  <ArrowUpRight className="w-3 h-3 text-emerald-400" />
+                <Link to="/how-it-works" className="hover:text-emerald-400 transition-colors">
+                  How WorkLogy Works
                 </Link>
               </li>
               <li>
-                <Link to="/jobs" className="hover:text-emerald-400 transition-colors">
-                  Open Job Requests
+                <Link to="/customer/bookings" className="hover:text-emerald-400 transition-colors">
+                  My Bookings
                 </Link>
               </li>
               <li>
                 <Link to="/register?role=vendor" className="hover:text-emerald-400 transition-colors font-medium text-emerald-300">
-                  Join as a Professional
+                  Become a Vendor
                 </Link>
               </li>
             </ul>
           </div>
 
-          {/* Column 4: Support & Trust */}
+          {/* Column 4: Support & Legal */}
           <div>
             <h4 className="text-white font-bold text-xs uppercase tracking-wider mb-4">
-              Support & Legal
+              Help & Legal
             </h4>
             <ul className="space-y-2.5 text-xs text-slate-400">
               <li>
+                <Link to="/about" className="hover:text-emerald-400 transition-colors">
+                  About WorkLogy
+                </Link>
+              </li>
+              <li>
                 <Link to="/contact" className="hover:text-emerald-400 transition-colors">
-                  Contact Support
+                  Help & Support
                 </Link>
               </li>
               <li>
-                <Link to="/about" className="hover:text-emerald-400 transition-colors">
-                  Help Centre & FAQ
+                <Link to="/contact" className="hover:text-emerald-400 transition-colors">
+                  Contact Us
                 </Link>
               </li>
               <li>
-                <Link to="/about" className="hover:text-emerald-400 transition-colors">
-                  Escrow & Payment Protection
+                <Link to="/terms" className="hover:text-emerald-400 transition-colors">
+                  Terms and Conditions
                 </Link>
               </li>
               <li>
-                <Link to="/about" className="hover:text-emerald-400 transition-colors">
-                  Terms of Service
-                </Link>
-              </li>
-              <li>
-                <Link to="/about" className="hover:text-emerald-400 transition-colors">
+                <Link to="/privacy" className="hover:text-emerald-400 transition-colors">
                   Privacy Policy
+                </Link>
+              </li>
+              <li>
+                <Link to="/refund-policy" className="hover:text-emerald-400 transition-colors">
+                  Cancellation & Refund Policy
                 </Link>
               </li>
               <li className="pt-2 text-[11px] text-slate-500 flex items-center gap-1.5">
@@ -151,11 +155,11 @@ export default function Footer() {
 
         {/* Copyright and Bottom Links */}
         <div className="mt-12 pt-6 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between text-xs text-slate-500 gap-4">
-          <p>© {new Date().getFullYear()} WorkLogy Marketplace Inc. All rights reserved.</p>
+          <p>© {new Date().getFullYear()} WorkLogy Marketplace. Built for Indian Homeowners & Verified Pros.</p>
           <div className="flex flex-wrap items-center gap-5">
-            <Link to="/about" className="hover:text-slate-300 transition-colors">Privacy Policy</Link>
-            <Link to="/about" className="hover:text-slate-300 transition-colors">Terms of Service</Link>
-            <Link to="/about" className="hover:text-slate-300 transition-colors">Trust & Safety</Link>
+            <Link to="/privacy" className="hover:text-slate-300 transition-colors">Privacy Policy</Link>
+            <Link to="/terms" className="hover:text-slate-300 transition-colors">Terms of Service</Link>
+            <Link to="/refund-policy" className="hover:text-slate-300 transition-colors">Cancellation & Refund Policy</Link>
           </div>
         </div>
       </div>

@@ -65,10 +65,12 @@ import { useSocketContext } from '../../context/SocketContext';
 import { jobAPI } from '../../api/job.api';
 import { categoryAPI } from '../../api/category.api';
 import { vendorAPI } from '../../api/vendor.api';
-import { formatCurrency, formatShortAddress } from '../../utils/formatters';
+import { reviewAPI } from '../../api/review.api';
+import { formatCurrency, formatShortAddress, formatDate } from '../../utils/formatters';
 import api from '../../api/axios';
 import CategoryCard from '../../components/cards/CategoryCard';
-import { resolveJobImage, getJobImage, handleImageFallback, FALLBACK_SERVICE_IMAGE } from '../../constants/serviceImages';
+import VendorCard from '../../components/cards/VendorCard';
+import { resolveJobImage, getJobImage, handleImageFallback, FALLBACK_SERVICE_IMAGE, CATEGORY_IMAGES } from '../../constants/serviceImages';
 
 // Direct 3 Homepage Hero & Action Imagery
 import smilingHomepageImg from '../../assets/SmilingHomepage.png';
@@ -122,9 +124,11 @@ export default function Home() {
   const [categories, setCategories] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [vendors, setVendors] = useState([]);
+  const [reviews, setReviews] = useState([]);
   const [loadingJobs, setLoadingJobs] = useState(true);
   const [loadingCategories, setLoadingCategories] = useState(true);
   const [loadingVendors, setLoadingVendors] = useState(true);
+  const [loadingReviews, setLoadingReviews] = useState(true);
 
   // Filter & Search states
   const [searchKeyword, setSearchKeyword] = useState('');
@@ -133,19 +137,22 @@ export default function Home() {
   const [activeUrgencyFilter, setActiveUrgencyFilter] = useState('all');
   const [showAllHomeCategories, setShowAllHomeCategories] = useState(false);
 
-  // Canonical Top 8 Popular Service Categories requested order
+  // 11 Core Service Categories requested in Section 3-C
   const POPULAR_SLUGS_ORDER = useMemo(() => [
     'electrical-services',
     'plumbing-services',
     'ac-hvac-services',
-    'appliance-repair',
-    'carpentry-furniture',
     'home-cleaning',
+    'carpentry-furniture',
     'painting-services',
-    'pest-control'
+    'pest-control',
+    'appliance-repair',
+    'locksmith-services',
+    'vehicle-repair',
+    'other-services'
   ], []);
 
-  // Sort categories with top 8 prioritized in exact requested order
+  // Sort categories with 11 core categories prioritized
   const sortedPopularCategories = useMemo(() => {
     if (!categories || categories.length === 0) return [];
     const list = [...categories];
@@ -161,11 +168,75 @@ export default function Home() {
     });
   }, [categories, POPULAR_SLUGS_ORDER]);
 
-  // Display either the top 8 popular categories or all 30
+  // Display the 11 key service categories or all 30
   const displayedHomeCategories = useMemo(() => {
     if (showAllHomeCategories) return sortedPopularCategories;
-    return sortedPopularCategories.slice(0, 8);
+    return sortedPopularCategories.slice(0, 11);
   }, [sortedPopularCategories, showAllHomeCategories]);
+
+  // Frequently requested popular services for Section 3-E
+  const POPULAR_SERVICES_LIST = useMemo(() => [
+    {
+      id: 'ac-jet-service',
+      name: 'AC Jet Servicing & Cooling Inspection',
+      category: 'AC & HVAC Services',
+      slug: 'ac-hvac-services',
+      price: 499,
+      duration: '45-60 mins',
+      image: CATEGORY_IMAGES['ac-hvac-services']?.image,
+      description: 'Deep high-pressure coil wash, indoor filter sanitization, drain tray clearance, and refrigerant gas pressure check.'
+    },
+    {
+      id: 'switchboard-mcb-repair',
+      name: 'Switchboard & MCB Tripping Troubleshooting',
+      category: 'Electrical Services',
+      slug: 'electrical-services',
+      price: 249,
+      duration: '30-45 mins',
+      image: CATEGORY_IMAGES['electrical-services']?.image,
+      description: 'Precision fault diagnosis, short-circuit troubleshooting, socket & switch replacement, and main fuse board safety check.'
+    },
+    {
+      id: 'kitchen-sink-leakage',
+      name: 'Kitchen Sink & Pipe Leakage Repair',
+      category: 'Plumbing Services',
+      slug: 'plumbing-services',
+      price: 299,
+      duration: '45 mins',
+      image: CATEGORY_IMAGES['plumbing-services']?.image,
+      description: 'Instant leak stoppage, waste coupling replacement, bottle trap cleaning, and sanitary silicone sealing.'
+    },
+    {
+      id: 'sofa-fabric-deep-clean',
+      name: 'Sofa Fabric & Cushion Deep Sanitization',
+      category: 'Home Cleaning',
+      slug: 'home-cleaning',
+      price: 699,
+      duration: '60-90 mins',
+      image: CATEGORY_IMAGES['home-cleaning']?.image,
+      description: 'High-suction extraction, organic anti-allergen shampooing, and spot stain removal for fabric and leather sofas.'
+    },
+    {
+      id: 'wall-putty-emulsion-painting',
+      name: 'Interior Accent Wall & Room Painting',
+      category: 'Painting Services',
+      slug: 'painting-services',
+      price: 1299,
+      duration: '2-3 hours',
+      image: CATEGORY_IMAGES['painting-services']?.image,
+      description: 'Surface putty smoothing, crack filling, anti-fungal primer coat, and 2 coats of washable premium wall emulsion.'
+    },
+    {
+      id: 'door-hinge-cabinet-repair',
+      name: 'Door Lock, Hinge & Furniture Alignment',
+      category: 'Carpentry & Furniture',
+      slug: 'carpentry-furniture',
+      price: 349,
+      duration: '45 mins',
+      image: CATEGORY_IMAGES['carpentry-furniture']?.image,
+      description: 'Hydraulic soft-close hinge fitting, deadbolt lock repair, wardrobe drawer sliding adjustment, and door planing.'
+    }
+  ], []);
 
   // Modals & User Interaction states
   const [postJobModalOpen, setPostJobModalOpen] = useState(false);
@@ -194,6 +265,7 @@ export default function Home() {
   useEffect(() => {
     fetchCategories();
     fetchVendors();
+    fetchRecentReviews();
   }, []);
 
   useEffect(() => {
@@ -313,6 +385,20 @@ export default function Home() {
       console.error('Failed to load vendors:', err);
     } finally {
       setLoadingVendors(false);
+    }
+  };
+
+  const fetchRecentReviews = async () => {
+    setLoadingReviews(true);
+    try {
+      const res = await reviewAPI.getRecentReviews({ limit: 4 });
+      if (res?.success && Array.isArray(res.reviews)) {
+        setReviews(res.reviews);
+      }
+    } catch (err) {
+      console.warn('Failed to load recent reviews:', err);
+    } finally {
+      setLoadingReviews(false);
     }
   };
 
@@ -492,17 +578,17 @@ export default function Home() {
       />
 
       {/* ─────────────────────────────────────────────────────────────
-          2. POPULAR SERVICES SECTION
+          2. SERVICE CATEGORIES (Section 3-C)
          ───────────────────────────────────────────────────────────── */}
-      <section id="popular-categories" className="page-container py-12 lg:py-16">
+      <section id="service-categories" className="page-container py-12 lg:py-16">
         <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-6">
           <div>
-            <span className="text-xs font-bold uppercase tracking-wider text-[#06684F]">Marketplace Services</span>
+            <span className="text-xs font-bold uppercase tracking-wider text-[#06684F]">Trade Specializations</span>
             <h2 className="text-2xl sm:text-3xl font-extrabold text-[#111827] tracking-tight mt-1">
-              Popular Services
+              Service Categories
             </h2>
             <p className="text-xs sm:text-sm text-slate-500 mt-1 max-w-xl">
-              Find trusted professionals for your everyday needs.
+              Browse verified trade specialists for electrical, plumbing, climate control, cleaning, and home improvements.
             </p>
           </div>
           <Link
@@ -533,14 +619,14 @@ export default function Home() {
               ))}
             </div>
 
-            {sortedPopularCategories.length > 8 && (
+            {sortedPopularCategories.length > 11 && (
               <div className="mt-8 text-center">
                 <button
                   type="button"
                   onClick={() => setShowAllHomeCategories((prev) => !prev)}
                   className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white border border-slate-300 hover:border-[#06684F] hover:bg-slate-50 text-slate-800 text-xs font-bold shadow-2xs transition active:scale-95"
                 >
-                  <span>{showAllHomeCategories ? 'Show Fewer Categories' : `View All Categories (${sortedPopularCategories.length})`}</span>
+                  <span>{showAllHomeCategories ? 'Show Key Categories' : `View All Categories (${sortedPopularCategories.length})`}</span>
                   {showAllHomeCategories ? (
                     <ChevronUp className="w-4 h-4 text-[#06684F]" />
                   ) : (
@@ -554,7 +640,138 @@ export default function Home() {
       </section>
 
       {/* ─────────────────────────────────────────────────────────────
-          3. RECENT JOBS IN YOUR AREA
+          3. POPULAR SERVICES (Section 3-E)
+         ───────────────────────────────────────────────────────────── */}
+      <section className="page-container pb-12 lg:pb-16">
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-6">
+          <div>
+            <span className="text-xs font-bold uppercase tracking-wider text-[#06684F]">Frequently Requested</span>
+            <h2 className="text-2xl sm:text-3xl font-extrabold text-[#111827] tracking-tight mt-1">
+              Popular Services
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-500 mt-1 max-w-xl">
+              Standard fixed rates, transparent scope of work, and quick doorstep turnaround.
+            </p>
+          </div>
+          <Link
+            to="/categories"
+            className="text-xs sm:text-sm font-bold text-[#06684F] hover:text-[#055742] inline-flex items-center gap-1.5 shrink-0 px-3.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 transition"
+          >
+            <span>Explore All Solutions</span>
+            <ArrowRight className="w-4 h-4" />
+          </Link>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          {POPULAR_SERVICES_LIST.map((srv) => (
+            <div
+              key={srv.id}
+              className="bg-white border border-slate-200 hover:border-[#06684F] rounded-2xl overflow-hidden shadow-xs hover:shadow-md transition flex flex-col justify-between group"
+            >
+              <div className="relative aspect-video w-full overflow-hidden bg-slate-100 shrink-0">
+                <img
+                  src={srv.image || FALLBACK_SERVICE_IMAGE}
+                  alt={srv.name}
+                  loading="lazy"
+                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 ease-out"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent pointer-events-none" />
+                <span className="absolute top-3 left-3 px-2.5 py-1 rounded-full bg-white/95 backdrop-blur-xs text-[10px] font-bold text-slate-800 shadow-2xs border border-white/60">
+                  {srv.category}
+                </span>
+                <span className="absolute bottom-3 right-3 px-2.5 py-1 rounded-full bg-slate-900/90 text-white text-[10px] font-bold shadow-2xs flex items-center gap-1">
+                  <Clock className="w-3 h-3 text-emerald-400" />
+                  <span>{srv.duration}</span>
+                </span>
+              </div>
+
+              <div className="p-5 flex-1 flex flex-col justify-between">
+                <div>
+                  <h3 className="font-bold text-base text-[#111827] group-hover:text-[#06684F] transition-colors leading-snug">
+                    {srv.name}
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-2 line-clamp-2 leading-relaxed">
+                    {srv.description}
+                  </p>
+                </div>
+
+                <div className="mt-5 pt-4 border-t border-slate-100 flex items-center justify-between gap-3">
+                  <div>
+                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">Starts from</span>
+                    <span className="text-base font-black text-[#06684F]">{formatCurrency(srv.price)}</span>
+                  </div>
+
+                  <Link
+                    to={`/customer/book?service=${encodeURIComponent(srv.name)}&category=${encodeURIComponent(srv.category)}&price=${srv.price}`}
+                    className="px-4 py-2 bg-[#06684F] hover:bg-[#055742] text-white font-bold text-xs rounded-xl shadow-xs transition active:scale-95 flex items-center gap-1.5"
+                  >
+                    <span>Book Service</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </Link>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* ─────────────────────────────────────────────────────────────
+          4. RECOMMENDED PROFESSIONALS (Section 3-D)
+         ───────────────────────────────────────────────────────────── */}
+      <section className="page-container pb-12 lg:pb-16">
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-6">
+          <div>
+            <span className="text-xs font-bold uppercase tracking-wider text-[#06684F]">Vetted Specialists</span>
+            <h2 className="text-2xl sm:text-3xl font-extrabold text-[#111827] tracking-tight mt-1">
+              Recommended Professionals
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-500 mt-1 max-w-xl">
+              Connect directly with verified local trade contractors rated by genuine customers.
+            </p>
+          </div>
+          <Link
+            to="/professionals"
+            className="text-xs sm:text-sm font-bold text-[#06684F] hover:text-[#055742] inline-flex items-center gap-1.5 shrink-0 px-3.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 transition"
+          >
+            <span>Browse All Professionals</span>
+            <ArrowRight className="w-4 h-4" />
+          </Link>
+        </div>
+
+        {loadingVendors ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {[...Array(3)].map((_, i) => (
+              <div key={i} className="h-60 bg-white rounded-2xl border border-slate-200 animate-pulse" />
+            ))}
+          </div>
+        ) : vendors.length === 0 ? (
+          <div className="text-center py-12 bg-white rounded-2xl border border-slate-200 p-6">
+            <UserCheck className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+            <p className="text-sm font-semibold text-[#111827]">No approved professionals found in this directory radius.</p>
+            <p className="text-xs text-slate-500 mt-1">Browse our categories catalogue or post a service request.</p>
+            <div className="mt-4 flex items-center justify-center gap-3">
+              <Link to="/categories" className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold rounded-xl transition">
+                Browse Categories
+              </Link>
+              <button onClick={() => setPostJobModalOpen(true)} className="px-4 py-2 bg-[#06684F] hover:bg-[#055742] text-white text-xs font-semibold rounded-xl transition">
+                Post a Job Free
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {vendors.map((v) => (
+              <VendorCard
+                key={v._id}
+                vendor={v}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* ─────────────────────────────────────────────────────────────
+          5. RECENT JOBS IN YOUR AREA
          ───────────────────────────────────────────────────────────── */}
       <section id="recent-jobs" className="page-container pb-12 lg:pb-16">
         <div className="bg-white rounded-3xl border border-slate-200 shadow-xs p-6 sm:p-8">
@@ -765,339 +982,48 @@ export default function Home() {
       </section>
 
       {/* ─────────────────────────────────────────────────────────────
-          4. FEATURED LOCAL PROFESSIONALS
-         ───────────────────────────────────────────────────────────── */}
-      <section className="page-container pb-12 lg:pb-16">
-        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-6">
-          <div>
-            <span className="text-xs font-bold uppercase tracking-wider text-[#06684F]">Vetted Specialists</span>
-            <h2 className="text-2xl sm:text-3xl font-extrabold text-[#111827] tracking-tight mt-1">
-              Featured Local Professionals
-            </h2>
-          </div>
-          <Link
-            to="/professionals"
-            className="text-sm font-semibold text-[#06684F] hover:text-[#055742] inline-flex items-center gap-1"
-          >
-            <span>Browse Directory</span>
-            <ArrowRight className="w-4 h-4" />
-          </Link>
-        </div>
-
-        {loadingVendors ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {[...Array(3)].map((_, i) => (
-              <div key={i} className="h-60 bg-white rounded-2xl border border-slate-200 animate-pulse" />
-            ))}
-          </div>
-        ) : vendors.length === 0 ? (
-          <div className="text-center py-12 bg-white rounded-2xl border border-slate-200 p-6">
-            <UserCheck className="w-10 h-10 text-slate-300 mx-auto mb-2" />
-            <p className="text-sm font-semibold text-[#111827]">No approved professionals found in this directory radius.</p>
-            <p className="text-xs text-slate-500 mt-1">Browse our categories catalogue or post a service request.</p>
-            <div className="mt-4 flex items-center justify-center gap-3">
-              <Link to="/categories" className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold rounded-xl transition">
-                Browse Categories
-              </Link>
-              <button onClick={() => setPostJobModalOpen(true)} className="px-4 py-2 bg-[#06684F] hover:bg-[#055742] text-white text-xs font-semibold rounded-xl transition">
-                Post a Job Free
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {vendors.map((v) => (
-              <div
-                key={v._id}
-                className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs hover:shadow-md transition flex flex-col justify-between"
-              >
-                <div>
-                  <div className="flex items-start gap-4">
-                    <img
-                      src={v.user?.avatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=300&q=80'}
-                      alt={v.businessName}
-                      className="w-14 h-14 rounded-xl object-cover border border-slate-200 shrink-0"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <h3 className="font-bold text-[#111827] text-sm truncate">{v.businessName}</h3>
-                        {v.verifiedBadge?.status === 'verified' && (
-                          <span title="License & Identity Verified">
-                            <ShieldCheck className="w-4 h-4 text-[#06684F] flex-shrink-0" />
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-slate-500 truncate">{v.tagline || 'Skilled Trade Contractor'}</p>
-                      
-                      <div className="flex items-center gap-2.5 mt-1.5 text-xs text-slate-600 font-medium">
-                        <span className="flex items-center gap-1 text-amber-600 font-bold">
-                          <Star className="w-3.5 h-3.5 fill-amber-500" />
-                          {v.rating ? v.rating.toFixed(1) : '5.0'}
-                        </span>
-                        <span>•</span>
-                        <span>{v.reviewCount || 0} reviews</span>
-                        <span>•</span>
-                        <span>{v.completedJobsCount || 0} jobs</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Hourly Rate & Service Area */}
-                  <div className="mt-3.5 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-                    <span className="font-bold text-[#06684F]">
-                      {formatCurrency(v.hourlyRate || 45)}/hr
-                    </span>
-                    <span className="text-slate-500 truncate max-w-[170px]">
-                      {v.serviceAreas?.[0]?.name || v.city || 'Lucknow & surrounding'}
-                    </span>
-                  </div>
-
-                  <p className="text-xs text-slate-600 line-clamp-2 mt-2 leading-relaxed">
-                    {v.bio || 'Available for prompt residential service calls and emergency trade dispatches.'}
-                  </p>
-                </div>
-
-                <div className="mt-5 pt-4 border-t border-slate-100 flex items-center justify-between gap-2">
-                  <Link
-                    to={`/professionals/${v._id}`}
-                    className="px-3.5 py-2 border border-slate-300 hover:bg-slate-50 text-slate-800 rounded-xl text-xs font-semibold transition"
-                  >
-                    View Profile
-                  </Link>
-
-                  <Link
-                    to={`/professionals/${v._id}`}
-                    className="px-4 py-2 bg-[#06684F] hover:bg-[#055742] text-white rounded-xl text-xs font-semibold transition"
-                  >
-                    Book Now
-                  </Link>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* ─────────────────────────────────────────────────────────────
-          5. CUSTOMER JOURNEY: TWO SIMPLE WAYS TO HIRE
+          6. HOW WORKLOGY WORKS (Section 3-F)
          ───────────────────────────────────────────────────────────── */}
       <section className="page-container pb-12 lg:pb-16">
         <div className="text-center max-w-2xl mx-auto mb-10">
-          <span className="text-xs font-bold uppercase tracking-wider text-[#06684F]">Choose Your Path</span>
-          <h2 className="text-2xl sm:text-3xl font-extrabold text-[#111827] tracking-tight mt-1">
-            Two Simple Ways to Get Work Done
-          </h2>
-          <p className="text-sm text-slate-600 mt-2">
-            Whether you want competitive quotes or need to hire an approved specialist right now, WorkLogy gives you total control.
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 lg:gap-8">
-          
-          {/* Option A — Post a Job */}
-          <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-xs hover:shadow-md transition flex flex-col justify-between">
-            <div>
-              {/* Featured Action Image Banner (Homepage.png) */}
-              <div className="relative aspect-[16/9] w-full rounded-2xl overflow-hidden mb-5 bg-slate-100 border border-slate-200 shadow-2xs group">
-                <img
-                  src={homepageImg}
-                  alt="Professional plumber working on a customer request"
-                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent pointer-events-none" />
-                <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between text-white">
-                  <span className="text-xs font-bold drop-shadow-sm flex items-center gap-1.5">
-                    <Wrench className="w-3.5 h-3.5 text-emerald-300" />
-                    <span>On-Site Execution</span>
-                  </span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/20 backdrop-blur-xs font-semibold">
-                    Competitive Bids
-                  </span>
-                </div>
-              </div>
-
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-50 text-[#06684F] text-xs font-bold mb-3">
-                <span>Option A</span>
-                <span>•</span>
-                <span>Best for custom projects & quotes</span>
-              </div>
-
-              <h3 className="text-xl font-extrabold text-[#111827] mb-2">
-                Post a Job Free
-              </h3>
-              <p className="text-xs text-slate-600 leading-relaxed mb-6">
-                Describe your requirements, set your preferred schedule and budget, and let verified professionals submit custom offers.
-              </p>
-
-              <div className="space-y-4">
-                <div className="flex items-start gap-3">
-                  <div className="w-6 h-6 rounded-full bg-slate-100 text-[#06684F] font-bold text-xs flex items-center justify-center shrink-0 mt-0.5">
-                    1
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-[#111827]">Describe Your Work</h4>
-                    <p className="text-[11px] text-slate-500 mt-0.5">Specify the issue, locality, budget, and timing in a quick 2-minute form.</p>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-3">
-                  <div className="w-6 h-6 rounded-full bg-slate-100 text-[#06684F] font-bold text-xs flex items-center justify-center shrink-0 mt-0.5">
-                    2
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-[#111827]">Receive Direct Offers</h4>
-                    <p className="text-[11px] text-slate-500 mt-0.5">Nearby licensed technicians receive your request and respond with exact prices.</p>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-3">
-                  <div className="w-6 h-6 rounded-full bg-slate-100 text-[#06684F] font-bold text-xs flex items-center justify-center shrink-0 mt-0.5">
-                    3
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-[#111827]">Compare and Hire</h4>
-                    <p className="text-[11px] text-slate-500 mt-0.5">Check reviews, message the professional, and confirm with escrow protection.</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="pt-8">
-              <button
-                type="button"
-                onClick={() => setPostJobModalOpen(true)}
-                className="w-full py-3 bg-[#06684F] hover:bg-[#055742] text-white text-sm font-bold rounded-xl shadow-xs transition flex items-center justify-center gap-2"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Post a Job Free</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Option B — Hire Directly */}
-          <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-xs hover:shadow-md transition flex flex-col justify-between">
-            <div>
-              {/* Featured Action Image Banner (Expert Homepage.png) */}
-              <div className="relative aspect-[16/9] w-full rounded-2xl overflow-hidden mb-5 bg-slate-100 border border-slate-200 shadow-2xs group">
-                <img
-                  src={expertHomepageImg}
-                  alt="Expert HVAC technician servicing home equipment"
-                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent pointer-events-none" />
-                <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between text-white">
-                  <span className="text-xs font-bold drop-shadow-sm flex items-center gap-1.5">
-                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-300" />
-                    <span>Direct Specialist Hire</span>
-                  </span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/20 backdrop-blur-xs font-semibold">
-                    Instant Schedule
-                  </span>
-                </div>
-              </div>
-
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-100 text-slate-800 text-xs font-bold mb-3">
-                <span>Option B</span>
-                <span>•</span>
-                <span>Best for known services & fast bookings</span>
-              </div>
-
-              <h3 className="text-xl font-extrabold text-[#111827] mb-2">
-                Hire a Professional Directly
-              </h3>
-              <p className="text-xs text-slate-600 leading-relaxed mb-6">
-                Search verified trade profiles, check upfront prices and reviews, and send a direct booking request immediately.
-              </p>
-
-              <div className="space-y-4">
-                <div className="flex items-start gap-3">
-                  <div className="w-6 h-6 rounded-full bg-slate-100 text-slate-800 font-bold text-xs flex items-center justify-center shrink-0 mt-0.5">
-                    1
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-[#111827]">Search by Service & Locality</h4>
-                    <p className="text-[11px] text-slate-500 mt-0.5">Browse electricians, plumbers, HVAC technicians, and carpenters nearby.</p>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-3">
-                  <div className="w-6 h-6 rounded-full bg-slate-100 text-slate-800 font-bold text-xs flex items-center justify-center shrink-0 mt-0.5">
-                    2
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-[#111827]">Check Upfront Pricing & Skills</h4>
-                    <p className="text-[11px] text-slate-500 mt-0.5">Review fixed service rates, hourly pricing, ratings, and completed projects.</p>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-3">
-                  <div className="w-6 h-6 rounded-full bg-slate-100 text-slate-800 font-bold text-xs flex items-center justify-center shrink-0 mt-0.5">
-                    3
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-[#111827]">Select Slot & Book</h4>
-                    <p className="text-[11px] text-slate-500 mt-0.5">Pick your date and time to submit your booking. The pro confirms directly.</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="pt-8">
-              <Link
-                to="/professionals"
-                className="w-full py-3 bg-[#111827] hover:bg-slate-800 text-white text-sm font-bold rounded-xl shadow-xs transition flex items-center justify-center gap-2"
-              >
-                <Search className="w-4 h-4" />
-                <span>Find a Professional</span>
-              </Link>
-            </div>
-          </div>
-
-        </div>
-      </section>
-
-      {/* ─────────────────────────────────────────────────────────────
-          6. HOW WORKLOGY WORKS
-         ───────────────────────────────────────────────────────────── */}
-      <section className="page-container pb-12 lg:pb-16">
-        <div className="text-center max-w-2xl mx-auto mb-10">
-          <span className="text-xs font-bold uppercase tracking-wider text-[#06684F]">Simple 4-Step Process</span>
+          <span className="text-xs font-bold uppercase tracking-wider text-[#06684F]">Simple 3-Step Process</span>
           <h2 className="text-2xl sm:text-3xl font-extrabold text-[#111827] tracking-tight mt-1">
             How WorkLogy Works
           </h2>
-          <p className="text-sm text-slate-600 mt-2">
-            Get your trade repairs and installations done without phone tag or hidden costs.
+          <p className="text-xs sm:text-sm text-slate-600 mt-2">
+            Get your home repairs, maintenance, and installations completed with zero phone tag or hidden costs.
           </p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-8">
           {[
             {
-              num: '01',
-              title: 'Choose a Service',
-              desc: 'Select from specialized trade categories including Electrical, Plumbing, HVAC, Carpentry, and more.'
+              step: '01',
+              title: 'Choose your service',
+              desc: 'Select from 30+ specialized trade categories including Electrical, Plumbing, AC & HVAC, Cleaning, and Carpentry.'
             },
             {
-              num: '02',
-              title: 'Describe Your Work',
-              desc: 'Tell us your issue, preferred date, budget, and location. Your job immediately alerts nearby verified pros.'
+              step: '02',
+              title: 'Connect with a suitable professional',
+              desc: 'Review transparent quotations, verified credentials, genuine client ratings, and message specialists directly.'
             },
             {
-              num: '03',
-              title: 'Connect with Professionals',
-              desc: 'Review transparent quotes, verified trade licenses, customer reviews, and message directly.'
-            },
-            {
-              num: '04',
-              title: 'Confirm and Track Your Job',
-              desc: 'Select your preferred technician, track service progress live, and confirm job completion with peace of mind.'
+              step: '03',
+              title: 'Confirm the booking and track its progress',
+              desc: 'Lock payment safely in escrow, track arrival live on map, verify on-site with secure OTP, and sign off on completion.'
             }
-          ].map((step, idx) => (
-            <div key={idx} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs relative flex flex-col justify-between">
+          ].map((item, idx) => (
+            <div key={idx} className="bg-white p-6 sm:p-8 rounded-3xl border border-slate-200 shadow-xs relative flex flex-col justify-between group hover:border-[#06684F] transition-all">
               <div>
-                <span className="text-3xl font-black text-slate-200 block mb-3">{step.num}</span>
-                <h3 className="font-bold text-[#111827] text-sm mb-2">{step.title}</h3>
-                <p className="text-xs text-slate-600 leading-relaxed">{step.desc}</p>
+                <span className="text-4xl font-black text-emerald-100 group-hover:text-emerald-200 transition-colors block mb-3 font-mono">
+                  {item.step}
+                </span>
+                <h3 className="font-bold text-[#111827] text-base mb-2 group-hover:text-[#06684F] transition-colors">
+                  {item.title}
+                </h3>
+                <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+                  {item.desc}
+                </p>
               </div>
             </div>
           ))}
@@ -1105,17 +1031,17 @@ export default function Home() {
       </section>
 
       {/* ─────────────────────────────────────────────────────────────
-          7. WHY CUSTOMERS TRUST WORKLOGY
+          7. TRUST AND SAFETY (Section 3-G)
          ───────────────────────────────────────────────────────────── */}
-      <section className="page-container pb-16 lg:pb-24">
+      <section className="page-container pb-16 lg:pb-20">
         <div className="bg-[#06684F] text-white rounded-3xl p-8 sm:p-12 shadow-md">
           <div className="max-w-3xl">
-            <span className="text-xs font-bold uppercase tracking-wider text-emerald-200">Uncompromising Standards</span>
+            <span className="text-xs font-bold uppercase tracking-wider text-emerald-200">Customer Protections</span>
             <h2 className="text-2xl sm:text-4xl font-extrabold tracking-tight mt-1 text-white">
-              Why Customers Trust WorkLogy
+              Trust & Safety on WorkLogy
             </h2>
-            <p className="text-emerald-100 text-sm sm:text-base mt-2 leading-relaxed">
-              We built WorkLogy around genuine accountability, verified background checks, and protected payments.
+            <p className="text-emerald-100 text-xs sm:text-sm mt-2 leading-relaxed">
+              We built WorkLogy around genuine accountability, verified background checks, and protected escrow releases.
             </p>
           </div>
 
@@ -1123,33 +1049,28 @@ export default function Home() {
             {[
               {
                 icon: ShieldCheck,
-                title: 'Professional Verification',
+                title: 'Verified Professionals',
                 text: 'Every technician passes identity and trade credential verification before accepting customer work.'
               },
               {
                 icon: DollarSign,
-                title: 'Clear Pricing',
-                text: 'Upfront hourly rates and itemized estimates with zero hidden charges or unexpected markups.'
+                title: 'Transparent Quotations',
+                text: 'Clear upfront fixed rates and itemized estimates with zero hidden surprises or unexpected markups.'
               },
               {
                 icon: Lock,
-                title: 'Secure Payments and Escrow',
-                text: 'Funds are held safely in escrow and only released once you confirm work has been completed.'
-              },
-              {
-                icon: MessageSquare,
-                title: 'Direct Communication',
-                text: 'In-app real-time messaging allows you to share photos, discuss requirements, and finalize details directly.'
+                title: 'Secure Payment Processing',
+                text: 'Funds are held safely in escrow and only released once you verify satisfactory job completion.'
               },
               {
                 icon: Activity,
-                title: 'Job Progress Tracking',
-                text: 'Follow your job status live with real-time updates from dispatch and arrival to completion.'
+                title: 'Booking Status Tracking',
+                text: 'Follow your booking status in real time from dispatch, on the way, arrival with OTP, to sign-off.'
               },
               {
                 icon: HelpCircle,
-                title: 'Support and Dispute Resolution',
-                text: 'Our dedicated support team is available to assist with inquiries, questions, or dispute mediation.'
+                title: 'Customer Support & Dispute Reporting',
+                text: 'Direct access to priority dispute arbitration, fair refunds, and responsive customer help desk.'
               }
             ].map((f, i) => (
               <div key={i} className="bg-white/10 border border-white/15 p-5 rounded-2xl">
@@ -1160,6 +1081,111 @@ export default function Home() {
             ))}
           </div>
         </div>
+      </section>
+
+      {/* ─────────────────────────────────────────────────────────────
+          8. REVIEWS AND TESTIMONIALS (Section 3-H)
+         ───────────────────────────────────────────────────────────── */}
+      <section className="page-container pb-16 lg:pb-24">
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8">
+          <div>
+            <span className="text-xs font-bold uppercase tracking-wider text-[#06684F]">Verified Experiences</span>
+            <h2 className="text-2xl sm:text-3xl font-extrabold text-[#111827] tracking-tight mt-1">
+              Customer Reviews & Ratings
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-500 mt-1 max-w-xl">
+              Authentic reviews submitted exclusively by customers following completed service sign-offs.
+            </p>
+          </div>
+          <Link
+            to="/categories"
+            className="text-xs sm:text-sm font-bold text-[#06684F] hover:text-[#055742] inline-flex items-center gap-1.5 shrink-0 px-3.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 transition"
+          >
+            <span>Book a Service</span>
+            <ArrowRight className="w-4 h-4" />
+          </Link>
+        </div>
+
+        {loadingReviews ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {[...Array(3)].map((_, i) => (
+              <div key={i} className="h-48 bg-white rounded-2xl border border-slate-200 animate-pulse" />
+            ))}
+          </div>
+        ) : reviews.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {reviews.map((rev) => (
+              <div
+                key={rev._id}
+                className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col justify-between"
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-1 text-amber-500">
+                      {[...Array(5)].map((_, starIdx) => (
+                        <Star
+                          key={starIdx}
+                          className={`w-4 h-4 ${
+                            starIdx < (rev.rating || 5)
+                              ? 'fill-amber-400 text-amber-400'
+                              : 'text-slate-200'
+                          }`}
+                        />
+                      ))}
+                    </div>
+                    <span className="text-[11px] text-slate-400">
+                      {formatDate(rev.createdAt)}
+                    </span>
+                  </div>
+
+                  <p className="text-xs sm:text-sm text-slate-700 leading-relaxed mb-4 italic">
+                    "{rev.comment || 'Prompt, professional, and excellent quality of workmanship.'}"
+                  </p>
+                </div>
+
+                <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-8 h-8 rounded-full bg-emerald-100 text-[#06684F] font-bold text-xs flex items-center justify-center shrink-0">
+                      {rev.customer?.name?.[0]?.toUpperCase() || 'C'}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-bold text-xs text-slate-900 truncate">
+                        {rev.customer?.name || 'Verified Customer'}
+                      </p>
+                      <p className="text-[11px] text-slate-500 truncate">
+                        {rev.booking?.serviceTitle || rev.booking?.category || 'Home Service'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full shrink-0">
+                    <ShieldCheck className="w-3 h-3" />
+                    <span>Verified Job</span>
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="bg-white border border-slate-200 rounded-3xl p-8 sm:p-12 text-center max-w-xl mx-auto shadow-xs space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-[#06684F] flex items-center justify-center mx-auto">
+              <Star className="w-6 h-6 fill-[#06684F]" />
+            </div>
+            <div>
+              <h3 className="font-bold text-base text-slate-900">Verified Client Reviews</h3>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                WorkLogy enforces a strict Zero-Fake-Review policy. Reviews appear only after customers complete a service and approve escrow release.
+              </p>
+            </div>
+            <Link
+              to="/categories"
+              className="inline-flex items-center gap-1.5 px-5 py-2.5 bg-[#06684F] hover:bg-[#055742] text-white text-xs font-bold rounded-xl transition"
+            >
+              <span>Book Your First Service</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </Link>
+          </div>
+        )}
       </section>
 
       {/* ─────────────────────────────────────────────────────────────

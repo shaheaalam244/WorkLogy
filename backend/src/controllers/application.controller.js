@@ -133,12 +133,22 @@ export const getJobApplications = async (req, res, next) => {
 
 export const getVendorApplications = async (req, res, next) => {
   try {
-    const applications = await Application.find({ vendor: req.user.id })
+    const filter = { vendor: req.user.id };
+    if (req.query.status && req.query.status !== 'all') {
+      filter.status = req.query.status;
+    }
+
+    const applications = await Application.find(filter)
       .populate({
         path: 'job',
-        populate: { path: 'customer category' }
+        populate: [
+          { path: 'customer', select: 'name email phone avatar' },
+          { path: 'category', select: 'name slug icon' },
+          { path: 'booking', select: '_id status bookingReference scheduledDate pricing' }
+        ]
       })
       .sort({ createdAt: -1 });
+
     res.status(200).json({ success: true, applications });
   } catch (error) {
     next(error);

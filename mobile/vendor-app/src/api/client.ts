@@ -1,10 +1,26 @@
 import { CONFIG } from '../config';
 import { secureStorage } from '../storage/secureStorage';
 import { STORAGE_KEYS } from '../constants';
-import type { User, Job, Booking, VendorProfile, ChatMessage } from '../types';
+import type { User, Job, Booking, VendorProfile, ChatMessage, ServiceCategory } from '../types';
 
 interface RequestOptions extends RequestInit {
   requiresAuth?: boolean;
+}
+
+export async function getStoredAuthToken(): Promise<string | null> {
+  const primary = await secureStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+  if (primary && typeof primary === 'string' && primary.trim().length > 0) {
+    return primary.trim();
+  }
+
+  for (const altKey of ['worklogy_token', 'token', 'worklogy_auth_token']) {
+    const alt = await secureStorage.getItem(altKey);
+    if (alt && typeof alt === 'string' && alt.trim().length > 0) {
+      return alt.trim();
+    }
+  }
+
+  return null;
 }
 
 async function request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
@@ -17,7 +33,7 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
   };
 
   if (requiresAuth) {
-    const token = await secureStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+    const token = await getStoredAuthToken();
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -83,11 +99,54 @@ export const api = {
     }
   },
 
+  // Categories
+  categories: {
+    getAll: async () => {
+      return await request<{ success: boolean; count: number; categories: ServiceCategory[] }>('/categories', {
+        requiresAuth: false
+      });
+    }
+  },
+
   // Jobs & Tenders
   jobs: {
-    getOpenJobs: async (params?: { urgency?: string }) => {
-      const query = params?.urgency ? `?urgency=${params.urgency}` : '';
-      return await request<{ success: boolean; count: number; jobs: Job[] }>(`/jobs/open${query}`);
+    getOpenJobs: async (params?: { urgency?: string; category?: string; tab?: string; locality?: string; page?: number; limit?: number; search?: string }) => {
+      const searchParams = new URLSearchParams();
+      if (params?.urgency) searchParams.append('urgency', params.urgency);
+      if (params?.category) searchParams.append('category', params.category);
+      if (params?.tab) searchParams.append('tab', params.tab);
+      if (params?.locality) searchParams.append('locality', params.locality);
+      if (params?.page) searchParams.append('page', String(params.page));
+      if (params?.limit) searchParams.append('limit', String(params.limit));
+      if (params?.search) searchParams.append('search', params.search);
+      const query = searchParams.toString() ? `?${searchParams.toString()}` : '';
+      return await request<{
+        success: boolean;
+        count?: number;
+        total?: number;
+        page?: number;
+        totalPages?: number;
+        jobs: Job[];
+        counts?: { allAvailable: number; new: number; open: number; assignedToMe: number; cancelled: number };
+        vendorCoverage?: {
+          city: string;
+          localities: string[];
+          hasCityWide: boolean;
+          approvedCategoriesCount: number;
+          categories: any[];
+        };
+        configurationStatus?: 'ready' | 'missing_categories' | 'missing_service_area';
+        vendorEligibility?: {
+          approvalStatus: string;
+          canClaim: boolean;
+          reason: string;
+        };
+        message?: string;
+      }>(`/jobs/nearby${query}`);
+    },
+
+    getJobDetails: async (jobId: string) => {
+      return await request<{ success: boolean; job: Job }>(`/jobs/${jobId}`);
     },
 
     claimEmergencyLead: async (jobId: string) => {
@@ -96,10 +155,38 @@ export const api = {
       });
     },
 
-    submitProposal: async (jobId: string, data: { amount: number; coverLetter?: string }) => {
-      return await request<{ success: boolean; message: string }>(`/jobs/${jobId}/proposals`, {
+    acceptJob: async (jobId: string, data: any = {}) => {
+      return await request<{ success: boolean; message: string; booking: Booking }>(`/jobs/${jobId}/accept`, {
         method: 'POST',
         body: JSON.stringify(data)
+      });
+    },
+
+    submitProposal: async (jobId: string, data: {
+      proposedAmount?: number;
+      amount?: number;
+      coverLetter?: string;
+      estimatedDuration?: string;
+      materialCharges?: number;
+      pricingBasis?: string;
+    }) => {
+      const finalAmount = data.proposedAmount || data.amount || 0;
+      return await request<{ success: boolean; message: string }>('/applications', {
+        method: 'POST',
+        body: JSON.stringify({ jobId, proposedAmount: finalAmount, ...data })
+      });
+    }
+  },
+
+  // Applications / Quotes
+  applications: {
+    getMyApplications: async () => {
+      return await request<{ success: boolean; count: number; applications: any[] }>('/applications/vendor');
+    },
+
+    withdraw: async (id: string) => {
+      return await request<{ success: boolean; message: string }>(`/applications/${id}/withdraw`, {
+        method: 'PATCH'
       });
     }
   },
@@ -109,6 +196,10 @@ export const api = {
     getMyBookings: async (params?: { status?: string }) => {
       const query = params?.status ? `?status=${params.status}` : '';
       return await request<{ success: boolean; count: number; bookings: Booking[] }>(`/bookings/my-bookings${query}`);
+    },
+
+    getById: async (id: string) => {
+      return await request<{ success: boolean; booking: Booking }>(`/bookings/${id}`);
     },
 
     updateStatus: async (id: string, status: string, notes?: string) => {
@@ -130,6 +221,52 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(data || {})
       });
+    },
+
+    respondDirectBooking: async (id: string, action: 'accept' | 'decline', reason?: string) => {
+      return await request<{ success: boolean; message: string; booking: Booking }>(`/bookings/${id}/respond`, {
+        method: 'PATCH',
+        body: JSON.stringify({ action, reason })
+      });
+    }
+  },
+
+  // Service Offerings & Listings Management
+  services: {
+    getMyServices: async (params?: { status?: string }) => {
+      const query = params?.status && params.status !== 'all' ? `?status=${params.status}` : '';
+      return await request<{ success: boolean; count: number; services: any[] }>(`/vendors/services/my${query}`);
+    },
+
+    getById: async (id: string) => {
+      return await request<{ success: boolean; service: any }>(`/vendors/services/${id}`);
+    },
+
+    create: async (data: any) => {
+      return await request<{ success: boolean; message: string; service: any }>('/vendors/services', {
+        method: 'POST',
+        body: JSON.stringify(data)
+      });
+    },
+
+    update: async (id: string, data: any) => {
+      return await request<{ success: boolean; message: string; service: any }>(`/vendors/services/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data)
+      });
+    },
+
+    updateStatus: async (id: string, status: string) => {
+      return await request<{ success: boolean; message: string; service: any }>(`/vendors/services/${id}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status })
+      });
+    },
+
+    delete: async (id: string) => {
+      return await request<{ success: boolean; message: string }>(`/vendors/services/${id}`, {
+        method: 'DELETE'
+      });
     }
   },
 
@@ -137,6 +274,13 @@ export const api = {
   vendors: {
     getProfile: async () => {
       return await request<{ success: boolean; vendor: VendorProfile }>('/vendors/profile/me');
+    },
+
+    updateProfile: async (data: Partial<VendorProfile>) => {
+      return await request<{ success: boolean; vendor: VendorProfile }>('/vendors/profile/me', {
+        method: 'PUT',
+        body: JSON.stringify(data)
+      });
     },
 
     toggleAvailability: async (isAvailable: boolean) => {
@@ -163,17 +307,55 @@ export const api = {
     }
   },
 
-  // Chat
-  chat: {
-    getMessages: async (conversationId: string) => {
-      return await request<{ success: boolean; messages: ChatMessage[] }>(`/chat/conversations/${conversationId}/messages`);
+  // Notifications
+  notifications: {
+    getAll: async () => {
+      return await request<{ success: boolean; count: number; notifications: any[] }>('/notifications');
     },
 
-    sendMessage: async (data: { receiverId: string; text: string; conversationId?: string }) => {
+    getUnreadCount: async () => {
+      return await request<{ success: boolean; count: number }>('/notifications/unread-count');
+    },
+
+    markAllRead: async () => {
+      return await request<{ success: boolean }>('/notifications/read-all', {
+        method: 'PATCH'
+      });
+    }
+  },
+
+  // Chat
+  chat: {
+    getConversations: async () => {
+      return await request<{ success: boolean; conversations: any[] }>('/chat/conversations');
+    },
+
+    getMessages: async (conversationId: string, params?: { limit?: number; before?: string }) => {
+      const q = new URLSearchParams();
+      if (params?.limit) q.append('limit', String(params.limit));
+      if (params?.before) q.append('before', params.before);
+      const queryStr = q.toString() ? `?${q.toString()}` : '';
+      return await request<{ success: boolean; messages: ChatMessage[]; hasMore?: boolean }>(`/chat/conversations/${conversationId}/messages${queryStr}`);
+    },
+
+    sendMessage: async (data: { receiverId?: string; recipientId?: string; text: string; conversationId?: string; clientTempId?: string; attachments?: any[] }) => {
       return await request<{ success: boolean; message: ChatMessage }>('/chat/messages', {
         method: 'POST',
-        body: JSON.stringify(data)
+        body: JSON.stringify({
+          ...data,
+          recipientId: data.recipientId || data.receiverId
+        })
       });
+    },
+
+    markConversationRead: async (conversationId: string) => {
+      return await request<{ success: boolean }>(`/chat/conversations/${conversationId}/read`, {
+        method: 'PATCH'
+      });
+    },
+
+    getUnreadCount: async () => {
+      return await request<{ success: boolean; count: number }>('/chat/unread-count');
     }
   }
 };

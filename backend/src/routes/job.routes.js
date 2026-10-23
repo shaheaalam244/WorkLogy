@@ -29,6 +29,8 @@ router.post('/', protect, authorize('customer'), validateCreateJob, createJob);
 
 router.post('/upload-image', protect, upload.single('image'), uploadJobImage);
 router.get('/my-customer-jobs', protect, authorize('customer'), getMyCustomerJobs);
+router.get('/my-jobs', protect, authorize('customer'), getMyCustomerJobs);
+router.get('/open', protect, authorize('vendor'), getNearbyJobs);
 router.post('/:id/accept', protect, authorize('vendor'), claimJobInstant);
 router.post('/:id/claim', protect, authorize('vendor'), claimJobInstant);
 router.post('/:id/claim-instant', protect, authorize('vendor'), claimJobInstant);

@@ -420,3 +420,29 @@ export const respondToReview = async (req, res, next) => {
     next(error);
   }
 };
+
+/**
+ * Get recent verified platform reviews for the customer marketplace homepage
+ */
+export const getRecentReviews = async (req, res, next) => {
+  try {
+    const limit = Math.max(1, Math.min(20, parseInt(req.query.limit) || 6));
+    const reviews = await Review.find({
+      moderationStatus: 'approved',
+      isPublic: true
+    })
+      .populate('customer', 'name avatar')
+      .populate('vendor', 'name businessName avatar')
+      .populate('booking', 'serviceTitle category scheduledDate')
+      .sort({ createdAt: -1 })
+      .limit(limit);
+
+    res.status(200).json({
+      success: true,
+      count: reviews.length,
+      reviews
+    });
+  } catch (error) {
+    next(error);
+  }
+};

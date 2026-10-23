@@ -345,18 +345,18 @@ export default function HeroCarousel({
           {/* Eyebrow Badge */}
           <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 text-xs font-bold backdrop-blur-md shadow-xs">
             <ShieldCheck className="w-4 h-4 text-emerald-400" />
-            <span>Verified Local Professionals</span>
+            <span>Verified Professionals · Escrow Protected</span>
           </div>
 
-          {/* Main Heading */}
+          {/* Main Heading - Section 3-B requirement */}
           <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-[3.25rem] xl:text-[3.65rem] font-black text-white tracking-tight leading-[1.15] drop-shadow-sm">
-            Trusted Local Experts, <br className="hidden sm:inline" />
-            <span className="text-[#34D399]">Just a Click Away.</span>
+            Trusted Home Services, <br className="hidden sm:inline" />
+            <span className="text-[#34D399]">Right at Your Doorstep.</span>
           </h1>
 
-          {/* Description */}
+          {/* Supporting text - Section 3-B requirement */}
           <p className="text-sm sm:text-base lg:text-lg text-slate-200 max-w-xl leading-relaxed drop-shadow-sm">
-            Find verified professionals for everyday home repairs and trade services. Post your job for free to compare quotes, or hire a trusted expert directly with complete peace of mind.
+            Find verified professionals for your home and everyday needs.
           </p>
 
           {/* ── Search Bar with Real Category Suggestions ── */}
@@ -377,7 +377,7 @@ export default function HeroCarousel({
                     setShowSuggestions(true);
                   }}
                   onFocus={() => setShowSuggestions(true)}
-                  placeholder="What service do you need? (e.g. Electrician, Plumber)"
+                  placeholder="What service do you need today?"
                   className="w-full bg-transparent text-sm text-[#111827] placeholder:text-slate-400 focus:outline-none"
                   autoComplete="off"
                 />
@@ -418,6 +418,32 @@ export default function HeroCarousel({
               </button>
             </form>
 
+            {/* Popular Search Suggestions (Section 3-B) */}
+            <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
+              <span className="text-[11px] font-semibold text-slate-300">Popular:</span>
+              {[
+                { name: 'Electrician', slug: 'electrical-services' },
+                { name: 'Plumber', slug: 'plumbing-services' },
+                { name: 'AC Repair', slug: 'ac-hvac-services' },
+                { name: 'Home Cleaning', slug: 'home-cleaning' },
+                { name: 'Carpenter', slug: 'carpentry-furniture' },
+                { name: 'Painting', slug: 'painting-services' },
+                { name: 'Appliance Repair', slug: 'appliance-repair' }
+              ].map((sugg) => (
+                <button
+                  key={sugg.slug}
+                  type="button"
+                  onClick={() => {
+                    if (setSearchKeyword) setSearchKeyword(sugg.name);
+                    navigate(`/categories/${sugg.slug}`);
+                  }}
+                  className="px-2.5 py-0.5 rounded-full bg-white/15 hover:bg-white/25 text-white text-[11px] font-medium transition backdrop-blur-xs border border-white/10"
+                >
+                  {sugg.name}
+                </button>
+              ))}
+            </div>
+
             {/* Suggestions Dropdown Popover */}
             {showSuggestions && suggestions.length > 0 && (
               <div
@@ -457,38 +483,50 @@ export default function HeroCarousel({
             )}
           </div>
 
-          {/* CTA Buttons */}
+          {/* Primary CTA: Explore Services & Secondary CTA */}
           <div className="flex flex-wrap items-center gap-3 pt-1">
+            <Link
+              to="/categories"
+              className="px-6 py-3.5 bg-[#06684F] hover:bg-[#055742] text-white font-bold text-sm rounded-xl shadow-lg hover:shadow-xl transition flex items-center gap-2 active:scale-95"
+            >
+              <span>Explore Services</span>
+              <ArrowRight className="w-4 h-4" />
+            </Link>
+
+            <Link
+              to="/professionals"
+              className="px-6 py-3.5 bg-white/10 hover:bg-white/20 text-white border border-white/25 font-semibold text-sm rounded-xl backdrop-blur-md transition flex items-center gap-2 shadow-sm"
+            >
+              <span>Find Professionals</span>
+            </Link>
+
             <button
               type="button"
               onClick={onPostJobClick}
-              className="px-6 py-3.5 bg-[#06684F] hover:bg-[#055742] text-white font-bold text-sm rounded-xl shadow-lg hover:shadow-xl transition flex items-center gap-2 active:scale-95"
+              className="px-4 py-3 text-slate-200 hover:text-white font-medium text-xs rounded-xl transition flex items-center gap-1.5"
             >
-              <Plus className="w-4 h-4" />
-              <span>+ Post a Job Free</span>
+              <Plus className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Post a Job Free</span>
             </button>
-
-            <Link
-              to="/categories"
-              className="px-6 py-3.5 bg-white/10 hover:bg-white/20 text-white border border-white/25 font-semibold text-sm rounded-xl backdrop-blur-md transition flex items-center gap-2 shadow-sm"
-            >
-              <span>Explore Services →</span>
-            </Link>
           </div>
 
-          {/* Trust Indicators */}
-          <div className="pt-2 flex flex-wrap items-center gap-6 text-xs text-slate-200 font-medium">
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+          {/* Trust Indicators (Section 3-B) */}
+          <div className="pt-2 flex flex-wrap items-center gap-4 sm:gap-6 text-xs text-slate-200 font-medium">
+            <div className="flex items-center gap-1.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
               <span>Verified Professionals</span>
             </div>
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-              <span>Clear Pricing</span>
+            <div className="flex items-center gap-1.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>Transparent Quotations</span>
             </div>
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-              <span>Secure Payments</span>
+            <div className="flex items-center gap-1.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>Secure Payments & Escrow</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>Live Booking Tracking</span>
             </div>
           </div>
 

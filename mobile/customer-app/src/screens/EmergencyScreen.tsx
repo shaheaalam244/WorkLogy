@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -7,138 +7,310 @@ import {
   TextInput,
   TouchableOpacity,
   Alert,
-  ActivityIndicator
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { api } from '../api/client';
 import { COLORS } from '../theme/colors';
+import { secureStorage } from '../storage/secureStorage';
+import { STORAGE_KEYS } from '../constants';
+import { getStoredLocation, detectCurrentLocation } from '../services/locationService';
 
 export default function EmergencyScreen({ navigation }: any) {
   const [selectedTrade, setSelectedTrade] = useState('Electrical Breakdown');
   const [description, setDescription] = useState('');
-  const [address, setAddress] = useState('Sector 62, Noida, UP');
+  const [address, setAddress] = useState('');
+  const [city, setCity] = useState('Lucknow');
+  const [pincode, setPincode] = useState('226010');
   const [submitting, setSubmitting] = useState(false);
-  const [isBroadcasting, setIsBroadcasting] = useState(false);
+  const [detectingLocation, setDetectingLocation] = useState(false);
 
   const emergencyTrades = [
-    { title: 'Electrical Breakdown', emoji: '⚡', desc: 'Short circuit, sparking, total blackout' },
-    { title: 'Plumbing & Water Leak', emoji: '🚰', desc: 'Burst pipe, heavy flooding, no water' },
-    { title: 'Lockout / Locksmith', emoji: '🔑', desc: 'Locked out, broken key, door jammed' },
-    { title: 'AC Compressor Failure', emoji: '❄️', desc: 'Burning smell, gas leak, complete shutdown' }
+    { title: 'Electrical Breakdown', slug: 'electrician', icon: 'flash', desc: 'Short circuit, sparking, total blackout' },
+    { title: 'Plumbing & Water Leak', slug: 'plumber', icon: 'water', desc: 'Burst pipe, heavy flooding, no water' },
+    { title: 'Lockout / Locksmith', slug: 'carpentry', icon: 'key', desc: 'Locked out, broken key, door jammed' },
+    { title: 'AC Breakdown / Gas Leak', slug: 'ac-repair', icon: 'snow', desc: 'Burning smell, gas leak, complete shutdown' }
   ];
 
+  useEffect(() => {
+    loadSavedLocation();
+  }, []);
+
+  const loadSavedLocation = async () => {
+    try {
+      const loc = await getStoredLocation(true);
+      if (loc) {
+        if (loc.city) setCity(loc.city);
+        if (loc.street || loc.locality) setAddress(loc.street || loc.locality || '');
+        if (loc.pincode) setPincode(loc.pincode);
+      }
+    } catch {
+      // Fallback
+    }
+  };
+
+  const handleDetectLocation = async () => {
+    try {
+      setDetectingLocation(true);
+      const loc = await detectCurrentLocation(true);
+      if (loc) {
+        if (loc.city) setCity(loc.city);
+        if (loc.street || loc.locality) setAddress(loc.street || loc.locality || '');
+        if (loc.pincode) setPincode(loc.pincode);
+        Alert.alert('Location Detected', `Auto-detected location:\n\n${loc.fullAddress}`);
+      }
+    } catch (err: any) {
+      Alert.alert('Location Error', 'Could not detect your GPS location automatically.');
+    } finally {
+      setDetectingLocation(false);
+    }
+  };
+
+  // Safe back handler ensuring app never exits unexpectedly
+  const handleBackNavigation = () => {
+    if (navigation.canGoBack && navigation.canGoBack()) {
+      navigation.goBack(true);
+    } else if (navigation.resetTo) {
+      navigation.resetTo('HomeTab');
+    } else {
+      navigation.navigate('HomeTab');
+    }
+  };
+
+  // Intercept back actions when emergency details have been entered
+  useEffect(() => {
+    const isDirty = () => {
+      return (
+        description.trim().length > 0 ||
+        address.trim().length > 0 ||
+        selectedTrade !== 'Electrical Breakdown'
+      );
+    };
+
+    const unregister = navigation?.registerBackHandler?.(() => {
+      if (isDirty()) {
+        Alert.alert(
+          'Discard Emergency Request?',
+          'You have entered details for an urgent service dispatch. Are you sure you want to discard them and go back?',
+          [
+            { text: 'Keep Editing', style: 'cancel' },
+            {
+              text: 'Discard',
+              style: 'destructive',
+              onPress: () => handleBackNavigation()
+            }
+          ]
+        );
+        return true;
+      }
+      return false;
+    });
+
+    return () => {
+      unregister?.();
+    };
+  }, [description, address, selectedTrade, navigation]);
+
   const handleTriggerEmergency = async () => {
-    if (!description.trim()) {
-      Alert.alert('Describe the Emergency', 'Please briefly describe the urgent breakdown or safety hazard.');
+    if (!description.trim() || description.trim().length < 5) {
+      Alert.alert('Describe the Emergency', 'Please briefly describe the urgent breakdown (at least 5 characters).');
       return;
     }
 
+    if (!city.trim()) {
+      Alert.alert('Required Information', 'Please provide a valid city for emergency dispatch.');
+      return;
+    }
+
+    const tradeObj = emergencyTrades.find((t) => t.title === selectedTrade) || emergencyTrades[0];
+
     try {
       setSubmitting(true);
-      const res = await api.jobs.createJob({
+      await api.jobs.createJob({
         title: `EMERGENCY: ${selectedTrade}`,
         description: description.trim(),
-        urgency: 'emergency',
-        pricing: {
+        category: tradeObj.slug,
+        urgency: 'urgent',
+        budget: {
           type: 'fixed',
           amount: 499
         },
-        address: {
-          street: address.trim(),
-          city: 'Noida',
-          pincode: '201301'
+        location: {
+          address: address.trim() || 'Urgent Site Location',
+          city: city.trim() || 'Noida',
+          zipCode: pincode.trim() || '201301'
         }
       });
 
-      setIsBroadcasting(true);
       Alert.alert(
         'Emergency Radar Active 🚨',
-        'Nearby certified emergency technicians have received your alert. The first available professional to accept will be dispatched immediately.',
-        [{ text: 'View Emergency Tracking', onPress: () => navigation.navigate('MyJobsTab') }]
+        'Nearby certified emergency technicians have received your alert. The first available professional to accept will be dispatched immediately with 30-45 min ETA.',
+        [
+          {
+            text: 'Track Dispatch',
+            onPress: () => {
+              if (navigation.replace) {
+                navigation.replace('MyJobsTab');
+              } else {
+                navigation.navigate('MyJobsTab');
+              }
+            }
+          }
+        ]
       );
     } catch (err: any) {
-      Alert.alert('Dispatch Failed', err.message || 'Could not connect to emergency dispatch server.');
+      Alert.alert('Dispatch Failed', err.message || 'Could not connect to emergency dispatch server. Please try again.');
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <ScrollView style={styles.container}>
-      {/* 1. Life Safety Warning */}
-      <View style={styles.safetyNotice}>
-        <Text style={styles.safetyEmoji}>⚠️</Text>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.safetyTitle}>CRITICAL LIFE SAFETY WARNING</Text>
-          <Text style={styles.safetyDesc}>
-            For active fires, medical emergencies, gas explosions, or physical danger, please immediately call national emergency services (112, 101, 102). WorkLogy provides technical trade repairs only.
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+      >
+        {/* 1. Life Safety Warning */}
+        <View style={styles.safetyNotice}>
+          <Ionicons name="warning" size={24} color="#DC2626" />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.safetyTitle}>CRITICAL LIFE SAFETY WARNING</Text>
+            <Text style={styles.safetyDesc}>
+              For active fires, medical emergencies, gas explosions, or physical danger, please immediately call national emergency services (112, 101, 102). WorkLogy provides technical trade repairs only.
+            </Text>
+          </View>
+        </View>
+
+        {/* 2. Dispatch Priority Info Card (Harmonized with navigator header) */}
+        <View style={styles.infoBanner}>
+          <View style={styles.infoBannerTop}>
+            <View style={styles.emergencyPill}>
+              <Ionicons name="flash" size={13} color="#FFFFFF" />
+              <Text style={styles.emergencyPillText}>24/7 PRIORITY RADAR</Text>
+            </View>
+            <View style={styles.etaBadge}>
+              <Ionicons name="time" size={13} color="#059669" />
+              <Text style={styles.etaBadgeText}>ETA: 30–45 mins</Text>
+            </View>
+          </View>
+          <Text style={styles.infoDesc}>
+            Standard emergency diagnostic fee: ₹499 upfront labor & diagnostics. Nearest verified contractors are alerted on high priority.
           </Text>
         </View>
-      </View>
 
-      {/* 2. Dispatch Header */}
-      <View style={styles.header}>
-        <Text style={styles.title}>24/7 Rapid Emergency Dispatch</Text>
-        <Text style={styles.subtitle}>
-          Average on-site technician arrival: 30–45 minutes. Standard emergency diagnostic visit fee: ₹499.
-        </Text>
-      </View>
+        {/* 3. Trade Category Selector */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Select Emergency Breakdown Category</Text>
+          {emergencyTrades.map((t) => {
+            const isSelected = selectedTrade === t.title;
+            return (
+              <TouchableOpacity
+                key={t.title}
+                style={[styles.tradeCard, isSelected && styles.tradeCardActive]}
+                onPress={() => setSelectedTrade(t.title)}
+                activeOpacity={0.8}
+              >
+                <View style={[styles.tradeIconBox, isSelected && styles.tradeIconBoxActive]}>
+                  <Ionicons name={t.icon as any} size={22} color={isSelected ? '#DC2626' : '#64748B'} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.tradeTitle, isSelected && styles.tradeTitleActive]}>{t.title}</Text>
+                  <Text style={styles.tradeDesc}>{t.desc}</Text>
+                </View>
+                <Ionicons
+                  name={isSelected ? 'radio-button-on' : 'radio-button-off'}
+                  size={20}
+                  color={isSelected ? '#DC2626' : '#CBD5E1'}
+                />
+              </TouchableOpacity>
+            );
+          })}
+        </View>
 
-      {/* 3. Trade Selector */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Select Emergency Breakdown Category</Text>
-        {emergencyTrades.map((t) => (
+        {/* 4. Symptom Description & Dispatch Address */}
+        <View style={styles.section}>
+          <Text style={styles.fieldLabel}>What happened? (Describe symptoms) *</Text>
+          <TextInput
+            style={styles.textArea}
+            placeholder="e.g. Main switchboard sparked and complete flat has lost power..."
+            placeholderTextColor={COLORS.textMuted}
+            multiline
+            numberOfLines={3}
+            value={description}
+            onChangeText={setDescription}
+          />
+
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, marginBottom: 6 }}>
+            <Text style={[styles.fieldLabel, { marginTop: 0, marginBottom: 0 }]}>Emergency Address / Locality</Text>
+            <TouchableOpacity
+              onPress={handleDetectLocation}
+              disabled={detectingLocation}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
+              activeOpacity={0.7}
+            >
+              {detectingLocation ? (
+                <ActivityIndicator size="small" color={COLORS.primary} />
+              ) : (
+                <Ionicons name="navigate-circle" size={16} color={COLORS.primary} />
+              )}
+              <Text style={{ fontSize: 11, fontWeight: '700', color: COLORS.primary }}>
+                {detectingLocation ? 'Detecting...' : 'Auto-Detect GPS'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          <TextInput
+            style={styles.input}
+            placeholder="Flat / Society / Landmark"
+            placeholderTextColor={COLORS.textMuted}
+            value={address}
+            onChangeText={setAddress}
+          />
+
+          <View style={styles.locationRow}>
+            <TextInput
+              style={[styles.input, { flex: 1, marginRight: 8 }]}
+              placeholder="City *"
+              placeholderTextColor={COLORS.textMuted}
+              value={city}
+              onChangeText={setCity}
+            />
+            <TextInput
+              style={[styles.input, { width: 110 }]}
+              placeholder="PIN Code"
+              placeholderTextColor={COLORS.textMuted}
+              keyboardType="numeric"
+              value={pincode}
+              onChangeText={setPincode}
+            />
+          </View>
+
           <TouchableOpacity
-            key={t.title}
-            style={[styles.tradeCard, selectedTrade === t.title && styles.tradeCardActive]}
-            onPress={() => setSelectedTrade(t.title)}
+            style={styles.dispatchBtn}
+            onPress={handleTriggerEmergency}
+            disabled={submitting}
+            activeOpacity={0.85}
           >
-            <Text style={styles.tradeEmoji}>{t.emoji}</Text>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.tradeTitle}>{t.title}</Text>
-              <Text style={styles.tradeDesc}>{t.desc}</Text>
-            </View>
-            <View style={[styles.radioCircle, selectedTrade === t.title && styles.radioActive]} />
+            {submitting ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <View style={styles.dispatchBtnContent}>
+                <Ionicons name="flash" size={18} color="#FFFFFF" />
+                <Text style={styles.dispatchBtnText}>Broadcast Emergency Callout</Text>
+              </View>
+            )}
           </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* 4. Description & Address */}
-      <View style={styles.section}>
-        <Text style={styles.fieldLabel}>What happened? (Describe symptoms)</Text>
-        <TextInput
-          style={styles.textArea}
-          placeholder="e.g. Main switchboard sparked and complete flat has lost power..."
-          placeholderTextColor={COLORS.textMuted}
-          multiline
-          numberOfLines={3}
-          value={description}
-          onChangeText={setDescription}
-        />
-
-        <Text style={styles.fieldLabel}>Current Location / Address</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Flat / Society / Landmark"
-          placeholderTextColor={COLORS.textMuted}
-          value={address}
-          onChangeText={setAddress}
-        />
-
-        <TouchableOpacity
-          style={styles.dispatchBtn}
-          onPress={handleTriggerEmergency}
-          disabled={submitting}
-        >
-          {submitting ? (
-            <ActivityIndicator size="small" color="#FFFFFF" />
-          ) : (
-            <Text style={styles.dispatchBtnText}>Broadcast Emergency Callout ⚡</Text>
-          )}
-        </TouchableOpacity>
-      </View>
-
-      <View style={{ height: 40 }} />
-    </ScrollView>
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -147,16 +319,20 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F8FAFC'
   },
+  scrollView: {
+    flex: 1
+  },
+  scrollContent: {
+    paddingBottom: Platform.OS === 'ios' ? 70 : 50
+  },
   safetyNotice: {
     flexDirection: 'row',
     backgroundColor: '#FEF2F2',
     borderBottomWidth: 1,
     borderBottomColor: '#FECACA',
     padding: 14,
-    gap: 10
-  },
-  safetyEmoji: {
-    fontSize: 22
+    gap: 12,
+    alignItems: 'flex-start'
   },
   safetyTitle: {
     fontSize: 11,
@@ -168,33 +344,65 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#7F1D1D',
     marginTop: 2,
-    lineHeight: 15
-  },
-  header: {
-    padding: 16,
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: '#DC2626'
-  },
-  subtitle: {
-    fontSize: 12,
-    color: COLORS.textSecondary,
-    marginTop: 4,
     lineHeight: 16
   },
-  section: {
+  infoBanner: {
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
     padding: 16
+  },
+  infoBannerTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8
+  },
+  emergencyPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#DC2626',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8
+  },
+  emergencyPillText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#FFFFFF'
+  },
+  etaBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#A7F3D0'
+  },
+  etaBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#065F46'
+  },
+  infoDesc: {
+    fontSize: 12,
+    color: COLORS.textSecondary,
+    lineHeight: 17
+  },
+  section: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 4
   },
   sectionTitle: {
     fontSize: 14,
     fontWeight: '800',
     color: COLORS.textDark,
-    marginBottom: 10
+    marginBottom: 12
   },
   tradeCard: {
     flexDirection: 'row',
@@ -203,37 +411,37 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     padding: 14,
     borderWidth: 1.5,
-    borderColor: COLORS.border,
-    marginBottom: 8,
+    borderColor: '#E2E8F0',
+    marginBottom: 10,
     gap: 12
   },
   tradeCardActive: {
     borderColor: '#DC2626',
     backgroundColor: '#FFF5F5'
   },
-  tradeEmoji: {
-    fontSize: 24
+  tradeIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  tradeIconBoxActive: {
+    backgroundColor: '#FEE2E2'
   },
   tradeTitle: {
     fontSize: 14,
     fontWeight: '800',
     color: COLORS.textDark
   },
+  tradeTitleActive: {
+    color: '#991B1B'
+  },
   tradeDesc: {
     fontSize: 11,
     color: COLORS.textSecondary,
     marginTop: 2
-  },
-  radioCircle: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: COLORS.border
-  },
-  radioActive: {
-    borderColor: '#DC2626',
-    backgroundColor: '#DC2626'
   },
   fieldLabel: {
     fontSize: 12,
@@ -245,30 +453,46 @@ const styles = StyleSheet.create({
   textArea: {
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: '#CBD5E1',
     borderRadius: 12,
     padding: 12,
     fontSize: 13,
     color: COLORS.textDark,
-    height: 80,
+    height: 85,
     textAlignVertical: 'top'
   },
   input: {
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: '#CBD5E1',
     borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 13,
     color: COLORS.textDark
   },
+  locationRow: {
+    flexDirection: 'row',
+    marginTop: 8
+  },
   dispatchBtn: {
     backgroundColor: '#DC2626',
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
-    marginTop: 20
+    justifyContent: 'center',
+    marginTop: 22,
+    marginBottom: 20,
+    shadowColor: '#DC2626',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4
+  },
+  dispatchBtnContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
   },
   dispatchBtnText: {
     color: '#FFFFFF',

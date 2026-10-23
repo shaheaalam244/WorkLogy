@@ -83,6 +83,25 @@ export default function VendorLoginScreen({ navigation }: any) {
           )}
         </TouchableOpacity>
 
+        {/* Demo Fast Login Button */}
+        <TouchableOpacity
+          style={styles.demoLoginBtn}
+          onPress={async () => {
+            setEmail('vendor@worklogy.com');
+            setPassword('password123');
+            try {
+              await login({ email: 'vendor@worklogy.com', password: 'password123' });
+              navigation.navigate('VendorHomeTab');
+            } catch (err: any) {
+              Alert.alert('Login Error', err.message);
+            }
+          }}
+          disabled={isLoading}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.demoLoginBtnText}>⚡ Demo One-Tap Pro Sign In</Text>
+        </TouchableOpacity>
+
         <View style={styles.footerRow}>
           <Text style={styles.footerText}>New professional partner? </Text>
           <TouchableOpacity onPress={() => navigation.navigate('VendorRegister')}>
@@ -175,6 +194,21 @@ const styles = StyleSheet.create({
   loginBtnText: {
     color: '#FFFFFF',
     fontSize: 14,
+    fontWeight: '800'
+  },
+  demoLoginBtn: {
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1.5,
+    borderColor: '#A7F3D0',
+    height: 46,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10
+  },
+  demoLoginBtnText: {
+    color: '#065F46',
+    fontSize: 13,
     fontWeight: '800'
   },
   footerRow: {

@@ -21,11 +21,16 @@ import {
   X,
   FileText,
   AlertTriangle,
-  Info
+  Info,
+  Star,
+  Printer,
+  XCircle,
+  RotateCcw
 } from 'lucide-react';
 import Button from '../../components/common/Button';
 import Loader from '../../components/common/Loader';
 import { bookingAPI } from '../../api/booking.api';
+import { jobAPI } from '../../api/job.api';
 import { formatCurrency, formatDate, formatFullAddress, getDisplayName } from '../../utils/formatters';
 import { getServiceImage } from '../../constants/serviceImages';
 
@@ -37,7 +42,7 @@ export default function VendorManageJob() {
   const [status, setStatus] = useState('assigned');
 
   // GPS Geofence Arrival State
-  const [arrivalStatus, setArrivalStatus] = useState('NOT_CHECKED'); // NOT_CHECKED | REQUESTING_LOCATION | ARRIVAL_VERIFIED | OUTSIDE_SERVICE_RADIUS | GPS_ACCURACY_INSUFFICIENT | LOCATION_PERMISSION_DENIED | LOCATION_UNAVAILABLE
+  const [arrivalStatus, setArrivalStatus] = useState('NOT_CHECKED');
   const [arrivalData, setArrivalData] = useState(null);
   const [arrivalError, setArrivalError] = useState(null);
   const [vendorCoords, setVendorCoords] = useState(null);
@@ -48,45 +53,86 @@ export default function VendorManageJob() {
   const [otpError, setOtpError] = useState(null);
   const [startSuccessMessage, setStartSuccessMessage] = useState(null);
 
-  // Completion Evidence Form State (Zero fake preloaded image URLs)
+  // Completion Evidence Form State
   const [evidencePhotos, setEvidencePhotos] = useState([]);
   const [evidenceNote, setEvidenceNote] = useState('');
   const [uploadingImage, setUploadingImage] = useState(false);
   const [completionSubmitting, setCompletionSubmitting] = useState(false);
   const [completionError, setCompletionError] = useState(null);
 
-  useEffect(() => {
-    const fetchBooking = async () => {
+  // On The Way Action State
+  const [onTheWaySubmitting, setOnTheWaySubmitting] = useState(false);
+
+  // Save Progress State
+  const [progressSaving, setProgressSaving] = useState(false);
+  const [progressSavedMsg, setProgressSavedMsg] = useState(null);
+
+  // Reschedule Modal State
+  const [rescheduleModal, setRescheduleModal] = useState({
+    open: false,
+    newDate: '',
+    newTimeSlot: '10:00 AM - 01:00 PM',
+    reason: '',
+    submitting: false,
+    error: null,
+    success: false
+  });
+
+  // Cancel Modal State
+  const [cancelModal, setCancelModal] = useState({
+    open: false,
+    reason: 'Contractor emergency / unable to reach',
+    customNote: '',
+    submitting: false,
+    error: null
+  });
+
+  const fetchBooking = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      let res;
       try {
-        setLoading(true);
-        setError(null);
-        const res = await bookingAPI.getById(id);
-        if (res?.booking) {
-          setBooking(res.booking);
-          setStatus(res.booking.status);
-          
-          if (res.booking.arrivalEvidence?.verified) {
-            setArrivalStatus('ARRIVAL_VERIFIED');
-            setArrivalData(res.booking.arrivalEvidence);
-          }
-          if (res.booking.completionEvidence?.images?.length) {
-            setEvidencePhotos(res.booking.completionEvidence.images);
-          }
-          if (res.booking.completionEvidence?.notes) {
-            setEvidenceNote(res.booking.completionEvidence.notes);
-          }
+        res = await bookingAPI.getById(id);
+      } catch (fetchErr) {
+        // If not found by booking ID, fallback to job ID lookup
+        if (fetchErr.response?.status === 404 || fetchErr.response?.status === 400) {
+          res = await bookingAPI.getByJobId(id);
         } else {
-          setError('Booking order not found.');
+          throw fetchErr;
         }
-      } catch (err) {
-        console.error('Error fetching booking details:', err);
-        setError(err.response?.data?.message || 'Failed to load booking details.');
-      } finally {
-        setLoading(false);
       }
-    };
+
+      if (res?.booking) {
+        setBooking(res.booking);
+        setStatus(res.booking.status);
+        
+        if (res.booking.arrivalEvidence?.verified) {
+          setArrivalStatus('ARRIVAL_VERIFIED');
+          setArrivalData(res.booking.arrivalEvidence);
+        }
+        if (res.booking.completionEvidence?.images?.length) {
+          setEvidencePhotos(res.booking.completionEvidence.images);
+        }
+        if (res.booking.completionEvidence?.notes) {
+          setEvidenceNote(res.booking.completionEvidence.notes);
+        }
+      } else {
+        setError('Booking order not found.');
+      }
+    } catch (err) {
+      console.error('Error fetching booking details:', err);
+      setError(err.response?.data?.message || 'Failed to load booking details.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
     fetchBooking();
   }, [id]);
+
+  const targetBookingId = booking?._id || id;
 
   // Stage 1: Verify Arrival via Browser Geolocation & Server Haversine Validation
   const handleVerifyArrival = () => {
@@ -105,7 +151,7 @@ export default function VendorManageJob() {
         setVendorCoords({ lat: latitude, lng: longitude, accuracy });
 
         try {
-          const res = await bookingAPI.verifyArrival(id, {
+          const res = await bookingAPI.verifyArrival(targetBookingId, {
             latitude,
             longitude,
             accuracy,
@@ -162,7 +208,7 @@ export default function VendorManageJob() {
     try {
       setOtpSubmitting(true);
       setOtpError(null);
-      const res = await bookingAPI.verifyStartOtp(id, {
+      const res = await bookingAPI.verifyStartOtp(targetBookingId, {
         otp: otpInput.trim(),
         latitude: vendorCoords?.lat,
         longitude: vendorCoords?.lng,
@@ -184,6 +230,49 @@ export default function VendorManageJob() {
       setOtpError(err.response?.data?.message || 'OTP verification failed. Please check the code with the customer.');
     } finally {
       setOtpSubmitting(false);
+    }
+  };
+
+  // Mark On The Way
+  const handleMarkOnTheWay = async () => {
+    try {
+      setOnTheWaySubmitting(true);
+      const res = await bookingAPI.updateStatus(targetBookingId, {
+        status: 'on_the_way',
+        note: 'Specialist has departed and is on the way to the service location.'
+      });
+      if (res?.success) {
+        setStatus('on_the_way');
+        if (res.booking) setBooking(res.booking);
+      }
+    } catch (err) {
+      console.error('Error marking on the way:', err);
+      alert(err.response?.data?.message || 'Failed to update departure status.');
+    } finally {
+      setOnTheWaySubmitting(false);
+    }
+  };
+
+  // Save Progress Notes & Photos without completing
+  const handleSaveProgress = async () => {
+    try {
+      setProgressSaving(true);
+      setProgressSavedMsg(null);
+      const res = await bookingAPI.updateStatus(targetBookingId, {
+        status: 'in_progress',
+        note: evidenceNote.trim() || 'Work underway. Progress notes updated.',
+        images: evidencePhotos
+      });
+      if (res?.success) {
+        setProgressSavedMsg('Progress notes & photos saved successfully.');
+        if (res.booking) setBooking(res.booking);
+        setTimeout(() => setProgressSavedMsg(null), 3000);
+      }
+    } catch (err) {
+      console.error('Error saving progress:', err);
+      setCompletionError(err.response?.data?.message || 'Failed to save progress.');
+    } finally {
+      setProgressSaving(false);
     }
   };
 
@@ -231,15 +320,14 @@ export default function VendorManageJob() {
       setCompletionSubmitting(true);
       setCompletionError(null);
 
-      // Transition to completed (or completion_pending if review required)
-      const res = await bookingAPI.updateStatus(id, {
-        status: 'completed',
-        note: evidenceNote.trim() || 'Work completed in accordance with safety standards and specifications.',
+      const res = await bookingAPI.updateStatus(targetBookingId, {
+        status: 'completion_pending',
+        note: evidenceNote.trim() || 'Work executed according to safety standards and specifications.',
         images: evidencePhotos
       });
 
       if (res?.success) {
-        setStatus('completed');
+        setStatus('completion_pending');
         if (res.booking) {
           setBooking(res.booking);
         }
@@ -248,9 +336,88 @@ export default function VendorManageJob() {
       }
     } catch (err) {
       console.error('Error submitting completion:', err);
-      setCompletionError(err.response?.data?.message || 'Failed to complete job. Please retry.');
+      setCompletionError(err.response?.data?.message || 'Failed to submit completion. Please retry.');
     } finally {
       setCompletionSubmitting(false);
+    }
+  };
+
+  // Handle Reschedule Submit
+  const handleRescheduleSubmit = async (e) => {
+    e.preventDefault();
+    if (!rescheduleModal.newDate) {
+      setRescheduleModal(prev => ({ ...prev, error: 'Please choose an appointment date.' }));
+      return;
+    }
+
+    try {
+      setRescheduleModal(prev => ({ ...prev, submitting: true, error: null }));
+      const res = await bookingAPI.reschedule(targetBookingId, {
+        newDate: rescheduleModal.newDate,
+        newTimeSlot: rescheduleModal.newTimeSlot,
+        reason: rescheduleModal.reason
+      });
+      if (res?.success) {
+        setRescheduleModal(prev => ({ ...prev, submitting: false, success: true }));
+        if (res.booking) setBooking(res.booking);
+        setTimeout(() => {
+          setRescheduleModal({
+            open: false,
+            newDate: '',
+            newTimeSlot: '10:00 AM - 01:00 PM',
+            reason: '',
+            submitting: false,
+            error: null,
+            success: false
+          });
+        }, 1500);
+      }
+    } catch (err) {
+      console.error('Error rescheduling booking:', err);
+      setRescheduleModal(prev => ({
+        ...prev,
+        submitting: false,
+        error: err.response?.data?.message || 'Failed to reschedule. Please try again.'
+      }));
+    }
+  };
+
+  // Handle Cancel Submit
+  const handleCancelSubmit = async (e) => {
+    e.preventDefault();
+    const fullReason = cancelModal.customNote.trim()
+      ? `${cancelModal.reason}: ${cancelModal.customNote.trim()}`
+      : cancelModal.reason;
+
+    if (!fullReason) {
+      setCancelModal(prev => ({ ...prev, error: 'Please provide a cancellation reason.' }));
+      return;
+    }
+
+    try {
+      setCancelModal(prev => ({ ...prev, submitting: true, error: null }));
+      const res = await bookingAPI.updateStatus(targetBookingId, {
+        status: 'cancelled',
+        note: fullReason
+      });
+      if (res?.success) {
+        setStatus('cancelled');
+        if (res.booking) setBooking(res.booking);
+        setCancelModal({
+          open: false,
+          reason: 'Contractor emergency / unable to reach',
+          customNote: '',
+          submitting: false,
+          error: null
+        });
+      }
+    } catch (err) {
+      console.error('Error cancelling booking:', err);
+      setCancelModal(prev => ({
+        ...prev,
+        submitting: false,
+        error: err.response?.data?.message || 'Failed to cancel booking. Please try again.'
+      }));
     }
   };
 
@@ -297,10 +464,6 @@ export default function VendorManageJob() {
     : null;
 
   // Derive 4-Stage Status Tracker Index
-  // Stage 0: Job Posted
-  // Stage 1: Vendor Assigned
-  // Stage 2: Work In Progress
-  // Stage 3: Completed
   const getStageIndex = (st) => {
     switch (st) {
       case 'open':
@@ -310,6 +473,8 @@ export default function VendorManageJob() {
       case 'scheduled':
       case 'awaiting_confirmation':
         return 1;
+      case 'on_the_way':
+      case 'arrived':
       case 'in_progress':
       case 'completion_pending':
         return 2;
@@ -335,6 +500,20 @@ export default function VendorManageJob() {
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-800 border border-blue-200">
             <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-pulse" />
             Vendor Assigned
+          </span>
+        );
+      case 'on_the_way':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-indigo-50 text-indigo-800 border border-indigo-200">
+            <Navigation className="w-3.5 h-3.5 text-indigo-600" />
+            Specialist On The Way
+          </span>
+        );
+      case 'arrived':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200">
+            <MapPin className="w-3.5 h-3.5 text-teal-600" />
+            Arrived On Site
           </span>
         );
       case 'in_progress':
@@ -374,7 +553,7 @@ export default function VendorManageJob() {
     }
   };
 
-  const isAssignedOrScheduled = ['assigned', 'confirmed', 'scheduled', 'awaiting_confirmation'].includes(status);
+  const isAssignedOrScheduled = ['assigned', 'confirmed', 'scheduled', 'awaiting_confirmation', 'on_the_way', 'arrived'].includes(status);
   const isInProgress = status === 'in_progress';
   const isCompletionPending = status === 'completion_pending';
   const isCompleted = status === 'completed';
@@ -390,7 +569,7 @@ export default function VendorManageJob() {
             to="/vendor/bookings" 
             className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-slate-900 transition mb-2"
           >
-            <ArrowLeft className="w-4 h-4" /> Back to Bookings
+            <ArrowLeft className="w-4 h-4" /> Back to Confirmed Jobs
           </Link>
 
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pt-1">
@@ -435,22 +614,22 @@ export default function VendorManageJob() {
               </div>
             </div>
 
-            {/* Quick Actions */}
-            <div className="flex items-center gap-2.5 shrink-0">
+            {/* Quick Actions Bar */}
+            <div className="flex items-center gap-2 flex-wrap shrink-0">
               {googleMapsUrl && (
                 <a
                   href={googleMapsUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold border border-slate-200 transition"
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold border border-slate-200 transition"
                 >
                   <Navigation className="w-3.5 h-3.5 text-emerald-700 fill-emerald-700" />
-                  <span>Get Directions</span>
+                  <span>Directions</span>
                   <ExternalLink className="w-3 h-3 text-slate-400" />
                 </a>
               )}
 
-              <Link to={`/vendor/messages?recipientId=${booking.customer?._id || booking.customer?.id || ''}&jobId=${job?._id || booking.job?._id || ''}`}>
+              <Link to={`/vendor/messages?recipientId=${booking.customer?._id || booking.customer?.id || ''}&jobId=${booking.job?._id || ''}`}>
                 <Button variant="secondary" size="sm" icon={MessageSquare} className="text-xs">
                   Chat
                 </Button>
@@ -463,31 +642,69 @@ export default function VendorManageJob() {
                   </Button>
                 </a>
               )}
+
+              {/* Status Specific Actions */}
+              {['assigned', 'confirmed', 'scheduled', 'awaiting_confirmation'].includes(status) && (
+                <>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    icon={Navigation}
+                    loading={onTheWaySubmitting}
+                    disabled={onTheWaySubmitting}
+                    onClick={handleMarkOnTheWay}
+                    className="text-xs text-indigo-700 hover:bg-indigo-50"
+                  >
+                    On The Way
+                  </Button>
+
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={Calendar}
+                    onClick={() => setRescheduleModal(prev => ({ ...prev, open: true }))}
+                    className="text-xs text-slate-600 hover:text-slate-900"
+                  >
+                    Reschedule
+                  </Button>
+                </>
+              )}
+
+              {/* Allow Cancellation if not already completed or cancelled */}
+              {!['completed', 'cancelled'].includes(status) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={XCircle}
+                  onClick={() => setCancelModal(prev => ({ ...prev, open: true }))}
+                  className="text-xs text-rose-600 hover:bg-rose-50"
+                >
+                  Cancel
+                </Button>
+              )}
             </div>
           </div>
         </div>
       </div>
 
-      {/* ── 2. Compact 4-Stage Status Tracker ── */}
+      {/* ── 2. 4-Stage Status Tracker ── */}
       <div className="bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-5 shadow-2xs">
         <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
           <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
             Booking Progress Stage
           </span>
           <span className="text-xs font-semibold text-slate-700">
-            {currentStageIndex === 1 && 'Vendor Assigned — Awaiting Arrival & OTP Verification'}
-            {currentStageIndex === 2 && 'Work In Progress — Service Underway On-Site'}
-            {currentStageIndex === 3 && 'Service Completed & Signed Off'}
+            {currentStageIndex === 1 && 'Vendor Assigned — Scheduled for Service'}
+            {currentStageIndex === 2 && (status === 'on_the_way' ? 'En Route — Specialist Traveling to Location' : status === 'arrived' ? 'On Site — Verify Customer OTP' : 'Work In Progress — Service Underway On-Site')}
+            {currentStageIndex === 3 && 'Service Completed & Escrow Settled'}
             {currentStageIndex === -1 && 'Booking Cancelled'}
           </span>
         </div>
 
         {/* Horizontal Stepper */}
         <div className="relative flex items-center justify-between px-2 sm:px-6">
-          {/* Background Connecting Line */}
           <div className="absolute top-4 left-6 right-6 h-0.5 bg-slate-200 z-0" />
           
-          {/* Active Fill Line */}
           {currentStageIndex >= 0 && (
             <div 
               className="absolute top-4 left-6 h-0.5 bg-emerald-700 z-0 transition-all duration-300"
@@ -497,13 +714,12 @@ export default function VendorManageJob() {
 
           {[
             { idx: 0, label: '1. Job Posted' },
-            { idx: 1, label: '2. Vendor Assigned' },
+            { idx: 1, label: '2. Assigned / Scheduled' },
             { idx: 2, label: '3. Work In Progress' },
-            { idx: 3, label: '4. Completed' }
+            { idx: 3, label: '4. Completed & Paid' }
           ].map((step) => {
             const isCompletedStep = currentStageIndex > step.idx;
             const isCurrentStep = currentStageIndex === step.idx;
-            const isPendingStep = currentStageIndex < step.idx;
 
             return (
               <div key={step.idx} className="relative z-10 flex flex-col items-center">
@@ -533,7 +749,7 @@ export default function VendorManageJob() {
         </div>
       </div>
 
-      {/* ── 3. Main Workflow Grid (2 Columns Desktop, 1 Column Mobile) ── */}
+      {/* ── 3. Main Workflow Grid ── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
         
         {/* ── Left Column: Primary Stage-Specific Action (2/3 width) ── */}
@@ -541,16 +757,23 @@ export default function VendorManageJob() {
 
           {/* Success Banner when service has just started */}
           {startSuccessMessage && (
-            <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs flex items-center gap-3">
+            <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs flex items-center gap-3 shadow-2xs">
               <CheckCircle2 className="w-5 h-5 text-emerald-700 shrink-0" />
               <span className="font-bold">{startSuccessMessage}</span>
             </div>
           )}
 
+          {progressSavedMsg && (
+            <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs flex items-center gap-3 shadow-2xs">
+              <CheckCircle2 className="w-5 h-5 text-emerald-700 shrink-0" />
+              <span className="font-medium">{progressSavedMsg}</span>
+            </div>
+          )}
+
           {/* ══════════════════════════════════════════════════════════════════
-              STAGE A & B: ASSIGNED / SCHEDULED — START SERVICE VERIFICATION
+              STAGE A: ASSIGNED / SCHEDULED / EN ROUTE — START VERIFICATION
              ══════════════════════════════════════════════════════════════════ */}
-          {isAssignedOrScheduled && (
+          {isAssignedOrScheduled && !isInProgress && !isCompletionPending && !isCompleted && !isCancelled && (
             <div className="bg-white border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-2xs space-y-5">
               <div className="flex items-start gap-3.5 pb-4 border-b border-slate-100">
                 <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center justify-center shrink-0">
@@ -561,7 +784,7 @@ export default function VendorManageJob() {
                     Start Service Verification
                   </h2>
                   <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
-                    Verify your arrival at the customer's location and enter the Service Start OTP before beginning work.
+                    Confirm arrival on-site and enter the customer's 6-digit Service-Start OTP before beginning work.
                   </p>
                 </div>
               </div>
@@ -584,7 +807,7 @@ export default function VendorManageJob() {
                       }`}>
                         {arrivalStatus === 'ARRIVAL_VERIFIED' ? <Check className="w-3 h-3" /> : '1'}
                       </span>
-                      <h3 className="text-xs font-bold text-slate-900">Step 1 — Confirm Arrival at Location</h3>
+                      <h3 className="text-xs font-bold text-slate-900">Step 1 — Confirm Arrival</h3>
                     </div>
 
                     {arrivalStatus === 'ARRIVAL_VERIFIED' && (
@@ -595,7 +818,7 @@ export default function VendorManageJob() {
                   </div>
 
                   <p className="text-[11px] text-slate-600 mb-3 leading-relaxed">
-                    Confirm your arrival at the customer's service address via GPS before requesting the service code.
+                    Confirm your arrival at the customer's service address via GPS before requesting the customer PIN.
                   </p>
 
                   {arrivalStatus === 'ARRIVAL_VERIFIED' ? (
@@ -623,7 +846,7 @@ export default function VendorManageJob() {
                         {arrivalStatus === 'REQUESTING_LOCATION' ? (
                           <>
                             <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                            <span>Checking your location...</span>
+                            <span>Checking location...</span>
                           </>
                         ) : (
                           <>
@@ -658,7 +881,7 @@ export default function VendorManageJob() {
                   </div>
 
                   <p className="text-[11px] text-slate-600 mb-3 leading-relaxed">
-                    Ask the property owner for the 6-digit PIN displayed on their booking dashboard.
+                    Ask the property owner for the 6-digit OTP displayed on their WorkLogy dashboard.
                   </p>
 
                   {otpError && (
@@ -674,7 +897,7 @@ export default function VendorManageJob() {
                       maxLength="6"
                       required
                       disabled={arrivalStatus !== 'ARRIVAL_VERIFIED'}
-                      placeholder="Enter 6-digit PIN"
+                      placeholder="Enter 6-digit OTP"
                       value={otpInput}
                       onChange={(e) => setOtpInput(e.target.value.replace(/\D/g, ''))}
                       className="w-full tracking-widest font-mono text-center text-lg font-bold bg-white border border-slate-300 rounded-xl py-2 px-3 text-slate-900 placeholder:text-slate-400 placeholder:tracking-normal placeholder:font-sans placeholder:text-xs focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:border-transparent disabled:bg-slate-100 disabled:cursor-not-allowed"
@@ -687,7 +910,7 @@ export default function VendorManageJob() {
                       loading={otpSubmitting}
                       disabled={otpSubmitting || otpInput.length !== 6 || arrivalStatus !== 'ARRIVAL_VERIFIED'}
                       icon={ShieldCheck}
-                      className="w-full !bg-emerald-700 hover:!bg-emerald-800 font-bold"
+                      className="w-full !bg-emerald-700 hover:!bg-emerald-800 font-bold text-xs"
                     >
                       Verify OTP & Start Work
                     </Button>
@@ -699,7 +922,7 @@ export default function VendorManageJob() {
           )}
 
           {/* ══════════════════════════════════════════════════════════════════
-              STAGE C: WORK IN PROGRESS — EXECUTION & COMPLETION REQUEST
+              STAGE B: WORK IN PROGRESS — UPDATE NOTES & SUBMIT COMPLETION
              ══════════════════════════════════════════════════════════════════ */}
           {isInProgress && (
             <div className="bg-white border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-2xs space-y-6">
@@ -710,7 +933,7 @@ export default function VendorManageJob() {
                 <div>
                   <h3 className="font-bold text-sm text-emerald-950">Work In Progress • Service Underway</h3>
                   <p className="text-xs text-emerald-800 mt-0.5 leading-relaxed">
-                    Arrival and customer OTP have been verified. Execute the service, take clear completion photos, and request sign-off when finished.
+                    Arrival and customer OTP have been verified. Execute the service, record progress notes, upload clear photos, and submit for customer sign-off when finished.
                   </p>
                 </div>
               </div>
@@ -720,10 +943,10 @@ export default function VendorManageJob() {
                 <div>
                   <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                     <FileText className="w-4 h-4 text-emerald-700" />
-                    <span>Work Photos & Completion Request</span>
+                    <span>Work Photos & Progress Notes</span>
                   </h3>
                   <p className="text-xs text-slate-600 mt-0.5">
-                    Provide notes and photos of the completed work for customer approval.
+                    Upload photos of work done and describe tasks completed for customer inspection and payment release.
                   </p>
                 </div>
 
@@ -737,7 +960,7 @@ export default function VendorManageJob() {
                 {/* Photo Upload Area */}
                 <div className="space-y-2">
                   <label className="block text-xs font-semibold text-slate-700">
-                    Work Photos (Optional)
+                    Work Progress Photos (Optional)
                   </label>
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -790,30 +1013,44 @@ export default function VendorManageJob() {
                   <textarea
                     rows="3"
                     required
-                    placeholder="Describe tasks completed, components inspected, safety checks verified..."
+                    placeholder="Describe tasks completed, materials used, tests and safety checks performed..."
                     value={evidenceNote}
                     onChange={(e) => setEvidenceNote(e.target.value)}
                     className="w-full text-xs p-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:border-transparent text-slate-900 placeholder:text-slate-400"
                   />
                 </div>
 
-                <Button
-                  type="submit"
-                  variant="primary"
-                  size="md"
-                  loading={completionSubmitting}
-                  disabled={completionSubmitting}
-                  icon={CheckCircle2}
-                  className="w-full !bg-emerald-700 hover:!bg-emerald-800 font-bold"
-                >
-                  Submit Completion & Request Payout Sign-Off
-                </Button>
+                <div className="flex flex-col sm:flex-row items-center gap-3 pt-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="md"
+                    loading={progressSaving}
+                    disabled={progressSaving}
+                    onClick={handleSaveProgress}
+                    className="w-full sm:w-auto text-xs"
+                  >
+                    Save Progress Draft
+                  </Button>
+
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    size="md"
+                    loading={completionSubmitting}
+                    disabled={completionSubmitting}
+                    icon={CheckCircle2}
+                    className="w-full sm:flex-1 !bg-emerald-700 hover:!bg-emerald-800 font-bold text-xs"
+                  >
+                    Mark Work Completed & Request Sign-Off
+                  </Button>
+                </div>
               </form>
             </div>
           )}
 
           {/* ══════════════════════════════════════════════════════════════════
-              STAGE D: COMPLETION PENDING SIGN-OFF
+              STAGE C: COMPLETION PENDING SIGN-OFF
              ══════════════════════════════════════════════════════════════════ */}
           {isCompletionPending && (
             <div className="bg-white border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-2xs space-y-5">
@@ -822,7 +1059,7 @@ export default function VendorManageJob() {
                 <div>
                   <h3 className="font-bold text-sm text-purple-950">Completion Submitted — Awaiting Customer Confirmation</h3>
                   <p className="text-xs text-purple-800 mt-0.5 leading-relaxed">
-                    You have submitted work evidence. The customer has been notified to review the finished work and approve release of the escrow payment.
+                    You have submitted work evidence. The customer has been notified to review the completed service and confirm sign-off to release escrow payment.
                   </p>
                 </div>
               </div>
@@ -850,27 +1087,80 @@ export default function VendorManageJob() {
           )}
 
           {/* ══════════════════════════════════════════════════════════════════
-              STAGE E: COMPLETED & SETTLED
+              STAGE D: COMPLETED & SETTLED
              ══════════════════════════════════════════════════════════════════ */}
           {isCompleted && (
             <div className="bg-white border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-2xs space-y-5">
-              <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-950 flex items-start justify-between gap-4">
+              <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-950 flex flex-col sm:flex-row items-start justify-between gap-4">
                 <div className="flex items-start gap-3">
                   <CheckCircle2 className="w-6 h-6 text-emerald-700 shrink-0 mt-0.5" />
                   <div>
                     <h3 className="font-bold text-base text-emerald-950">Work Completed & Payment Released!</h3>
                     <p className="text-xs text-emerald-800 mt-1 leading-relaxed">
-                      This job was successfully signed off. Escrow net payout of{' '}
+                      This job was successfully signed off by the customer. Net payout of{' '}
                       <strong>{formatCurrency(booking.pricing?.vendorNet || booking.pricing?.amount || 0)}</strong> has been credited to your transaction ledger.
                     </p>
                   </div>
                 </div>
 
-                <Link to="/vendor/earnings" className="shrink-0">
-                  <Button variant="primary" size="sm" className="!bg-emerald-700 hover:!bg-emerald-800">
-                    View Earnings
-                  </Button>
-                </Link>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold border border-slate-300 transition"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>Print Receipt</span>
+                  </button>
+
+                  <Link to="/vendor/earnings">
+                    <Button variant="primary" size="sm" className="!bg-emerald-700 hover:!bg-emerald-800 text-xs">
+                      View Earnings
+                    </Button>
+                  </Link>
+                </div>
+              </div>
+
+              {/* Customer Rating and Review when available */}
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+                <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center justify-between">
+                  <span>Customer Review & Rating</span>
+                  <Star className="w-4 h-4 text-amber-500 fill-amber-500" />
+                </h4>
+
+                {booking.review ? (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-0.5">
+                        {[1, 2, 3, 4, 5].map((starVal) => (
+                          <Star
+                            key={starVal}
+                            className={`w-4 h-4 ${
+                              starVal <= (booking.review.rating || 5)
+                                ? 'text-amber-500 fill-amber-500'
+                                : 'text-slate-300'
+                            }`}
+                          />
+                        ))}
+                      </div>
+                      <span className="text-xs font-bold text-slate-900">
+                        {booking.review.rating} / 5 Stars
+                      </span>
+                    </div>
+                    {booking.review.comment && (
+                      <p className="text-xs text-slate-700 italic bg-white p-3 rounded-lg border border-slate-200/80">
+                        "{booking.review.comment}"
+                      </p>
+                    )}
+                    <span className="text-[10px] text-slate-400 block">
+                      Submitted on {new Date(booking.review.createdAt).toLocaleDateString()}
+                    </span>
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-500 italic">
+                    The customer has not posted a written review for this booking yet.
+                  </p>
+                )}
               </div>
 
               {booking.completionEvidence?.notes && (
@@ -883,7 +1173,7 @@ export default function VendorManageJob() {
           )}
 
           {/* ══════════════════════════════════════════════════════════════════
-              STAGE F: CANCELLED
+              STAGE E: CANCELLED
              ══════════════════════════════════════════════════════════════════ */}
           {isCancelled && (
             <div className="bg-white border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-2xs space-y-3">
@@ -892,7 +1182,7 @@ export default function VendorManageJob() {
                 <div>
                   <h3 className="font-bold text-sm text-rose-950">Booking Cancelled</h3>
                   <p className="text-xs text-rose-800 mt-0.5 leading-relaxed">
-                    This service assignment has been cancelled. Work cannot be started or billed.
+                    This service assignment was cancelled. Reason: {booking.statusHistory?.slice(-1)[0]?.note || booking.declineReason || 'Service cancelled.'}
                   </p>
                 </div>
               </div>
@@ -1028,7 +1318,7 @@ export default function VendorManageJob() {
             </div>
 
             <p className="text-[11px] text-slate-500 leading-snug pt-2 border-t border-slate-100">
-              Funds are secured in WorkLogy Escrow and disbursed automatically upon verified customer sign-off.
+              Funds are secured in WorkLogy Escrow and disbursed automatically upon customer completion approval.
             </p>
           </div>
 
@@ -1065,6 +1355,184 @@ export default function VendorManageJob() {
         </div>
 
       </div>
+
+      {/* ── 4. Reschedule Modal ── */}
+      {rescheduleModal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-xl space-y-4 border border-slate-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <Calendar className="w-5 h-5 text-emerald-700" />
+                <span>Request Appointment Reschedule</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setRescheduleModal(prev => ({ ...prev, open: false }))}
+                className="p-1 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {rescheduleModal.error && (
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                <span>{rescheduleModal.error}</span>
+              </div>
+            )}
+
+            {rescheduleModal.success ? (
+              <div className="py-6 text-center space-y-2">
+                <CheckCircle2 className="w-10 h-10 text-emerald-600 mx-auto" />
+                <h4 className="font-bold text-slate-900">Appointment Rescheduled!</h4>
+                <p className="text-xs text-slate-600">The schedule has been updated and the customer notified.</p>
+              </div>
+            ) : (
+              <form onSubmit={handleRescheduleSubmit} className="space-y-4">
+                <div className="space-y-1">
+                  <label className="block text-xs font-semibold text-slate-700">New Date</label>
+                  <input
+                    type="date"
+                    required
+                    min={new Date().toISOString().split('T')[0]}
+                    value={rescheduleModal.newDate}
+                    onChange={(e) => setRescheduleModal(prev => ({ ...prev, newDate: e.target.value }))}
+                    className="w-full text-xs p-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-700"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-xs font-semibold text-slate-700">New Time Slot</label>
+                  <select
+                    value={rescheduleModal.newTimeSlot}
+                    onChange={(e) => setRescheduleModal(prev => ({ ...prev, newTimeSlot: e.target.value }))}
+                    className="w-full text-xs p-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-700"
+                  >
+                    <option value="09:00 AM - 12:00 PM">09:00 AM - 12:00 PM</option>
+                    <option value="10:00 AM - 01:00 PM">10:00 AM - 01:00 PM</option>
+                    <option value="01:00 PM - 04:00 PM">01:00 PM - 04:00 PM</option>
+                    <option value="04:00 PM - 07:00 PM">04:00 PM - 07:00 PM</option>
+                    <option value="Flexible">Flexible / Anytime</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-xs font-semibold text-slate-700">Reason for Rescheduling</label>
+                  <textarea
+                    rows="2"
+                    placeholder="E.g. Travel delay, waiting on spare parts, weather conditions..."
+                    value={rescheduleModal.reason}
+                    onChange={(e) => setRescheduleModal(prev => ({ ...prev, reason: e.target.value }))}
+                    className="w-full text-xs p-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-700"
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setRescheduleModal(prev => ({ ...prev, open: false }))}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    size="sm"
+                    loading={rescheduleModal.submitting}
+                    disabled={rescheduleModal.submitting}
+                  >
+                    Confirm Reschedule
+                  </Button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── 5. Cancellation Modal ── */}
+      {cancelModal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-xl space-y-4 border border-slate-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-rose-600" />
+                <span>Cancel Assigned Booking</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setCancelModal(prev => ({ ...prev, open: false }))}
+                className="p-1 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs">
+              <strong>Notice:</strong> Cancelling an active assignment will release the customer's escrow deposit and notify the property owner. Frequent cancellations impact your platform reliability score.
+            </div>
+
+            {cancelModal.error && (
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                <span>{cancelModal.error}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleCancelSubmit} className="space-y-4">
+              <div className="space-y-1">
+                <label className="block text-xs font-semibold text-slate-700">Cancellation Reason</label>
+                <select
+                  value={cancelModal.reason}
+                  onChange={(e) => setCancelModal(prev => ({ ...prev, reason: e.target.value }))}
+                  className="w-full text-xs p-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-rose-500"
+                >
+                  <option value="Contractor emergency / unable to reach">Contractor emergency / illness</option>
+                  <option value="Customer requested cancellation">Customer requested cancellation</option>
+                  <option value="Required materials or spare parts unavailable">Required parts/materials unavailable</option>
+                  <option value="Job site inaccessible or safety hazard">Job site inaccessible / safety hazard</option>
+                  <option value="Disagreement on service scope or pricing">Disagreement on service scope</option>
+                  <option value="other">Other reason</option>
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-xs font-semibold text-slate-700">Additional Details</label>
+                <textarea
+                  rows="2"
+                  placeholder="Provide brief context for the customer and audit log..."
+                  value={cancelModal.customNote}
+                  onChange={(e) => setCancelModal(prev => ({ ...prev, customNote: e.target.value }))}
+                  className="w-full text-xs p-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-rose-500"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setCancelModal(prev => ({ ...prev, open: false }))}
+                >
+                  Keep Booking
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="sm"
+                  loading={cancelModal.submitting}
+                  disabled={cancelModal.submitting}
+                  className="!bg-rose-600 hover:!bg-rose-700 text-white"
+                >
+                  Confirm Cancellation
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
     </div>
   );
