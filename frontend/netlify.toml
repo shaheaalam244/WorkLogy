@@ -1,0 +1,24 @@
+# Netlify Configuration for WorkLogy Frontend
+
+[build]
+  publish = "dist"
+  command = "npm run build"
+
+[build.environment]
+  NODE_VERSION = "20"
+  VITE_API_BASE_URL = "http://76.13.246.224:5001/api"
+  VITE_SOCKET_URL = "http://76.13.246.224:5001"
+
+# SPA Routing: Redirect all routes to index.html with HTTP 200
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Security Headers
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
