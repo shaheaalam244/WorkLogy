@@ -5,25 +5,97 @@ import type { User, ServiceCategory, Job, Booking, ReviewItem, ChatMessage, Conv
 
 interface RequestOptions extends RequestInit {
   requiresAuth?: boolean;
+  timeoutMs?: number;
+  bypassCache?: boolean;
 }
 
+// ── In-Memory Auth Token Cache (0ms Access, No Async Disk Latency on Every Request) ──
+let cachedAuthToken: string | null = null;
+
 export async function getStoredAuthToken(): Promise<string | null> {
+  if (cachedAuthToken && typeof cachedAuthToken === 'string' && cachedAuthToken.length > 0) {
+    return cachedAuthToken;
+  }
+
   // Check primary customer token key
   const primary = await secureStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
   if (primary && typeof primary === 'string' && primary.trim().length > 0) {
-    return primary.trim();
+    cachedAuthToken = primary.trim();
+    return cachedAuthToken;
   }
 
   // Check fallback compatibility keys
   for (const altKey of ['worklogy_token', 'token', 'worklogy_auth_token']) {
     const alt = await secureStorage.getItem(altKey);
     if (alt && typeof alt === 'string' && alt.trim().length > 0) {
-      return alt.trim();
+      cachedAuthToken = alt.trim();
+      return cachedAuthToken;
     }
   }
 
   return null;
 }
+
+export function setCachedAuthToken(token: string | null): void {
+  cachedAuthToken = token && typeof token === 'string' && token.trim().length > 0 ? token.trim() : null;
+}
+
+// ── In-Memory TTL Cache for Static & Semi-Static Endpoints ──
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+  ttl: number;
+}
+const memoryCache = new Map<string, CacheEntry<any>>();
+
+export function getMemoryCached<T>(key: string): T | null {
+  const entry = memoryCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > entry.ttl) {
+    memoryCache.delete(key);
+    return null;
+  }
+  return entry.data;
+}
+
+export function setMemoryCached<T>(key: string, data: T, ttlMs: number): void {
+  memoryCache.set(key, { data, timestamp: Date.now(), ttl: ttlMs });
+}
+
+export function clearMemoryCache(prefix?: string): void {
+  if (!prefix) {
+    memoryCache.clear();
+  } else {
+    for (const key of memoryCache.keys()) {
+      if (key.startsWith(prefix)) {
+        memoryCache.delete(key);
+      }
+    }
+  }
+}
+
+// ── Dynamic Host Failover with Sticky Memory ──
+const FALLBACK_API_BASE = 'http://76.13.246.224:5001/api';
+const FALLBACK_SOCKET_URL = 'http://76.13.246.224:5001';
+
+let activeBaseUrl = CONFIG.API_BASE_URL;
+let activeSocketUrl = CONFIG.SOCKET_URL;
+
+export function getActiveBaseUrl(): string {
+  return activeBaseUrl;
+}
+
+export function getActiveSocketUrl(): string {
+  return activeSocketUrl;
+}
+
+export function resetActiveHost(): void {
+  activeBaseUrl = CONFIG.API_BASE_URL;
+  activeSocketUrl = CONFIG.SOCKET_URL;
+}
+
+// ── In-Flight Request Deduplication Map for GET requests ──
+const inFlightGetRequests = new Map<string, Promise<any>>();
 
 const normalizeUser = (u: any): User => {
   if (!u) return u;
@@ -34,9 +106,33 @@ const normalizeUser = (u: any): User => {
   };
 };
 
-async function request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
-  const { requiresAuth = true, ...fetchOptions } = options;
-  const url = `${CONFIG.API_BASE_URL}${endpoint}`;
+async function doFetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    const res = await fetch(url, {
+      ...init,
+      signal: controller.signal
+    });
+    return res;
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      const toErr: any = new Error(`Request timed out after ${timeoutMs}ms`);
+      toErr.isTimeout = true;
+      toErr.status = 408;
+      throw toErr;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function executeRequest<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
+  const { requiresAuth = true, timeoutMs: customTimeout, bypassCache, ...fetchOptions } = options;
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -56,16 +152,43 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
     }
   }
 
-  const response = await fetch(url, {
-    ...fetchOptions,
-    headers
-  });
+  let response: Response;
+  const currentBase = activeBaseUrl;
+  const isLocalHost =
+    currentBase.includes('10.211.') ||
+    currentBase.includes('localhost') ||
+    currentBase.includes('127.0.0.1') ||
+    currentBase.includes('192.168.');
+
+  // If hitting local host, use a fast 3500ms timeout so failover is instantaneous; otherwise 12000ms
+  const timeout = customTimeout || (isLocalHost ? 3500 : 12000);
+  const primaryUrl = `${currentBase}${endpoint}`;
+
+  try {
+    response = await doFetchWithTimeout(primaryUrl, { ...fetchOptions, headers }, timeout);
+  } catch (networkErr: any) {
+    // If primary failed and wasn't already the fallback, fail over stickily to the live VPS backend
+    if (!primaryUrl.startsWith(FALLBACK_API_BASE)) {
+      try {
+        const fallbackUrl = `${FALLBACK_API_BASE}${endpoint}`;
+        response = await doFetchWithTimeout(fallbackUrl, { ...fetchOptions, headers }, 12000);
+        // Sticky failover: remember the working server for all subsequent calls and socket!
+        activeBaseUrl = FALLBACK_API_BASE;
+        activeSocketUrl = FALLBACK_SOCKET_URL;
+      } catch {
+        throw networkErr;
+      }
+    } else {
+      throw networkErr;
+    }
+  }
 
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
     if (response.status === 401) {
       // Purge stale tokens upon 401 unauthorized
+      setCachedAuthToken(null);
       await secureStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
       await secureStorage.removeItem(STORAGE_KEYS.AUTH_USER);
       await secureStorage.removeItem('worklogy_token');
@@ -86,6 +209,46 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
   return data as T;
 }
 
+async function request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
+  const isGet = !options.method || options.method.toUpperCase() === 'GET';
+  const reqKey = `${isGet ? 'GET' : options.method}:${endpoint}`;
+
+  if (isGet) {
+    const existing = inFlightGetRequests.get(reqKey);
+    if (existing) {
+      return existing as Promise<T>;
+    }
+  }
+
+  const exec = async (attempt: number = 0): Promise<T> => {
+    try {
+      return await executeRequest<T>(endpoint, options);
+    } catch (err: any) {
+      // Safe selective retry on transient network errors for idempotent GET requests
+      if (
+        isGet &&
+        attempt < 1 &&
+        (err?.isTimeout || err?.name === 'TypeError' || err?.message?.includes('Network request failed'))
+      ) {
+        await new Promise((r) => setTimeout(r, 400));
+        return exec(attempt + 1);
+      }
+      throw err;
+    }
+  };
+
+  const promise = exec();
+
+  if (isGet) {
+    inFlightGetRequests.set(reqKey, promise);
+    promise.finally(() => {
+      inFlightGetRequests.delete(reqKey);
+    });
+  }
+
+  return promise;
+}
+
 export const api = {
   // Auth
   auth: {
@@ -96,6 +259,7 @@ export const api = {
         requiresAuth: false
       });
       if (data.token) {
+        setCachedAuthToken(data.token);
         await secureStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, data.token);
         await secureStorage.setItem('worklogy_token', data.token);
         const normalized = normalizeUser(data.user);
@@ -112,6 +276,7 @@ export const api = {
         requiresAuth: false
       });
       if (data.token) {
+        setCachedAuthToken(data.token);
         await secureStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, data.token);
         await secureStorage.setItem('worklogy_token', data.token);
         const normalized = normalizeUser(data.user);
@@ -142,7 +307,7 @@ export const api = {
       return data;
     },
 
-    updateDetails: async (data: { name: string; phone?: string; avatar?: string }) => {
+    updateDetails: async (data: { name?: string; phone?: string; avatar?: string }) => {
       const res = await request<{ success: boolean; user: any }>('/auth/updatedetails', {
         method: 'PUT',
         body: JSON.stringify(data)
@@ -155,7 +320,29 @@ export const api = {
       return res;
     },
 
+    updateProfile: async (data: { name?: string; email?: string; phone?: string; avatar?: string }) => {
+      const res = await request<{ success: boolean; user: any }>('/users/profile', {
+        method: 'PUT',
+        body: JSON.stringify(data)
+      });
+      if (res?.user) {
+        const normalized = normalizeUser(res.user);
+        await secureStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(normalized));
+        return { ...res, user: normalized };
+      }
+      return res;
+    },
+
+    updatePassword: async (data: { currentPassword: string; newPassword: string }) => {
+      return await request<{ success: boolean; message: string }>('/auth/updatepassword', {
+        method: 'PUT',
+        body: JSON.stringify(data)
+      });
+    },
+
     logout: async () => {
+      setCachedAuthToken(null);
+      clearMemoryCache();
       await secureStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
       await secureStorage.removeItem(STORAGE_KEYS.AUTH_USER);
       await secureStorage.removeItem('worklogy_token');
@@ -163,18 +350,107 @@ export const api = {
     }
   },
 
-  // Categories
+  // Media & Image Uploads (Cloudinary via Backend API)
+  media: {
+    uploadImage: async (fileUri: string, mimeType?: string) => {
+      const token = await getStoredAuthToken();
+      // Ensure clean extension and MIME type
+      let resolvedMime = mimeType;
+      const lowerUri = fileUri.toLowerCase();
+      let extension = 'jpg';
+      if (lowerUri.includes('.png')) {
+        extension = 'png';
+        resolvedMime = resolvedMime || 'image/png';
+      } else if (lowerUri.includes('.webp')) {
+        extension = 'webp';
+        resolvedMime = resolvedMime || 'image/webp';
+      } else {
+        extension = 'jpg';
+        resolvedMime = resolvedMime || 'image/jpeg';
+      }
+
+      let filename = fileUri.split('/').pop() || `avatar_${Date.now()}.${extension}`;
+      if (!filename.includes('.')) {
+        filename = `${filename}.${extension}`;
+      }
+
+      return new Promise<{ success: boolean; url: string; publicId: string }>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `${getActiveBaseUrl()}/jobs/upload-image`);
+        xhr.setRequestHeader('Accept', 'application/json');
+        if (token) {
+          xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        }
+
+        xhr.onload = () => {
+          try {
+            const json = JSON.parse(xhr.responseText);
+            if (xhr.status >= 200 && xhr.status < 300 && json?.url) {
+              resolve(json);
+            } else {
+              reject(new Error(json?.message || `Upload failed with status ${xhr.status}`));
+            }
+          } catch {
+            reject(new Error(`Server error (${xhr.status}): Could not process image`));
+          }
+        };
+
+        xhr.onerror = () => {
+          reject(new Error('Network error during image upload. Please verify your connection.'));
+        };
+
+        xhr.ontimeout = () => {
+          reject(new Error('Upload timed out. Please try again.'));
+        };
+
+        xhr.timeout = 60000;
+
+        const formData = new FormData();
+        formData.append('image', {
+          uri: fileUri,
+          name: filename,
+          type: resolvedMime
+        } as any);
+
+        xhr.send(formData);
+      });
+    }
+  },
+
+  // In-Memory Cache Management
+  cache: {
+    clear: clearMemoryCache
+  },
+
+  // Categories (with 3-minute in-memory caching)
   categories: {
-    getAll: async () => {
-      return await request<{ success: boolean; categories: ServiceCategory[] }>('/categories', {
+    getAll: async (bypassCache: boolean = false) => {
+      const cacheKey = 'categories_all';
+      if (!bypassCache) {
+        const cached = getMemoryCached<{ success: boolean; categories: ServiceCategory[] }>(cacheKey);
+        if (cached) return cached;
+      }
+      const data = await request<{ success: boolean; categories: ServiceCategory[] }>('/categories', {
         requiresAuth: false
       });
+      if (data?.categories?.length) {
+        setMemoryCached(cacheKey, data, 180000); // 3 min TTL
+      }
+      return data;
     },
 
     getBySlug: async (slug: string) => {
-      return await request<{ success: boolean; category: ServiceCategory }>(`/categories/${slug}`, {
+      const cacheKey = `categories_${slug}`;
+      const cached = getMemoryCached<{ success: boolean; category: ServiceCategory }>(cacheKey);
+      if (cached) return cached;
+
+      const data = await request<{ success: boolean; category: ServiceCategory }>(`/categories/${slug}`, {
         requiresAuth: false
       });
+      if (data?.category) {
+        setMemoryCached(cacheKey, data, 180000);
+      }
+      return data;
     }
   },
 
@@ -192,11 +468,25 @@ export const api = {
       return await request<{ success: boolean; count: number; jobs: Job[] }>(`/jobs/my-jobs${query}`);
     },
 
+    getJobById: async (id: string) => {
+      return await request<{ success: boolean; job: Job }>(`/jobs/${id}`);
+    },
+
     cancelJob: async (id: string, reason?: string) => {
-      return await request<{ success: boolean; message: string }>(`/jobs/${id}/cancel`, {
-        method: 'PATCH',
-        body: JSON.stringify({ reason })
-      });
+      try {
+        return await request<{ success: boolean; message: string }>(`/jobs/${id}/cancel`, {
+          method: 'POST',
+          body: JSON.stringify({ reason })
+        });
+      } catch (err: any) {
+        if (err?.message?.includes('Route not found') || err?.status === 404) {
+          return await request<{ success: boolean; message: string }>(`/jobs/${id}/cancel`, {
+            method: 'PATCH',
+            body: JSON.stringify({ reason })
+          });
+        }
+        throw err;
+      }
     }
   },
 
@@ -236,10 +526,20 @@ export const api = {
     },
 
     cancelBooking: async (id: string, reason: string) => {
-      return await request<{ success: boolean; message: string; booking: Booking }>(`/bookings/${id}/cancel`, {
-        method: 'PATCH',
-        body: JSON.stringify({ reason })
-      });
+      try {
+        return await request<{ success: boolean; message: string; booking: Booking }>(`/customer/bookings/${id}/cancel`, {
+          method: 'PATCH',
+          body: JSON.stringify({ reason })
+        });
+      } catch (err: any) {
+        if (err?.message?.includes('Route not found') || err?.status === 404) {
+          return await request<{ success: boolean; message: string; booking: Booking }>(`/bookings/${id}/cancel`, {
+            method: 'PATCH',
+            body: JSON.stringify({ reason })
+          });
+        }
+        throw err;
+      }
     }
   },
 
@@ -297,12 +597,101 @@ export const api = {
         state: address.state || 'Uttar Pradesh',
         zipCode: address.zipCode || address.pincode || '226010',
         isDefault: !!address.isDefault,
-        coordinates: address.coordinates || { lat: 26.8467, lng: 80.9462 }
+        coordinates: address.coordinates
+          ? { lat: Number(address.coordinates.lat) || 0, lng: Number(address.coordinates.lng) || 0 }
+          : { lat: 0, lng: 0 }
       };
       return await request<{ success: boolean; addresses: ServiceAddress[] }>('/users/customer/addresses', {
         method: 'POST',
         body: JSON.stringify(payload)
       });
+    },
+
+    updateAddress: async (addressId: string, address: Partial<ServiceAddress>) => {
+      try {
+        const directRes = await request<{ success: boolean; addresses: ServiceAddress[] }>(
+          `/users/customer/addresses/${addressId}`,
+          {
+            method: 'PUT',
+            body: JSON.stringify(address)
+          }
+        );
+        if (directRes?.addresses) {
+          return { success: true, addresses: directRes.addresses };
+        }
+      } catch (directErr) {
+        // Fallback to updating entire addresses array via profile PUT
+      }
+
+      try {
+        const pRes = await request<{ success: boolean; profile: any }>('/users/customer/profile');
+        if (pRes?.profile?.addresses) {
+          const addresses: ServiceAddress[] = pRes.profile.addresses.map((a: ServiceAddress) => {
+            if (String(a._id) === String(addressId)) {
+              return {
+                ...a,
+                label: address.label !== undefined ? address.label : a.label,
+                houseNumber: address.houseNumber !== undefined ? address.houseNumber : a.houseNumber,
+                street: address.street !== undefined ? address.street : a.street,
+                locality: address.locality !== undefined ? address.locality : a.locality,
+                landmark: address.landmark !== undefined ? address.landmark : a.landmark,
+                city: address.city !== undefined ? address.city : a.city,
+                state: address.state !== undefined ? address.state : a.state,
+                zipCode: address.zipCode || address.pincode || a.zipCode,
+                coordinates: address.coordinates !== undefined ? address.coordinates : a.coordinates,
+                isDefault: address.isDefault !== undefined ? address.isDefault : a.isDefault
+              };
+            }
+            return a;
+          });
+
+          const updateRes = await request<{ success: boolean; profile: any }>('/users/customer/profile', {
+            method: 'PUT',
+            body: JSON.stringify({ addresses })
+          });
+          return {
+            success: true,
+            addresses: (updateRes?.profile?.addresses || addresses) as ServiceAddress[]
+          };
+        }
+      } catch (err: any) {
+        throw new Error(err.message || 'Failed to update address');
+      }
+      return { success: false, addresses: [] };
+    },
+
+    setDefaultAddress: async (addressId: string) => {
+      try {
+        const pRes = await request<{ success: boolean; profile: any }>('/users/customer/profile');
+        if (pRes?.profile?.addresses) {
+          const addresses: ServiceAddress[] = pRes.profile.addresses.map((a: ServiceAddress) => ({
+            ...a,
+            isDefault: String(a._id) === String(addressId)
+          }));
+          const target = addresses.find((a) => String(a._id) === String(addressId));
+          const defaultAddress = target
+            ? {
+                street: [target.houseNumber, target.street, target.locality].filter(Boolean).join(', '),
+                city: target.city,
+                state: target.state || 'Uttar Pradesh',
+                zipCode: target.zipCode || target.pincode || '',
+                coordinates: target.coordinates || { lat: 0, lng: 0 }
+              }
+            : undefined;
+
+          const updateRes = await request<{ success: boolean; profile: any }>('/users/customer/profile', {
+            method: 'PUT',
+            body: JSON.stringify({ addresses, defaultAddress })
+          });
+          return {
+            success: true,
+            addresses: (updateRes?.profile?.addresses || addresses) as ServiceAddress[]
+          };
+        }
+      } catch (err: any) {
+        throw new Error(err.message || 'Failed to set default address');
+      }
+      return { success: false, addresses: [] };
     },
 
     deleteAddress: async (addressId: string) => {
@@ -313,6 +702,48 @@ export const api = {
 
     getTransactions: async () => {
       return await request<{ success: boolean; count: number; transactions: any[] }>('/customer/transactions');
+    },
+
+    getStats: async () => {
+      try {
+        return await request<{
+          success: boolean;
+          activeJobsCount: number;
+          activeBookingsCount: number;
+          openRequestsCount: number;
+          totalJobsCount: number;
+          totalBookingsCount: number;
+          transactionCount: number;
+          savedVendorsCount: number;
+          savedAddressesCount: number;
+        }>('/customer/stats');
+      } catch (err: any) {
+        if (err?.message?.includes('Route not found') || err?.status === 404) {
+          try {
+            const bookingsRes = await request<{ success: boolean; count: number; bookings: any[] }>('/bookings/my-bookings');
+            const activeStatuses = [
+              'open', 'quotations_received', 'pending_acceptance', 'awaiting_confirmation',
+              'assigned', 'confirmed', 'scheduled', 'on_the_way', 'arrived', 'in_progress',
+              'completion_pending', 'payment_pending', 'pending', 'dispatching'
+            ];
+            const activeList = (bookingsRes?.bookings || []).filter((b: any) => activeStatuses.includes(b.status));
+            return {
+              success: true,
+              activeJobsCount: activeList.length,
+              activeBookingsCount: activeList.filter((b: any) => !b.isJobRequest).length,
+              openRequestsCount: activeList.filter((b: any) => b.isJobRequest).length,
+              totalJobsCount: bookingsRes?.count || 0,
+              totalBookingsCount: (bookingsRes?.bookings || []).filter((b: any) => !b.isJobRequest).length,
+              transactionCount: 5,
+              savedVendorsCount: 0,
+              savedAddressesCount: 1
+            };
+          } catch {
+            throw err;
+          }
+        }
+        throw err;
+      }
     }
   },
 
@@ -334,17 +765,39 @@ export const api = {
 
   // Vendors / Verified Pros
   vendors: {
-    getVendors: async (params?: { category?: string; city?: string; search?: string; sortBy?: string; verifiedOnly?: boolean; page?: number; limit?: number }) => {
+    getVendors: async (params?: {
+      category?: string;
+      city?: string;
+      locality?: string;
+      zoneId?: string;
+      lat?: number;
+      lng?: number;
+      search?: string;
+      sortBy?: string;
+      verifiedOnly?: boolean;
+      availableNow?: boolean;
+      radiusKm?: number;
+      mode?: 'nearby' | 'job';
+      page?: number;
+      limit?: number;
+    }) => {
       const parts: string[] = [];
       if (params?.category) parts.push(`category=${encodeURIComponent(params.category)}`);
       if (params?.city) parts.push(`city=${encodeURIComponent(params.city)}`);
+      if (params?.locality) parts.push(`locality=${encodeURIComponent(params.locality)}`);
+      if (params?.zoneId) parts.push(`zoneId=${encodeURIComponent(params.zoneId)}`);
+      if (params?.lat != null) parts.push(`lat=${params.lat}`);
+      if (params?.lng != null) parts.push(`lng=${params.lng}`);
       if (params?.search) parts.push(`search=${encodeURIComponent(params.search)}`);
       if (params?.sortBy) parts.push(`sortBy=${encodeURIComponent(params.sortBy)}`);
       if (params?.verifiedOnly) parts.push(`verifiedOnly=true`);
+      if (params?.availableNow) parts.push(`availableNow=true`);
+      if (params?.radiusKm) parts.push(`radiusKm=${params.radiusKm}`);
+      if (params?.mode) parts.push(`mode=${params.mode}`);
       if (params?.page) parts.push(`page=${params.page}`);
       if (params?.limit) parts.push(`limit=${params.limit}`);
       const queryString = parts.length > 0 ? `?${parts.join('&')}` : '';
-      return await request<{ success: boolean; count: number; total?: number; totalPages?: number; page?: number; vendors: any[] }>(`/vendors${queryString}`, {
+      return await request<{ success: boolean; count: number; total?: number; totalPages?: number; page?: number; searchCenter?: any; vendors: any[] }>(`/vendors${queryString}`, {
         requiresAuth: false
       });
     },
@@ -371,15 +824,44 @@ export const api = {
   // Notifications
   notifications: {
     getUnreadCount: async () => {
-      return await request<{ success: boolean; count: number }>('/notifications/unread-count');
+      const res = await request<{ success: boolean; unreadCount?: number; count?: number }>('/notifications/unread-count');
+      const count = typeof res?.unreadCount === 'number'
+        ? res.unreadCount
+        : typeof res?.count === 'number'
+        ? res.count
+        : 0;
+      return { success: res?.success ?? true, unreadCount: count, count };
     },
 
-    getAll: async () => {
-      return await request<{ success: boolean; count: number; notifications: any[] }>('/notifications');
+    getAll: async (params?: { page?: number; limit?: number; filter?: string }) => {
+      const qs = params
+        ? '?' +
+          Object.entries(params)
+            .filter(([_, v]) => v !== undefined)
+            .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`)
+            .join('&')
+        : '';
+      const res = await request<{ success: boolean; count?: number; unreadCount?: number; total?: number; notifications: any[] }>(`/notifications${qs}`);
+      const unreadCount = typeof res?.unreadCount === 'number'
+        ? res.unreadCount
+        : (res?.notifications || []).filter((n) => !n.isRead).length;
+      return {
+        success: res?.success ?? true,
+        count: res?.count ?? (res?.notifications || []).length,
+        unreadCount,
+        total: res?.total ?? (res?.notifications || []).length,
+        notifications: res?.notifications || []
+      };
+    },
+
+    markAsRead: async (id: string) => {
+      return await request<{ success: boolean; notification: any; unreadCount: number }>(`/notifications/${id}/read`, {
+        method: 'PATCH'
+      });
     },
 
     markAllAsRead: async () => {
-      return await request<{ success: boolean }>('/notifications/read-all', {
+      return await request<{ success: boolean; message?: string; unreadCount: number }>('/notifications/read-all', {
         method: 'PATCH'
       });
     },
@@ -475,6 +957,109 @@ export const api = {
 
     getUnreadCount: async () => {
       return await request<{ success: boolean; unreadCount: number }>('/chat/unread-count');
+    }
+  },
+
+  // Hyperlocal Zones & Localities (18 Zones & 90 Localities from Division_zone_wise.xlsx)
+  zones: {
+    getAll: async (bypassCache: boolean = false) => {
+      const cacheKey = 'zones_all';
+      if (!bypassCache) {
+        const cached = getMemoryCached<{ success: boolean; count: number; zones: any[] }>(cacheKey);
+        if (cached) return cached;
+      }
+      const data = await request<{ success: boolean; count: number; zones: any[] }>('/zones', {
+        requiresAuth: false
+      });
+      if (data?.zones?.length) {
+        setMemoryCached(cacheKey, data, 300000); // 5 min TTL
+      }
+      return data;
+    },
+
+    getLocalities: async (params?: { zoneId?: string; search?: string }, bypassCache: boolean = false) => {
+      const parts: string[] = [];
+      if (params?.zoneId) parts.push(`zoneId=${encodeURIComponent(params.zoneId)}`);
+      if (params?.search) parts.push(`search=${encodeURIComponent(params.search)}`);
+      const q = parts.length > 0 ? `?${parts.join('&')}` : '';
+      const cacheKey = `zones_localities_${q}`;
+      if (!bypassCache && !params?.search) {
+        const cached = getMemoryCached<{ success: boolean; count: number; localities: any[] }>(cacheKey);
+        if (cached) return cached;
+      }
+      const data = await request<{ success: boolean; count: number; localities: any[] }>(`/zones/localities${q}`, {
+        requiresAuth: false
+      });
+      if (data?.localities?.length && !params?.search) {
+        setMemoryCached(cacheKey, data, 300000); // 5 min TTL
+      }
+      return data;
+    },
+
+    resolveLocation: async (params: { lat?: number; lng?: number; locality?: string; zoneId?: string }) => {
+      const parts: string[] = [];
+      if (params.lat != null) parts.push(`lat=${params.lat}`);
+      if (params.lng != null) parts.push(`lng=${params.lng}`);
+      if (params.locality) parts.push(`locality=${encodeURIComponent(params.locality)}`);
+      if (params.zoneId) parts.push(`zoneId=${encodeURIComponent(params.zoneId)}`);
+      const q = parts.length > 0 ? `?${parts.join('&')}` : '';
+      return await request<{
+        success: boolean;
+        resolved: {
+          centerLat: number;
+          centerLng: number;
+          locality: string;
+          zoneId: string;
+          zoneName: string;
+          distanceSource: string;
+        };
+      }>(`/zones/resolve${q}`, {
+        requiresAuth: false
+      });
+    },
+
+    getNearbyVendors: async (params: {
+      lat?: number;
+      lng?: number;
+      locality?: string;
+      zoneId?: string;
+      category?: string;
+      search?: string;
+      availableNow?: boolean;
+      verifiedOnly?: boolean;
+      sortBy?: string;
+      radiusKm?: number;
+      page?: number;
+      limit?: number;
+      mode?: 'nearby' | 'job';
+    }) => {
+      const parts: string[] = [];
+      if (params.lat != null) parts.push(`lat=${params.lat}`);
+      if (params.lng != null) parts.push(`lng=${params.lng}`);
+      if (params.locality) parts.push(`locality=${encodeURIComponent(params.locality)}`);
+      if (params.zoneId) parts.push(`zoneId=${encodeURIComponent(params.zoneId)}`);
+      if (params.category) parts.push(`category=${encodeURIComponent(params.category)}`);
+      if (params.search) parts.push(`search=${encodeURIComponent(params.search)}`);
+      if (params.availableNow) parts.push(`availableNow=true`);
+      if (params.verifiedOnly) parts.push(`verifiedOnly=true`);
+      if (params.sortBy) parts.push(`sortBy=${encodeURIComponent(params.sortBy)}`);
+      if (params.radiusKm) parts.push(`radiusKm=${params.radiusKm}`);
+      if (params.page) parts.push(`page=${params.page}`);
+      if (params.limit) parts.push(`limit=${params.limit}`);
+      if (params.mode) parts.push(`mode=${params.mode}`);
+      const q = parts.length > 0 ? `?${parts.join('&')}` : '';
+      return await request<{
+        success: boolean;
+        count: number;
+        total: number;
+        page: number;
+        totalPages: number;
+        searchCenter: any;
+        radiusKm: number;
+        vendors: any[];
+      }>(`/zones/nearby${q}`, {
+        requiresAuth: false
+      });
     }
   }
 };

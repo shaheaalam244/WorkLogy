@@ -23,6 +23,16 @@ export const adminAPI = {
     return res.data;
   },
 
+  reviewVendorDocument: async (vendorId, docIndex, data) => {
+    const res = await api.patch(`/admin/vendors/${vendorId}/documents/${docIndex}`, data);
+    return res.data;
+  },
+
+  getDocumentUrl: (vendorId, docIndex, mode = 'view') => {
+    const base = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001/api');
+    return `${base}/admin/vendors/${vendorId}/documents/${docIndex}/${mode}`;
+  },
+
   addVendorNote: async (id, data) => {
     const res = await api.post(`/admin/vendors/${id}/notes`, data);
     return res.data;

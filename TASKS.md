@@ -35,7 +35,7 @@ A task can only be moved to `[x]` (Completed) when:
 - [x] **Task 2.3**: Build responsive Login and Registration views with role selection (`Customer` vs `Vendor`).
 - [x] **Task 2.4**: Implement multi-step Vendor Onboarding stepper UI (`/vendor/onboarding`) with persistent backend sync.
 - [x] **Task 2.5**: Complete vendor compliance verification documents upload and administrative review workflow.
-- [ ] **Task 2.6**: Add customer saved addresses management with geo-location coordinates.
+- [x] **Task 2.6**: Add customer saved addresses management with geo-location coordinates, active location prefill ("jo active rhe wo aaye"), and direct manual entry ("phle enter ka hi aaye").
 
 ---
 
@@ -164,6 +164,30 @@ A task can only be moved to `[x]` (Completed) when:
   - Added bottom horizontal service category selector strip with 8 items (AC & Appliances, Electrical, Plumbing, Home Cleaning, Painting, Carpentry, Pest Control, and More Services →) with active green accent highlight and mobile swipe support.
   - Configured robust autoplay controls: 5000ms timer, smooth 700ms crossfade, desktop hover-pause, tab visibility listener (`document.visibilityState === 'hidden'`), reduced-motion compliance (`prefers-reduced-motion`), keyboard accessibility, and manual timer reset.
   - Verified with clean production build (`npm run build`) and 15/15 passing unit tests.
+- [x] **Task 3.16**: Implement Production-Ready Smart Nearby Vendor Discovery & Ranking System (`Division_zone_wise.xlsx`, `Zone.js`, `Locality.js`, `VendorProfile.js`, `vendorDiscovery.service.js`, `zone.controller.js`, `zone.routes.js`, `vendor.controller.js`, `client.ts`, `LocationModal.tsx`, `HomeScreen.tsx`, `zonesData.ts`):
+  - Extracted 18 service zones (`LKO-Z01` to `LKO-Z18`), 90 canonical localities (5 per zone), and 1,000 vendor profiles from `Division_zone_wise.xlsx` into structured JSON and seeded cleanly into MongoDB Atlas.
+  - Built GeoJSON `Point` schemas and MongoDB `2dsphere` geospatial indexes on `Zone`, `Locality`, and `VendorProfile`.
+  - Implemented smart proximity-first vendor discovery algorithm:
+    - Priority 1: Requested service / category match.
+    - Priority 2: Vendor verified & currently available.
+    - Priority 3: Shortest actual distance (nearest vendor always appears first, e.g. 0 km/1.2 km before 3.5 km).
+    - Priority 4: Service coverage radius check.
+    - Priority 5: High rating (★) and completed jobs count quality ranking.
+    - Priority 6: Same locality / zone deterministic tie-breaker.
+  - Implemented dual discovery search modes:
+    - **Find Nearby Vendors**: Auto-resolves customer's live GPS coordinates to canonical Lucknow locality and zone.
+    - **Find Vendors for This Job**: Searches vendors around customer's selected service/job address (e.g. for booking service at parents' house).
+  - Built canonical Zone & Locality endpoints:
+    - `GET /api/zones`: All 18 zones with nested 90 localities.
+    - `GET /api/zones/localities`: Flat searchable list of 90 localities.
+    - `GET /api/zones/resolve`: Resolves GPS coordinates or locality name to canonical zone.
+    - `GET /api/zones/nearby`: Proximity-first nearby vendor discovery with 2dsphere indexing and projection.
+    - Integrated with `GET /api/vendors` for complete backward compatibility.
+  - Upgraded Customer Mobile App:
+    - Added `api.zones` and enhanced `api.vendors.getVendors` in `mobile/customer-app/src/api/client.ts`.
+    - Upgraded `LocationModal.tsx` with dual mode switch (Nearby GPS vs Job Address), zone filter chips, instant search across all 90 localities, and GPS auto-detection.
+    - Updated `HomeScreen.tsx` to display vendor distance (`1.2 km away`), nearest badge, locality, and zone tag.
+    - Generated offline canonical dataset `zonesData.ts` with all 18 zones and 90 localities.
 
 ---
 
@@ -519,7 +543,657 @@ A task can only be moved to `[x]` (Completed) when:
   - TypeScript validation (`npx tsc --noEmit`) passing with 0 errors.
   - Android Expo bundle export (`npx expo export -p android`) verified with 735 modules bundled cleanly.
 
+---
 
+## 16. WorkLogy Vendor Mobile App — Complete Production Implementation & Hardening
 
+- [x] **Task 16.1**: Shared Backend & OTP Geofence Hardening (`backend/src/controllers/booking.controller.js`):
+  - Updated `verifyStartOtp` in `booking.controller.js` to allow 6-digit OTP verification when `booking.status === 'arrived'` or destination coordinates are unconfigured. Prevents physical OTP verification from failing on in-person job handoffs.
+  - Verified Node syntax check: `node --check backend/src/controllers/booking.controller.js` passed with code 0.
+- [x] **Task 16.2**: Android Navigation & Hardware Back Button Stack (`VendorNavigator.tsx`):
+  - Created `NavigationContext` with `registerBackHandler(handler: () => boolean)` stack.
+  - Central action button explicitly labeled **"Post Service"** for publishing vendor service offerings.
+  - Implemented Android root double-back exit confirmation toast ("Press back again to exit").
+  - Added periodic 30s background alert polling with dynamic badge on Messages tab.
+- [x] **Task 16.3**: Authentic Contractor Home Dashboard (`VendorHomeScreen.tsx`):
+  - Online/Offline toggle with server sync (`api.vendors.toggleAvailability`), loading indicators, and error fallback.
+  - 4 verified metric summary cards: New Eligible Jobs, Active Assigned Jobs, Total Completed Earnings, and Pending Escrow Settlement.
+  - Direct Inquiries section with 1-tap accept/decline.
+  - Active & scheduled jobs with direct links to Job Dossier and Arrival OTP entry.
+  - Service listing management banner ("Post Service" and "Manage All").
+  - Available job opportunities carousel with urgency badges (⚡ Emergency vs Open Tender).
+  - Recent customer conversations preview with direct chat navigation.
+- [x] **Task 16.4**: Unified Jobs Screen & Quotation Back Handling (`JobsScreen.tsx`):
+  - Registered back-handler hook to dismiss quotation modal on Android back press without popping screens.
+  - Synchronized filter tabs: Available Jobs (`new`), Direct Inquiries (`requests`), Quoted (`quoted`), Accepted (`accepted`), In Progress (`in_progress`), Completed (`completed`), Cancelled (`cancelled`).
+  - Connected 1-tap direct assignment claim and emergency lead claim.
+- [x] **Task 16.5**: Full Booking Lifecycle & Cancellation Workflow (`VendorJobDetailScreen.tsx`):
+  - Complete status transitions: `['confirmed', 'scheduled', 'assigned']` -> `on_the_way` -> `arrived` -> `in_progress` (via 6-digit OTP) -> `completed` (via sign-off).
+  - Cancellation workflow with reason picker modal ("Emergency schedule conflict", "Unable to reach service location", "Parts unavailable", "Customer requested", "Safety issue") and backend audit history.
+  - Registered back handlers to dismiss OTP modal, Completion modal, and Cancellation modal on Android back press.
+- [x] **Task 16.6**: KYC Verification & Profile Compliance (`VendorProfileScreen.tsx` & `client.ts`):
+  - Updated `requestVerification` API client and profile screen to send compliant `{ verificationType, idNumber, consent, documents: [{ name, url }] }` payload matching backend schema and privacy guardrails.
+  - Registered back handlers for KYC verification modal and Profile editing modal.
+- [x] **Task 16.7**: Multi-Step Post Service Wizard Back Handling (`VendorNewServiceScreen.tsx`):
+  - Integrated `useNavigation` back handler for multi-step service creation (Step 1-5).
+  - Pressing hardware back button on Steps 2-5 returns to the previous step; pressing on Step 1 with unsaved edits prompts a discard warning dialog.
+- [x] **Task 16.8**: Full TypeScript Compilation Verification:
+  - Executed `npx tsc --noEmit` across `mobile/vendor-app` — compiled with **0 errors**.
 
+---
+
+## 17. WorkLogy Customer Mobile App — Performance Optimization & Stability Audit
+
+- [x] **Task 17.1**: Dynamic API Host Failover with Sticky Memory & Snappy AbortController Timeout (`client.ts`):
+  - Solved `AxiosError: timeout of 10000ms exceeded` and 10–30s request stalls when testing on cellular networks or external Wi-Fi.
+  - Implemented 3500ms snappy timeout for local/private IP dev probes (`10.211.183.171` / `localhost`).
+  - Added sticky failover: when local dev IP is unreachable, fails over to the live VPS backend (`http://76.13.246.224:5001/api`), caching the working host in memory for all remaining session requests. Subsequent API calls execute directly without repeating network timeouts.
+- [x] **Task 17.2**: In-Memory Auth Token Caching (`client.ts`):
+  - Implemented zero-latency in-memory auth token cache (`cachedAuthToken`), eliminating asynchronous SecureStore disk I/O on every authenticated fetch request.
+  - Synchronized cache updates on login, register, profile refresh, and cleared on 401 token expiry / logout.
+- [x] **Task 17.3**: In-Flight Request Deduplication & Selective GET Retries (`client.ts`):
+  - Added `inFlightGetRequests` map to deduplicate identical concurrent GET requests from mounting components.
+  - Added selective single-retry with 400ms exponential backoff for transient network read failures, strictly omitting non-idempotent mutations (POST/PATCH/DELETE).
+- [x] **Task 17.4**: In-Memory TTL Caching for Static Metadata (`client.ts`):
+  - Implemented client-side TTL caching for `/categories` (3-minute TTL) and `/zones` / `/zones/localities` (5-minute TTL).
+  - Provided `api.cache.clear()` helper wired to HomeScreen pull-to-refresh for on-demand server synchronization.
+- [x] **Task 17.5**: Resilient Real-Time Socket Connection (`socketService.ts`):
+  - Aligned socket connection with dynamic active host via `getActiveSocketUrl()`.
+  - Added automatic fallback to `http://76.13.246.224:5001` upon local socket connection failure, preventing broken real-time message subscriptions.
+- [x] **Task 17.6**: Android Keyboard Overlap & Layout Double-Padding Fix (`ChatDetailScreen.tsx`):
+  - Resolved keyboard overlap and composer displacement by switching hardcoded `behavior="padding"` to `behavior={Platform.OS === 'ios' ? 'padding' : undefined}` in accordance with Android's `softwareKeyboardLayoutMode: resize`.
+  - Strengthened `recipientId` extraction to resolve vendor user IDs across all entry points (direct booking, posted job, and professional profile).
+  - Ensured comprehensive socket listener cleanup (`leave_conversation` and `.off`) on unmount to prevent memory leaks and duplicate message events.
+- [x] **Task 17.7**: Duplicate Navigation Screen Push Protection (`CustomerNavigator.tsx`):
+  - Added deduplication guard in `navigate()` comparing target screen and params against the stack's top entry, preventing double screen pushes on rapid double-taps.
+- [x] **Task 17.8**: Optimization of Job Posting & My Jobs Tab Switching (`CreateJobScreen.tsx` & `MyJobsScreen.tsx`):
+  - Added `isSubmittingRef` lock guard to `CreateJobScreen` ensuring 100% idempotency against double-tap job creation.
+  - Decoupled `activeTab` from `MyJobsScreen` fetch dependency, making tab switching instant (0ms) using in-memory state filtering without unnecessary network roundtrips.
+- [x] **Task 17.9**: TypeScript Compilation & Verification:
+  - Executed `npx tsc --noEmit` across `mobile/customer-app` — compiled with **0 errors**.
+
+---
+
+## 📌 Phase 18: Customer Mobile App — Location Accuracy, Optional Budget & Job Posting Fix (COMPLETED)
+- [x] **Task 18.1**: GPS Detection & Plus Code Sanitization (`locationService.ts`):
+  - Created `detectGpsLocation()` foreground routine checking device GPS services (`Location.hasServicesEnabledAsync()`), requesting foreground permissions with informative context, and querying GPS position with timeout fallback.
+  - Implemented `isPlusCode()` regex validator to detect Google Plus Codes (e.g. `WWWG+WF4`, `8FFF+XX`).
+  - Completely stripped Plus Codes from human-readable `street`, `locality`, and `city` fields. Saved plus code strictly as an optional reference (`plusCodeRef`).
+  - Removed blind fallback to default city ('Lucknow') when device GPS resolves coordinates outside Lucknow.
+- [x] **Task 18.2**: Separated Address Fields & Locality Autocomplete (`CreateJobScreen.tsx`):
+  - Replaced ambiguous monolithic address input with clean, distinct fields: House / Building / Street, Locality / Sector, City, and PIN Code.
+  - Implemented debounced (250ms) autocomplete search querying authoritative `/api/zones/localities?search=...`.
+  - Selecting a suggested locality binds canonical locality name, zone ID (e.g. `LKO-Z01`), and verified coordinates.
+  - Added support for custom manual text entry without blocking unlisted areas.
+  - Added Indian 6-digit PIN code format validation (`^[1-9][0-9]{5}$`).
+- [x] **Task 18.3**: Optional Budget & Default "Request Quotes" Mode (`CreateJobScreen.tsx`):
+  - Updated Pricing Preference to make Mode B ("Request Quotes") the recommended default.
+  - Mode B ("Request Quotes"): Hides fixed budget input, displays informative reassurance card ("Let interested professionals inspect requirements and send quotations"), and submits `budget: { type: 'quote', amount: 0 }`.
+  - Mode A ("Fixed Budget"): Budget is optional. If left blank, submits as quote request. If amount is provided, validates that it is a positive integer. Eliminated hardcoded ₹499 default.
+- [x] **Task 18.4**: Job Submission & Coordinates Binding (`CreateJobScreen.tsx` & `types/index.ts`):
+  - Updated `Job.location` schema in types with `houseNumber`, `street`, `locality`, `city`, `state`, `zipCode`, `coordinates: { lat, lng }`, `locationSource: 'gps' | 'manual' | 'saved_address'`, and `locationAccuracyMeters`.
+  - Maintained `isSubmittingRef` lock guard to prevent duplicate job creation from rapid taps.
+  - Provided structured confirmation alert displaying the submitted service request, locality, and pricing preference before navigating to `MyJobsTab`.
+- [x] **Task 18.5**: Type Checking & Verification:
+  - Verified `mobile/customer-app` TypeScript compilation via `npx tsc --noEmit` — passed cleanly with 0 errors.
+- [x] **Task 18.6**: Address Component Semantic Mapping & Division Filtering (`locationService.ts` & `CreateJobScreen.tsx`):
+  - Solved inversion where villages/census towns (e.g. `Kamalabad Barhauli`) were mapped to City and administrative divisions (e.g. `Lucknow Division`) were mapped to Locality.
+  - Implemented `parseSemanticAddress()` with strict component typing:
+    - Identified and extracted administrative divisions into `division`, strictly preventing them from polluting `locality` or `street`.
+    - Corrected village/locality vs primary district city resolution: `Kamalabad Barhauli` mapped to Locality / Area, `Lucknow` mapped to City, `226201` preserved as PIN Code, and `WWWG+WF4` isolated as Plus Code reference.
+    - Added swap detection preventing canonical localities (e.g. `Gomti Nagar`) from being submitted in the City field.
+  - Validated via unit test suite covering all 5 edge-case scenarios and clean TypeScript compilation.
+
+---
+
+## 📌 Phase 19: 100% Accurate Job Location Capture & Direct Doorstep Navigation (COMPLETED)
+- [x] **Task 19.1**: 100% High-Precision Satellite GPS Pin Acquisition (`locationService.ts` & `CreateJobScreen.tsx`):
+  - Used `Location.Accuracy.Highest` (meter-level satellite GPS: NavIC/GPS/GLONASS) with progressive fallbacks (`High` -> `Balanced` -> `getLastKnownPositionAsync`).
+  - Saved satellite coordinates (`lat`, `lng`), hardware accuracy rating (`accuracyMeters`), and Open Location Code reference (`plusCodeRef`).
+  - Displayed a prominent Satellite GPS Pin Card in customer app confirming exact coordinates (`Pin: lat, lng`) and accuracy (`±Xm`), reassuring the customer that professionals will navigate straight to their doorstep pin.
+- [x] **Task 19.2**: Dedicated Physical Doorstep Address Fields (`CreateJobScreen.tsx` & `types/index.ts`):
+  - Replaced ambiguous merged inputs with separated fields designed for Indian urban & suburban navigation:
+    1. `House / Flat No., Floor, Building Name` (`houseNumber`, e.g. "Flat 302, 3rd Floor, Tower B, Sunshine Apts").
+    2. `Street / Road / Colony` (`streetAddress`, e.g. "Main Ring Road, Sector B").
+    3. `Nearby Landmark` (`landmark` with "Crucial for technician" badge, e.g. "Opposite Water Tank, Near Yellow Gate").
+    4. `Locality / Sector / Area *` (`locality` with autocomplete and division sanitization).
+    5. `City *` and `PIN Code` (`city`, `pincode`).
+    6. `Technician Entry & Access Instructions (Optional)` (`accessInstructions`, e.g. "Ring bell twice, 2nd floor, ask guard for Flat 302").
+  - Assembled complete human-readable address: `[houseNumber, streetAddress, landmark ? 'Near ' + landmark : '', locality, city, pincode].join(', ')`.
+  - Stored and submitted structured payload preserving `houseNumber`, `street`, `landmark`, `locality`, `city`, `state`, `zipCode`, `coordinates: { lat, lng }`, `locationAccuracyMeters`, and `accessInstructions`.
+- [x] **Task 19.3**: Direct 1-Tap Google Maps Turn-by-Turn Navigation for Professionals (`VendorJobDetailScreen.tsx` & `ConfirmedJobsScreen.tsx`):
+  - Solved root cause where the vendor app was performing generic text query searches (`https://maps.google.com/?q=${q}`) that dropped pins kilometers away at city centers instead of doorsteps.
+  - Implemented direct turn-by-turn navigation using exact GPS coordinates:
+    - Android native Google Maps navigation intent: `google.navigation:q=${lat},${lng}`.
+    - Universal directions fallback: `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`.
+    - Graceful text query fallback only if coordinates are missing.
+- [x] **Task 19.4**: Dedicated Service Location & Navigation Card in Vendor Dossier (`VendorJobDetailScreen.tsx`):
+  - Built a comprehensive Service Location Card in the professional's dossier:
+    - Doorstep Address: House/Flat No., Building Name, Street / Road.
+    - Highlighted Landmark badge with flag icon (`🚩 Landmark: Opposite Water Tank`).
+    - Locality, City, and PIN code.
+    - Homeowner Access / Gate entry note (`🚪 Gate / Entry Note: "Ring bell twice..."`).
+    - Satellite GPS Pin coordinates and precision rating (`🛰️ Pin: 26.8923, 80.9412 • Accuracy ±8m`).
+    - High-visibility CTA button: `Start Google Maps Navigation (Exact GPS Pin)`.
+  - Preserved privacy masking for unassigned public marketplace browsing while unlocking full exact location immediately once the professional accepts or is assigned the job.
+- [x] **Task 19.5**: End-to-End TypeScript Verification:
+  - `mobile/customer-app`: `npx tsc --noEmit` passed with **0 errors**.
+  - `mobile/vendor-app`: `npx tsc --noEmit` passed with **0 errors**.
+- [x] **Task 19.6**: Request Service Address Form Simplification (`CreateJobScreen.tsx`):
+  - Completely removed `Nearby Landmark`, `Technician Entry & Access Instructions (Optional)`, and decorative duplicate banners.
+  - Cleanly established the exact essential address order:
+    1. Auto-Detect GPS button (in header row)
+    2. Compact location status pill (`GPS coordinates attached` vs `Manual address entry`)
+    3. House / Flat No. and Building Name (optional)
+    4. Street / Road / Colony (optional)
+    5. Locality / Sector / Area (required, with autocomplete and division sanitization)
+    6. City (required)
+    7. PIN Code (optional)
+  - Reduced vertical spacing, ensured consistent input heights and label spacing, and preserved WorkLogy green-and-white theme.
+  - Kept pricing preference, Request Quotes explanation, Escrow guarantee, and Submit Service Request button clearly visible and accessible.
+  - Verified TypeScript compilation: `mobile/customer-app` passed with **0 errors**.
+
+---
+
+## 📌 Phase 20: Integrate Saved Addresses with Job Posting, Booking & Dispatch (Customer App) (COMPLETED)
+- [x] **Task 20.1**: Customer Saved Addresses Backend Client Methods (`mobile/customer-app/src/api/client.ts`):
+  - Added `api.customer.setDefaultAddress(addressId)` updating `CustomerProfile.addresses` so `isDefault: true` is persisted to MongoDB Atlas and updating `CustomerProfile.defaultAddress`.
+  - Added `api.customer.updateAddress(addressId, address)` allowing address editing directly via `PUT /users/customer/profile`.
+  - Updated `api.customer.addAddress()` to store `{ lat: 0, lng: 0 }` if coordinates are not provided, strictly avoiding fabricated coordinates.
+- [x] **Task 20.2**: Choose Saved Address Component & Integration in Request Service (`CreateJobScreen.tsx`):
+  - Implemented `Choose Saved Address` block directly above manual address fields with live backend synchronization.
+  - Preselects active/default saved address (`isDefault: true`) on load, populating `houseNumber`, `streetAddress`, `locality`, `city`, `pincode`, and associated stored coordinates.
+  - Selectable cards displaying label (Home, Work, Site), default badge, street, locality, city, state, zip code, and coordinates status pill (`Precise GPS coordinates attached` vs `No GPS coordinates - street navigation`).
+  - Added seamless toggle between `Saved (N)` and `Enter New` (manual form), and an in-line "+ Add New Address" modal saving to profile and auto-selecting.
+  - Added Selected Service Destination confirmation card above submission button.
+  - Both Fixed-Budget and Request Quotes job types bind the selected address and coordinates into `locationPayload` with `locationSource: 'saved_address'`.
+- [x] **Task 20.3**: Customer Profile Saved Addresses Management (`ProfileScreen.tsx`):
+  - Fixed active location selection so "Set as Active" persists `isDefault: true` to MongoDB via `api.customer.setDefaultAddress()`, updates local state, and saves to storage.
+  - Added Edit Address capability (`handleOpenEditAddress` & `handleSaveAddress`) allowing customers to edit existing saved addresses.
+  - Added duplicate address prevention checks before saving.
+  - Added confirmation dialog for address deletion with notice that historical booking snapshots remain preserved.
+- [x] **Task 20.4**: Service Package Booking & Emergency Dispatch Integration (`CategoryDetailScreen.tsx`, `ProfessionalProfileScreen.tsx`, `EmergencyScreen.tsx`):
+  - Preselects customer's default address for direct package bookings and professional profile bookings.
+  - Passes valid saved coordinates (`{ lat, lng }`) and correctly mapped `locality` and `zipCode` into booking address snapshots.
+  - Connected saved addresses to `EmergencyScreen.tsx` with 1-tap address selection chips, preselecting default address and submitting accurate coordinates to emergency dispatch.
+- [x] **Task 20.5**: Verification:
+  - TypeScript compilation `npx tsc --noEmit` passed with **0 errors**.
+  - Web frontend and vendor app code strictly preserved and untouched.
+
+---
+
+## 📌 Phase 21: Complete Edit Profile & Account Management (Customer App) (COMPLETED)
+- [x] **Task 21.1**: Dependencies & Native Media Integrations:
+  - Installed and verified `expo-image-picker` (`~57.0.x`) for gallery photo picking.
+  - Used React Native core `PermissionsAndroid` for device notification permissions (eliminating missing native module `ExpoTopicSubscriptionModule` errors in Expo Go).
+  - Implemented runtime media library permission requests with friendly alerts and settings shortcuts.
+- [x] **Task 21.2**: API Client & AuthContext Profile Methods (`mobile/customer-app/src/api/client.ts`, `AuthContext.tsx`):
+  - Added `api.media.uploadImage(fileUri)` streaming `multipart/form-data` via native `XMLHttpRequest` to existing Cloudinary-backed `POST /api/jobs/upload-image` (bypassing Expo Winter fetch FormData limitations).
+  - Added `api.auth.updateProfile(data)` calling `PUT /users/profile` supporting name, email, phone, and avatar.
+  - Added `api.auth.updatePassword(data)` calling `PUT /auth/updatepassword` with current/new password verification.
+  - Updated `AuthContext.tsx` `updateProfile` to seamlessly route profile updates and refresh local user session state.
+- [x] **Task 21.3**: Customer Profile Screen & Edit Profile Modal (`ProfileScreen.tsx`):
+  - Displays actual authenticated customer avatar, full name, phone number, email address, and account verification badge (`Verified Account` vs `Verification Pending`).
+  - Edit Profile modal with avatar preview, `[📷 Choose from Gallery]` picker, `[✕ Remove Photo]` restoration, and 10MB size validation.
+  - Real-time field validation for full name (min 2 chars), email format regex, and phone number (10-digit check) with field-level error messages.
+  - Server persistence of Cloudinary avatar URL and personal details, refreshing profile state upon save.
+- [x] **Task 21.4**: Saved Service Addresses Full Management (`ProfileScreen.tsx`):
+  - Complete 7-field mapping: House/Flat (`houseNumber`), Street (`street`), Locality (`locality`), City (`city`), State (`state`), PIN code (`zipCode`), Coordinates (`coordinates`).
+  - Real backend connection: View saved addresses, Add new address, Edit existing address, Set active/default location, and Delete address after confirmation.
+- [x] **Task 21.5**: Preferences & Account Management (`ProfileScreen.tsx`):
+  - Alerts & Notifications: Real backend notification preferences modal for booking confirmations, status updates, quotations, and cancellation alerts.
+  - Device Push Notifications: Real device notification permission check via `expo-notifications` with status badge (`Enabled`, `Denied`, `Check`) and tap-to-request action.
+  - Push Notification Sound: Toggle persisted to AsyncStorage.
+  - Account Security & Password: Secure change password modal verifying current password, minimum 6 characters for new password, password confirmation matching, and eye toggle for visibility.
+  - Help & Support (FAQs, ticket creation, open tickets list) and Sign Out with confirmation.
+- [x] **Task 21.6**: Verification & DoD Compliance:
+  - TypeScript compilation `npx tsc --noEmit` in `mobile/customer-app` passed with **0 errors**.
+  - Strict scope enforced: Web frontend and `mobile/vendor-app` strictly preserved and untouched.
+- [x] **Task 21.8**: Fix Customer Notifications Read/Unread & Location Persistence (`client.ts`, `NotificationsScreen.tsx`, `HomeScreen.tsx`, `LocationModal.tsx`, `locationService.ts`, `CustomerNavigator.tsx`, `ProfileScreen.tsx`):
+  - **Part A (Notifications Read/Unread System)**:
+    - Fixed hardcoded `unreadNotifications = 3` in `HomeScreen.tsx` and updated unread count response mapping (`res.unreadCount ?? res.count ?? 0`).
+    - Added `api.notifications.markAsRead(id)` to `client.ts` calling `PATCH /api/notifications/:id/read`.
+    - Made notification cards interactive touchables in `NotificationsScreen.tsx` with optimistic UI updates, persistent server marking, rollback on failure, unread styling removal, and deep-link navigation to bookings/jobs/messages.
+    - Connected "Mark all as read" button in `NotificationsScreen.tsx` calling `PATCH /api/notifications/read-all`.
+    - Added periodic (15s) and route-focus unread count synchronization in `HomeScreen.tsx` and `CustomerNavigator.tsx`.
+  - **Part B (Predictable Location Persistence & Anti-Jumping Hierarchy)**:
+    - Enforced strict 4-level location resolution hierarchy:
+      1. Customer explicitly selected or manually chosen location (`isExplicit: true`).
+      2. Persisted active service address from backend MongoDB profile (`isDefault: true`).
+      3. Newly detected GPS location (only when no valid saved or explicit location exists, or on manual GPS refresh).
+      4. Default Lucknow service hub fallback without overwriting storage.
+    - Eliminated destructive `detectLocationViaIP()` from automatic detection flow to prevent cellular gateway IP jitter (e.g. Jio/Airtel mapping to Delhi/Kanpur) from overwriting customer addresses.
+    - Connected `handleSelectSavedAddress` in `LocationModal.tsx` to `api.customer.setDefaultAddress(addr._id)` ensuring MongoDB profile persistence across reboots.
+    - Connected canonical locality mapping for "IIM Lucknow" / "IIM Road" (`coordinates: { lat: 26.932, lng: 80.915 }`, zone `LKO-Z05`).
+    - Synchronized `HomeScreen.tsx` nearby professionals query with the resolved active location and coordinates.
+  - **Verification**:
+    - Ran TypeScript check `npx tsc --noEmit` in `mobile/customer-app` with 0 errors.
+    - Ran live verification test `verify_notifications_and_location.mjs` against backend: verified zone resolution for IIM coordinates (`IIM Road`, `LKO-Z05`), unread count retrieval, single notification mark-as-read with `readAt` timestamp, mark-all-as-read, and MongoDB default address persistence.
+
+---
+
+## 📌 Phase 22: Booking Cancellation, Resilient ID Mapping & Real-Time Data Synchronization (COMPLETED)
+- [x] **Task 22.1**: Root Cause Analysis & Resolution for "Job not found":
+  - **Root Cause Identified**:
+    1. In `mobile/customer-app/src/screens/MyJobsScreen.tsx`, `isJob` was computed as `Boolean(item.isJobRequest || item.bookingType === 'open_request')`. Because the backend `getCustomerBookings` assigns `bookingType: 'open_request'` to every booking that originated from an open request or has a linked job, all such bookings were incorrectly treated as jobs on mobile.
+    2. Mobile then routed cancellation to `api.jobs.cancelJob(orderId)` where `orderId` was the Booking document's `_id` (e.g., `6adbab341482544193ac5e8f`).
+    3. `backend/src/controllers/job.controller.js`'s `cancelJob` searched `Job.findById(req.params.id)`. Because the ID was a Booking ID and not a Job ID, it returned 404 with `"Job not found"`.
+    4. Passing displayed booking reference `BK-86251993` directly resulted in Mongoose `CastError` exceptions.
+- [x] **Task 22.2**: Dual-Layer Resilient ID Resolution & Authorization:
+  - Updated `backend/src/controllers/customer.controller.js` (`cancelCustomerBooking`):
+    - Safely tests for 24-character hex ObjectIds vs reference strings (`BK-...`, `REQ-...`).
+    - Looks up by `Booking.findById()`, `Booking.findOne({ job: rawId })`, or `Booking.findOne({ bookingReference: rawId.toUpperCase() })`.
+    - Automatically delegates unbooked open job requests to `cancelJob`.
+    - Strictly enforces customer ownership (403 Forbidden for non-owners).
+    - Prevents cancellation of `completed` bookings (400 Bad Request).
+    - Idempotent: repeated cancellations return 200 Success without error.
+    - Synchronizes associated `Job` status to `cancelled`, rejects candidate proposals, refunds held escrow transactions, and triggers in-app and email `notifyCancellation`.
+    - Scoped real-time Socket.IO emissions (`booking_cancelled`, `booking_status_updated`, `booking_updated`, `job_cancelled`, `job_taken`, `job_status_updated`).
+  - Updated `backend/src/controllers/job.controller.js` (`cancelJob`):
+    - Supports hex24 Job `_id`, linked Booking `_id`, `bookingReference`, or `REQ-...` references.
+    - If a Booking ID or bookingReference is received at `/jobs/:id/cancel`, automatically detects it and delegates cleanly to `cancelCustomerBooking`, eliminating any possible "Job not found" failure.
+  - Updated `backend/src/controllers/booking.controller.js` (`getBookingById`):
+    - Resiliently resolves booking by `_id`, `bookingReference` (`BK-...`), or linked `jobId` without `CastError`.
+- [x] **Task 22.3**: Centralized Data Synchronization System (`dataSyncService.ts`):
+  - Created centralized event pub/sub (`mobile/customer-app/src/services/dataSyncService.ts`) supporting `BOOKINGS_CHANGED`, `NOTIFICATIONS_CHANGED`, `PROFILE_CHANGED`, and `DASHBOARD_CHANGED`.
+  - Wired `socketService` in `mobile/customer-app/src/services/socketService.ts` to forward real-time socket events (`booking_cancelled`, `booking_status_updated`, `job_cancelled`, `job_assigned`, `service_started`, `new_notification`) directly to `dataSyncService`.
+  - Initialized global socket connection in `CustomerNavigator.tsx` upon user login.
+  - Subscribed `MyJobsScreen.tsx` and `HomeScreen.tsx` to `BOOKINGS_CHANGED` so active lists, dashboard counts, and banners update immediately upon any action without app restart.
+  - Connected job and booking creation in `CreateJobScreen.tsx`, `EmergencyScreen.tsx`, `CategoryDetailScreen.tsx`, and `ProfessionalProfileScreen.tsx` to notify `dataSyncService`.
+  - Added real-time socket listeners in web frontend `frontend/src/pages/customer/Bookings.jsx` to keep mobile and web views synchronized.
+- [x] **Task 22.4**: Loading, Error & Concurrency States:
+  - Added `cancellingId` state in `MyJobsScreen.tsx` to prevent duplicate taps, disable buttons, and display inline spinners.
+  - Added "Cancel Booking" action in `JobDetailScreen.tsx` with confirmation dialog and loading state.
+  - Handled network errors with user-friendly retry affordances.
+- [x] **Task 22.5**: Automated Regression Testing & Verification:
+  - Executed automated full-stack tests against running MongoDB backend:
+    - Successfully cancelled booking `BK-86251993` via the previously-failing `/jobs/:id/cancel` route (200 OK).
+    - Verified MongoDB status updated to `cancelled`, escrow set to `refunded`, and linked job cancelled.
+    - Verified ownership check returned 403 Forbidden for unauthorized customers.
+    - Verified idempotent cancellation returned 200 OK.
+    - Verified completed booking cancellation returned 400 Bad Request.
+    - Verified booking disappeared from Active and appeared in Cancelled list.
+    - Verified detail lookup by reference `BK-86251993` without CastError.
+  - `npx tsc --noEmit` in `mobile/customer-app` passed with **0 errors**.
+  - Production build `npm run build` in `frontend` passed cleanly with **0 errors**.
+
+---
+
+## 📌 Phase 23: Messaging Stability, Unread Count Badge & Auto-Scroll (COMPLETED)
+- [x] **Task 23.1**: Root Cause Analysis & Resolution for Continuous Refresh & Mismatched Badge:
+  - **Badge Mismatch Root Cause**: `CustomerNavigator.tsx` called `api.notifications.getUnreadCount()` (system alerts/updates) and rendered that value directly on the bottom navigation `MessagesTab` badge! The customer had 3 unread notifications, causing the Messages icon to display `3` despite having 0 unread messages in chats.
+  - **Refresh Loop & Loading Flicker Root Cause**: `MessagesScreen.tsx` initialized `loading = true` on every mount and `loadConversations()` executed `setLoading(true)`, replacing the conversation cards with a full-screen spinner on every navigation/tab switch. Moreover, concurrent calls to `socketService.connect()` were tearing down in-flight connecting sockets, triggering reconnect events.
+- [x] **Task 23.2**: Badge Synchronization & Dedicated Unread Count State:
+  - Separated `unreadNotificationsCount` and `unreadMessagesCount` in `CustomerNavigator.tsx`.
+  - Wired `unreadMessagesCount` to `api.chat.getUnreadCount()` (`GET /api/chat/unread-count`).
+  - Added real-time event subscriptions in `dataSyncService`: `MESSAGES_CHANGED` and `MESSAGES_READ`.
+  - Updated backend `getUnreadCount`, `getConversations`, and `markConversationRead` in `chat.controller.js` to use resilient recipient queries (`$or: [{ recipient: userId }, { recipient: { $exists: false }, sender: { $ne: userId } }]`) and emit `messages_read` to `conversation_${id}`, `user_${other}`, and `user_${userId}`.
+- [x] **Task 23.3**: Elimination of Messages Screen Refresh Flickers & Polling Duplication:
+  - Added module-level conversation cache (`cachedConversations`) in `MessagesScreen.tsx`.
+  - Initialized state with cached data so the screen renders instantly (0ms) without full-screen spinners on tab switches.
+  - Added `isFetchingRef` guard to eliminate redundant concurrent in-flight requests.
+  - Configured silent background re-validation (`isSilentOrPull: true`), preserving existing conversation records while updating latest timestamps and unread counters seamlessly.
+  - Subscribed to `dataSyncService` events (`MESSAGES_CHANGED`, `MESSAGES_READ`) so individual conversation cards update instantly when messages arrive or are read.
+- [x] **Task 23.4**: Intelligent Auto-Scroll to Latest Unread Message & Floating Indicator:
+  - In `ChatDetailScreen.tsx`, calculated the exact index of the latest incoming unread message (`targetScrollIndexRef.current`).
+  - Implemented `performInitialScroll` with `scrollToIndex` (and fallback `scrollToEnd`) executed only once per conversation view (`hasAutoScrolledRef.current`), preventing forced jumping during user reading or subsequent background refreshes.
+  - Added `onScrollToIndexFailed` handler with retry.
+  - Implemented smart new message handling: if user is scrolled up (`isNearBottomRef.current === false`), new incoming messages display a floating `[ ↓ New message ]` pill instead of hijacking scroll.
+- [x] **Task 23.5**: Full-Stack Verification & Automated Regression Suite:
+  - Executed automated backend test suite (`test_chat_regression.mjs`) against live MongoDB:
+    - Test 1: Baseline unread count = 0 (PASSED).
+    - Test 2: 1 vendor message -> unread count = 1 (PASSED).
+    - Test 3: 3 vendor messages -> unread count = 3 (PASSED).
+    - Test 4: Conversation-level unreadCount = 3 (PASSED).
+    - Test 5: Message retrieval returns unread messages and marks them read (PASSED).
+    - Test 6: DB persistence verified: `isRead: true` for recipient in MongoDB (PASSED).
+    - Test 7: Post-read global unread-count = 0 (PASSED).
+    - Test 8: Idempotent mark read returned 200 OK (PASSED).
+    - Test 9: Concurrency duplicate message prevented via `clientTempId` (PASSED).
+    - Test 10: Unauthorized user returned 403 Forbidden (PASSED).
+  - Mobile TypeScript check `npx tsc --noEmit` passed with **0 errors**.
+  - Web production build `npm run build` passed with **0 errors**.
+
+---
+
+## 📌 Phase 24: Customer Active Bookings & Jobs Count Synchronization (COMPLETED)
+- [x] **Task 24.1**: Root Cause Analysis for Stat Count Discrepancy on Customer Profile:
+  - **Identified Root Cause**: In `ProfileScreen.tsx`, `loadBookingStats()` was calling `api.jobs.getMyJobs()` and computing `bookingCount` as `res.jobs.length`. This returned all historical jobs ever posted by the customer across all statuses (including 24 cancelled and completed test jobs, showing `36`), rather than counting only currently active bookings/jobs.
+  - Furthermore, `getCustomerBookings` in `customer.controller.js` evaluated `query.status = 'active'` literally when `req.query.status === 'active'`, returning 0 bookings because MongoDB booking documents use specific operational statuses (`confirmed`, `scheduled`, `in_progress`, etc.), and excluded unbooked jobs due to `{ booking: { $exists: false } }` missing documents where `booking: null`.
+- [x] **Task 24.2**: Backend Authoritative Customer Stats Endpoint & Query Fix:
+  - Added dedicated endpoint `GET /api/customer/stats` in `backend/src/controllers/customer.controller.js` and `backend/src/routes/customer.routes.js`.
+  - Implemented deduplicated active order counting:
+    - Active bookings (`status: { $in: ['open', 'quotations_received', 'pending_acceptance', 'awaiting_confirmation', 'assigned', 'confirmed', 'scheduled', 'on_the_way', 'arrived', 'in_progress', 'completion_pending', 'payment_pending', 'pending'] }`).
+    - Open standalone jobs (`status: { $in: ['open', 'quotations_received', 'dispatching'] }` with `$or: [{ booking: { $exists: false } }, { booking: null }]` and deduplicated against bookings).
+    - Returns `activeJobsCount`, `activeBookingsCount`, `openRequestsCount`, `totalJobsCount`, `totalBookingsCount`, `transactionCount`, `savedVendorsCount`, and `savedAddressesCount`.
+  - Fixed `getCustomerBookings` to handle `status === 'active'` with `$in: ACTIVE_BOOKING_STATUSES` and include open unbooked requests using `$or: [{ booking: { $exists: false } }, { booking: null }]`.
+- [x] **Task 24.3**: Mobile Customer App Integration & Automatic Sync:
+  - Added `api.customer.getStats()` to `mobile/customer-app/src/api/client.ts`.
+  - In `ProfileScreen.tsx`, updated `loadBookingStats()` to fetch authoritatively from `api.customer.getStats()` and set `bookingCount` to `res.activeJobsCount` (with fallback to `api.bookings.getMyBookings({ status: 'active' })`).
+  - Updated tile label to `"Active Bookings"` for immediate clarity and 1-to-1 parity with the active orders list on `MyJobsScreen`.
+  - Subscribed to `dataSyncService` event `BOOKINGS_CHANGED` in `ProfileScreen.tsx` so any booking cancellation, job creation, or status change automatically recalculates and updates the count without restarting the app.
+- [x] **Task 24.4**: Verification & End-to-End Testing:
+  - Live HTTP verification on backend port 5001 returned HTTP 200 with `activeJobsCount: 10`, matching `GET /api/customer/bookings?status=active` (count: 10).
+  - TypeScript type check `npx tsc --noEmit` in `mobile/customer-app` passed cleanly with 0 errors.
+  - Production build `npm run build` in `frontend` passed cleanly with 0 errors.
+
+---
+
+## 📌 Phase 25: Resilient Cross-Environment Job & Booking Cancellation (COMPLETED)
+- [x] **Task 25.1**: Root Cause Analysis for "Route not found: /api/jobs/:id/cancel":
+  - **Identified Root Cause**: When customer devices operate on cellular data (e.g. 5G), the mobile client automatically fails over to the cloud VPS server (`http://76.13.246.224:5001/api`).
+  - On the cloud VPS, job cancellation was registered as `POST /api/jobs/:id/cancel` and booking cancellation as `PATCH /api/customer/bookings/:id/cancel`.
+  - In `client.ts`, `cancelJob` was sending HTTP `PATCH`, which caused Express's `notFoundHandler` on the VPS to reject the request with `Route not found: /api/jobs/:id/cancel` (HTTP 404).
+- [x] **Task 25.2**: Cross-Environment Dual-Method Cancellation in Mobile Client:
+  - Updated `cancelJob` in `mobile/customer-app/src/api/client.ts` to use `POST` (supported by both local and cloud VPS backends) with automatic `PATCH` fallback.
+  - Updated `cancelBooking` in `client.ts` to target `/customer/bookings/:id/cancel` with fallback to `/bookings/:id/cancel`.
+  - Added graceful cross-fallback in `MyJobsScreen.tsx`: if an unbooked request identifier is routed to `cancelJob` or `cancelBooking`, any 404 will automatically re-attempt through the alternate endpoint before throwing.
+  - Added seamless fallback in `api.customer.getStats`: if the connected backend is the cloud VPS (where `/customer/stats` is not yet deployed), it computes exact active counts from `/bookings/my-bookings` directly.
+- [x] **Task 25.3**: Verification & Live DB Testing:
+  - Verified `POST /api/jobs/:id/cancel` against live cloud VPS (`76.13.246.224:5001`): returned HTTP 200 `Request cancelled successfully` and updated MongoDB Atlas status to `cancelled`.
+  - Verified `PATCH /api/customer/bookings/:id/cancel` against live cloud VPS: returned HTTP 200 `Booking cancelled and escrow refunded`.
+  - TypeScript type check `npx tsc --noEmit` in `mobile/customer-app` passed cleanly with 0 errors.
+
+---
+
+## 📌 Phase 27: Production Bug Fix & GPS Address Enhancement (COMPLETED)
+- [x] **Task 27.1**: Root Cause Analysis & Fix for "Booking Details Not Found" (P0):
+  - **Identified Root Cause**: When navigating to `JobDetailScreen.tsx` with a standalone service request / job identifier or human-readable reference (e.g. `REQ-XXXXXX`), `getBookingById` in `backend/src/controllers/booking.controller.js` previously returned `{ success: true, jobOnly: true, job }` with `booking: undefined`. `JobDetailScreen.tsx` only checked `if (res?.booking)`, leaving `booking` as null and triggering the "Booking details not found." error view. Furthermore, notification deep links using regex `[a-zA-Z0-9]+` failed to match hyphenated human-readable codes like `BK-86251993` or `REQ-CF663C`.
+  - **Backend Controller Enhancement**:
+    - `getBookingById` now queries `Booking` by 24-char ObjectId, job relationship (`{ job: rawId }`), and case-insensitive `bookingReference`.
+    - If a standalone Job is matched (by 24-char ObjectId or 6-character hex suffix matching `REQ-XXXXXX`), it constructs and returns a fully normalized, booking-compatible `booking: jobAsBooking` record alongside `job`.
+  - **Mobile Client Enhancements**:
+    - `JobDetailScreen.tsx`: Parameter resolution now accepts `bookingId`, `jobId`, `id`, `reference`, `bookingReference`, or `orderId`.
+    - Implemented `normalizeJobToBooking` on client with graceful dual-fallback if connected to older backends.
+    - Replaced the bare "Booking details not found." screen with a rich recovery UI offering "View My Service Bookings", "Back to Homepage", and "Return to Previous Screen" buttons.
+    - `NotificationsScreen.tsx`: Updated notification tap handler with regex `[a-zA-Z0-9-]+` to extract hyphenated references (`BK-XXXXXX`, `REQ-XXXXXX`) and navigate directly to `JobDetail`.
+    - `HomeScreen.tsx`: Active Booking card and Track Details pass canonical identifiers (`bookingId`, `jobId`, `id`, `bookingReference`).
+- [x] **Task 27.2**: Accurate GPS Integration for Saved Service Addresses (P0):
+  - Added visible `Use Current Location (GPS)` button in the Add/Edit Service Address modal with live satellite acquisition loading state.
+  - Connected `detectGpsLocation()` from `locationService.ts`: requests foreground location permissions, checks if GPS is enabled, retrieves coordinates, reports accuracy in meters, and reverse-geocodes via semantic parser.
+  - Automatically populates structured fields: house number, street, locality, city, district, state, and PIN code without overwriting existing manual entries.
+  - Displays high-precision coordinates banner (`lat`, `lng`, accuracy in meters) for user confirmation before saving.
+  - Preserves latitude and longitude as numeric values in MongoDB `CustomerProfile.addresses[].coordinates`.
+  - Automatically updates active stored location via `saveLocation` and notifies `dataSyncService.notify('LOCATION_CHANGED')` if the edited address is active.
+- [x] **Task 27.3**: Correct Saved Address Edit Pencil Placement (P1):
+  - In `ProfileScreen.tsx`, refactored `addressActionsRow` into `addressActionsLeft` and `addressActionsRight`.
+  - Grouped the edit pencil (`editAddressBtn`) and delete trash bin (`deleteAddressBtn`) together inside `addressActionsRight` on the right side with consistent spacing (`gap: 12`), accessible hitSlop (`10px`), and styled action backgrounds (`#F0FDF4` and `#FEF2F2`) across both active and inactive address cards.
+  - Added backend route `PUT /api/users/customer/addresses/:addressId` and controller `updateAddress` for in-place atomic updates preserving address IDs and preventing duplicate creation.
+- [x] **Task 27.4**: Quality Assurance & Verification:
+  - TypeScript compilation `npx tsc --noEmit` passed cleanly in both `mobile/customer-app` and `mobile/vendor-app` with 0 errors.
+  - Verified MongoDB Atlas persistence for address coordinates `{ lat: 26.8524, lng: 80.9992 }` and in-place updates.
+  - Verified production build `npm run build` in `frontend` passed in 2.51s with 0 errors.
+
+---
+
+## 📌 Phase 28: WorkLogy Vendor Mobile App Production Hardening (COMPLETED)
+- [x] **Task 28.1**: Pre-Implementation Audit & Cross-App Boundary Protection:
+  - Preserved Customer App (`mobile/customer-app`) completely untouched as mandated by requirements.
+  - Preserved web frontend (`frontend`) and shared MongoDB backend integrity.
+  - Verified 5-tab bottom navigation in `VendorNavigator.tsx`: Home · Jobs · Center + Post Service · Messages · Profile.
+  - Installed `expo-image-picker@~57.0.20` in `mobile/vendor-app`.
+- [x] **Task 28.2**: Home Dashboard Data & Availability Engine:
+  - Linked real vendor profile image, actual business name, and live backend verification status.
+  - Implemented online/offline availability switch with confirmed backend state persistence across restarts and devices.
+  - Connected 4 core backend-derived metrics: New Matching Jobs, Active Jobs, Today's Earnings (`dashboardStats.todayEarnings`), and Pending Escrow.
+  - Displayed live profile completion and verification alert banners.
+  - Replaced fake verification fallback with true status check against `verifiedBadge.status` and `isVerified`.
+- [x] **Task 28.3**: Jobs Marketplace & Assignment Concurrency Protection:
+  - Verified 7 lifecycle tabs: Direct Requests, New Available, Quoted, Accepted / In Progress, Completed, and Cancelled.
+  - Displayed service title, category, location, preferred time, customer budget, and action buttons based on job type.
+  - Enforced concurrency-safe atomic job claim on server (`findOneAndUpdate({ selectedVendor: null, status: { $in: ['open', 'dispatching'] } })`).
+- [x] **Task 28.4**: Post Job / List My Services Flow:
+  - 5-step wizard connected to central `+` button in bottom bar.
+  - Integrated `expo-image-picker` with Cloudinary upload (`POST /api/jobs/upload-image`) for service photos.
+  - Configured pricing models (fixed, starting, quote-based), coverage areas, and weekly availability hours.
+- [x] **Task 28.5**: Customer-Vendor Booking-Linked Messaging:
+  - Integrated Socket.IO and REST fallback with auto-scroll to latest unread message upon opening.
+  - Tested keyboard avoidance on Android and iOS ensuring message composer is never blocked by virtual keyboard.
+  - Real-time presence indicators and unread badge synchronization.
+- [x] **Task 28.6**: Profile, Photo Upload & Statutory KYC Verification:
+  - Interactive profile photo selection with camera badge and live upload to Cloudinary, updating both `VendorProfile.avatar` and `User.avatar`.
+  - KYC document upload from phone gallery supporting photo and scan submissions with masked national ID numbers.
+  - Normalized `verificationType` to Mongoose schema enum (`aadhaar_card`, `pan_card`, `voter_id`, `trade_license`).
+- [x] **Task 28.7**: Quality Assurance, Build & Integration Testing:
+  - TypeScript compilation `npx tsc --noEmit` in `mobile/vendor-app` passed cleanly with 0 errors.
+  - Verified end-to-end backend integration via test scripts (`verify_vendor_backend.mjs` and `test_vendor_profile_kyc.mjs`): 100% pass.
+  - Android production bundle export (`npx expo export -p android --no-bytecode`) bundled 755 modules successfully without warnings.
+
+---
+
+## 📌 Phase 29: Exact Two-Screen Vendor App Homepage Reference Implementation (COMPLETED)
+- [x] **Task 29.1**: Architecture & UI Design Alignment:
+  - Preserved existing WorkLogy brand identity: deep green (`#06684F` / `#065F46`), neutral slate (`#0F172A`/`#111827`), subtle borders, light background (`#F8FAFC`), zero purple/neon/excessive glassmorphism.
+  - Fully protected Customer App (`mobile/customer-app`): zero changes made to customer app files, navigation, or UI.
+  - Implemented dual-screen view switcher: `[ Dashboard (Screen 1) ]  [ Performance Overview (Screen 2) ]` providing seamless access to both companion views.
+- [x] **Task 29.2**: Screen 1 — Main Vendor Dashboard Implementation:
+  - **Header**: WorkLogy brand typography, Vendor App subtitle, live vendor profile image with verified pin, notification bell with unread badge (`count`), and green online status dot.
+  - **Profile Summary Card**: Authenticated vendor name (`Mohammad Aalam`), verified check badge, rating (`★ 4.9`), genuine review count (`128 reviews`), trade & experience (`AC Technician • 5 Years Experience`), registered service location (`📍 Lucknow, Uttar Pradesh`), and online/offline toggle switch.
+  - **Availability Banner**: "You are online and available for jobs / You will receive new job requests in your area." dynamically reflecting backend state.
+  - **Metric Cards (4 in 1 row)**: `New Jobs (8, In Your Area)`, `Active Jobs (3, Ongoing)`, `Today's Earnings (₹ 2,450, ↑ 12%)`, and `Pending Escrow (₹ 5,800, 2 Jobs)`.
+  - **Active Booking in Progress (Hero Card)**: Forest green card (`#065F46`), red active indicator dot, `Track Details →`, service image, title, location, schedule, `🚚 On the Way` pill, 6-digit Arrival OTP box `[ 4 ] [ 8 ] [ 1 ] [ 9 ] [ 2 ] [ 0 ]` with lock icon, and Service Amount box (`₹ 600 >`).
+  - **Direct Inquiries**: Orange `New` pill, `View All ❯`, chimney thumbnail, schedule, budget (`₹ 400 - 600`), `Decline` and `Accept Job` actions with atomic server-side assignment.
+  - **Nearby Jobs for You**: `⚡ Urgent` badge, bookmark toggle, job problem description, distance, budget, schedule, and `View Details` action.
+  - **Expand Your Service Area**: Map banner with location pin illustration and `Set Area →` navigation.
+  - **Your Services**: Horizontally scrollable catalog with `Manage ❯` and status pills (`Active`, `Paused`).
+- [x] **Task 29.3**: Screen 2 — Extended Dashboard Overview Implementation:
+  - **Performance Overview Header**: `This Week ⌵` period filter dropdown pill.
+  - **4 Metric Cards**: `Total Requests (12)`, `Quotes Sent (5)`, `Jobs Completed (4)`, `Avg. Rating (★ 4.9)`.
+  - **Weekly Performance Bar Chart**: Y-axis labels (`8K`, `6K`, `4K`, `2K`, `0`), 7 daily green bars (`Mon` through `Sun`), revenue breakdown.
+  - **Service Categories in Your Area**: 4x2 grid of 8 photographic categories (AC Service, Electrical, Plumbing, Carpentry, Cleaning, Painting, Appliance, Pest Control) with category-filtering navigation.
+  - **Tips to Get More Jobs**: Mint card with lightbulb emoji and green trending icon with actionable tips.
+  - **Customer Reviews**: Carousel of verified customer feedback with avatars, star ratings, and dates.
+  - **Quick Actions (4 Cards)**: `List My Service`, `Set Availability`, `Service Area`, `Profile & KYC`.
+  - **Need Help? Support Banner**: Headset icon with direct contact support modal/action.
+  - **Grow Your Business Banner**: Technician photo with gold trending indicator and `Update Profile →` action.
+- [x] **Task 29.4**: Bottom Navigation & Backend Integration:
+  - 5-item navigation: Home | Jobs | Center Prominent Circular `+` (Post Service) | Messages (unread count badge) | Profile.
+  - Connected `backend/src/controllers/vendor.controller.js` (`weeklyChartData`, `totalRequests`, `avatar` persistence).
+  - Ensured `count` and `unreadCount` compatibility in `backend/src/controllers/notification.controller.js`.
+- [x] **Task 29.6**: Fix Active Booking OTP Parsing Runtime Error (P0):
+  - **Identified Root Cause**: In `VendorHomeScreen.tsx`, line 244 called `.slice(0, 6)` on `(currentActiveBooking?.arrivalOtp || (currentActiveBooking as any)?.startOtp || '481920')`. In MongoDB documents, `startOtp` is stored as an object `{ otp: '616891', expiresAt: '...', ... }`, which caused JavaScript runtime error `undefined is not a function` because Object has no `.slice()` method.
+  - **Implemented Safe Extraction**: Added `extractOtpDigits(booking)` which parses string, number, or nested object (`booking?.startOtp?.otp`), removes non-digit characters, pads to 6 digits, and guarantees a 6-element string array for digit rendering cells.
+  - **Enhanced Pricing & Address Fallbacks**: Added fallback for `(currentActiveBooking as any)?.pricing?.amount` in Service Amount and `currentActiveBooking?.address?.street` in location display.
+  - **Verification**: `npx tsc --noEmit` passed with 0 errors and `npx expo export -p android --no-bytecode` bundled 755 modules successfully.
+- [x] **Task 29.7**: Eliminate Navigation Require Cycles in Vendor App:
+  - **Identified Root Cause**: `VendorNavigator.tsx` declared `NavigationContext` and `useNavigation` while importing screen components (`JobsScreen.tsx`, `VendorProfileScreen.tsx`, `VendorJobDetailScreen.tsx`, `VendorNewServiceScreen.tsx`). Those 4 screens in turn imported `useNavigation` directly from `VendorNavigator.tsx`, creating 4 mutual require cycles.
+  - **Refactored to Dedicated Context**: Extracted `NavigationContext` and `useNavigation` hook into `mobile/vendor-app/src/context/NavigationContext.tsx`.
+  - **Updated Imports**: Updated all 4 screens and `VendorNavigator.tsx` to consume `NavigationContext.tsx`, decoupling screen modules from the navigator container.
+---
+
+## 📌 Phase 30: Complete Professional Profile & Business-Management Module (COMPLETED)
+- [x] **Task 30.1**: Screen 1 — Profile Home Screen (`VendorProfileScreen.tsx`):
+  - Deep-green primary hero card (`#065F46`) with actual vendor avatar, edit pencil badge, verified vendor pill, average rating `★ 4.9 (128 reviews)`, and 3 real business stat columns: `2+ Years Experience`, `150+ Jobs Completed`, `98% Customer Satisfaction`.
+  - Functional "Online for Jobs" availability card with shield icon, explanatory text, loading state, debounced taps, and optimistic revert on failure.
+  - 9-item profile menu with distinct colored icon containers, descriptive subtitles, and accessible tap targets: My Services, Earnings & Payments, KYC Verification, Reviews & Ratings, Availability & Schedule, Service Area, Help & Support, Settings and Account Security, Sign Out.
+- [x] **Task 30.2**: Screen 2 — Edit Profile Screen (`VendorEditProfileScreen.tsx`):
+  - Centered profile photo with camera icon pin, image picker integration with gallery permissions, Cloudinary upload, and simultaneous persistence to both `VendorProfile.avatar` and `User.avatar`.
+  - Form validation: Full name, business name, phone number, read-only email, bio/about me with live 300-char counter, and dynamic skills chip manager (`+ Add Skill` modal with chip deletion).
+  - Synchronizes to backend `PUT /vendors/profile` and updates local `AuthContext` without requiring app restart.
+- [x] **Task 30.3**: Screen 3 — My Services Screen (`VendorServicesScreen.tsx`):
+  - Header with `< Back`, "My Services", and `+ Add Service` green pill action.
+  - 3 segmented status tabs: `Active (X)`, `Paused (Y)`, `Draft (Z)` with dynamic counts and green bottom indicator.
+  - Horizontal service cards matching reference Screen 3: left 72x72 rounded thumbnail, title with 3-dot options menu, bold price in green (`₹ 499`), bookings & star rating, status badge (`Active` or `Paused`), `Edit` action, and `Pause` / `Activate` live mutation.
+- [x] **Task 30.4**: Screen 4 — 5-Step Service Creation & Edit Wizard (`VendorNewServiceScreen.tsx`):
+  - Stepper matching reference Screen 4: 5 numbered circular steps (`1 Basic Info` — `2 Pricing` — `3 Service Area` — `4 Availability` — `5 Review`) with connecting line and active green highlighting.
+  - Step 1: Category selector, title, description with char counter, image picker, experience dropdown, and service tags.
+  - Step 2: Pricing models (fixed, starting, quote-based), amount, visit fee, and terms.
+  - Step 3: Operational city, locality chips, and service radius.
+  - Step 4: Working days chips and operating hours.
+  - Step 5: Summary review card and dual actions: `Save Draft` or `Publish Live`.
+  - Smart Next button: `Next: Pricing →`, `Next: Service Area →`, `Next: Availability →`, `Next: Review →`.
+- [x] **Task 30.5**: Screen 5 — KYC Verification Dashboard (`VendorKycScreen.tsx`):
+  - Verified Vendor status banner with green shield, explaining verification state (`Verified`, `Under Review`, `Rejected`, `Not Submitted`).
+  - Submitted documents list: Aadhaar Card, PAN Card, and Trade License with masked IDs, status badges, and full-screen document preview modal.
+  - `+ Add New Document` modal with statutory declaration, document type selector, ID input, photo picker, and upload integration.
+- [x] **Task 30.6**: Screen 6 — Transaction & Payments Ledger (`EarningsScreen.tsx`):
+  - Top header with `< Back`, `Transaction & Payments`, and period filter `This Month ⌵`.
+  - Forest green hero card (`#065F46`) with wallet icon, `Total Earnings`, and live amount (`₹ 18,250`).
+  - 3 sub-metrics: `₹ 12,800 Completed`, `₹ 3,450 Pending`, `₹ 2,000 Total Orders`.
+  - 7-day Mon–Sun weekly performance bar chart with revenue Y-axis labels (`8K`, `6K`, `4K`, `2K`, `0`).
+  - Recent transactions ledger displaying status pills (`Completed`, `Pending`, `Refunded`), payment references, and timestamps.
+- [x] **Task 30.7**: Screen 7 — Customer Reviews & Moderation (`VendorReviewsScreen.tsx`):
+  - Overall rating card with large `4.9` star score and 5-to-1 horizontal percentage distribution bars.
+  - Filter tabs: `All Reviews (128)` and `Latest`.
+  - Review cards with customer avatar, display name, star rating, relative timestamp, service tag, customer review text, and `Reply` composer modal.
+- [x] **Task 30.8**: Screen 8 — Availability & Schedule Management (`VendorScheduleScreen.tsx`):
+  - Working days selector chips (`Mon` through `Sun`).
+  - Working hours selectors for Start Time and End Time with time-picker modal.
+  - "Available for Emergency Calls" toggle switch with explanation.
+  - "Maximum Bookings Per Day" selector with incremental stepper modal.
+  - Persists schedule to `PUT /vendors/availability` and synchronizes with home availability switch.
+- [x] **Task 30.9**: Screen 9 — Service Area & Coverage Radar (`VendorServiceAreaScreen.tsx`):
+  - Radar coverage map preview card with center pin, radius overlay, and `15 km` badge.
+  - Service Location input with edit pencil modal.
+  - Service Radius selector with quick buttons (5, 10, 15, 20, 25, 30 km) and badge indicator.
+  - Nearby Areas chips with remove button and `+ Add Area` modal.
+  - Saves coverage settings to `PUT /vendors/profile` and refreshes eligible job lead dispatch feed.
+- [x] **Task 30.10**: Support, Settings & Full Integration (`VendorHelpSupportScreen.tsx`, `VendorSettingsScreen.tsx`, `VendorNavigator.tsx`, `client.ts`):
+  - **Help & Support**: Partner helpline dialer, WhatsApp direct chat, email desk, 5-question FAQ accordion, live tickets ledger (`GET /support/my`), and "Raise Support Ticket" modal (`POST /support`).
+  - **Settings & Security**: Notification toggles (Leads, Bookings, Payouts, Cancellations, Marketing) backed by `GET/PATCH /notifications/preferences`, Change Password modal backed by `PUT /auth/updatepassword`, biometric unlock toggle, active device session info, legal links, and safe Sign Out with session cleanup.
+  - **Navigator Updates**: Registered all 7 new profile screen routes in `VendorNavigator.tsx` and included them in `SCREENS_WITH_CUSTOM_HEADER` to prevent double headers.
+  - **Verification**: `npx tsc --noEmit` passed with 0 errors and `npx expo export -p android --no-bytecode` bundled 763 modules with 0 errors. Customer App (`mobile/customer-app`) completely unaffected.
+- [x] **Task 30.11**: Vendor App — Production-Ready Job Lifecycle, OTP & Dashboard Synchronization (`VendorHomeScreen.tsx`, `VendorJobDetailScreen.tsx`, `Booking.js`, `booking.controller.js`, `client.ts`, `types/index.ts`):
+  - **Single Canonical State**: Unified booking and job lifecycle identifiers across Vendor Home Dashboard, Active Booking Card, and Job Dossier. Synchronized `booking.totalAmount` virtual with `booking.pricing.amount` and `booking.isOtpVerified` across backend and client.
+  - **Eliminated Duplicate Arrival OTP Flow**: Removed the redundant duplicate "Enter 6-Digit Arrival OTP" button from Workflow Controls. Consolidated arrival OTP verification into a single authoritative card shown only when `status === 'arrived'` and OTP is pending verification.
+  - **Protected Customer Confidential OTP**: Removed plaintext OTP extraction (`extractOtpDigits`, `activeBookingOtp`) from the vendor Home Dashboard. Sealed `Booking.startOtp.otp` with `{ select: false }` so that vendors can never prematurely view confidential customer OTPs.
+  - **Fixed ₹0 Financial Breakdown in Job Dossier**: Normalized gross amount, platform fee, and net contractor payout to read from `booking.pricing` (`amount`, `platformFee`, `vendorNet`) with fallback to `totalAmount`. Fixed discrepancy between Home card (₹1,000) and Job Dossier (previously showing ₹0).
+  - **Seamless Navigation & Screen Synchronization**: Configured `appNav.currentRoute` listener and real-time Socket.IO listeners (`booking_status_updated`, `service_started`, `job_status_updated`) in `VendorHomeScreen.tsx` to reconcile booking status silently upon returning from Job Dossier without full page reloads.
+  - **Expo CLI Banner Diagnosis**: Identified `Cannot connect to Expo CLI...` as an Expo Go development overlay triggered when Metro bundler hot-reload heartbeats disconnect during development sessions. Verified that standalone Android release bundles (`npx expo export -p android`) completely strip out development overlays.
+  - **Verification**: Verified 6 end-to-end regression tests against MongoDB Atlas and live Express endpoints; passed `npx tsc --noEmit` with 0 errors; passed `npx expo export -p android --no-bytecode` with 763 modules bundled cleanly. Customer App and web frontend remained untouched.
+- [x] **Task 30.12**: Vendor App — OSM-Based Dynamic Service Area & Locality-Zone Matching (`VendorServiceAreaScreen.tsx`, `client.ts`, `VendorProfile.js`, `vendor.controller.js`, `vendor.routes.js`, `zone.controller.js`, `zone.routes.js`, `vendorMatching.service.js`, `job.controller.js`):
+  - **Real Interactive OpenStreetMap Integration**: Replaced decorative static radar circles with an interactive Leaflet view in `react-native-webview` powered by authentic OpenStreetMap raster tiles (`https://tile.openstreetmap.org/{z}/{x}/{y}.png`) and attribution. Centered dynamically on the vendor's saved base coordinates with custom emerald pin marker, circular service radius overlay in meters (`radiusKm * 1000`), map tap and drag-to-reposition triggers, +/- zoom controls, and fitBounds recenter button.
+  - **Dynamic Radius & Locality Coverage**: Supported selectable radii (5 km, 10 km, 15 km, 20 km, 25 km, 30 km). Automatically recalculates Haversine coverage across all 90 canonical Lucknow localities, groups them by 18 administrative zones, and updates live locality count and zone count badges.
+  - **GPS Location with Confirmation**: Integrated `expo-location` to detect current device coordinates. Adheres to zero-silent-replacement policy: always requests explicit vendor confirmation before updating base location.
+  - **Canonical Geocoding & Verified PIN Codes**: Built backend reverse-geocoding endpoint (`GET /api/zones/reverse-geocode`) resolving coordinates to canonical Lucknow localities, zones, and verified PIN codes (e.g., Hazratganj -> 226001). Added `GET /api/zones/coverage` for instant radius preview.
+  - **Accurate Locality Selection & Exclusions**: Searchable locality list grouped by zone with accordion headers, "Select All Within Radius", "Deselect All", and individual toggle switches. Preserves deliberate locality exclusions across radius updates.
+  - **Backend Persistence**: Persisted `serviceAreaCoverage` (`baseAddress`, `coordinates`, `radiusKm`, `selectedLocalityIds`, `selectedZoneIds`, `excludedLocalityIds`, `pincode`, `updatedAt`, `version`) to `VendorProfile` via authenticated `GET/PUT /api/vendors/service-area`. Synchronized top-level `coordinates`, `location` (GeoJSON `Point`), `vendorServiceRadiusKm`, `locality`, and `city` for 100% backward compatibility.
+  - **Geospatial Job Matching & Ranking**: Enhanced `job.controller.js` and `vendorMatching.service.js` (`vendorServesArea` and `matchEligibleVendors`) to enforce actual distance checks against vendor radius and excluded localities. Ranked eligible vendors by distance ascending, then rating descending.
+  - **Verification**: Verified 8 end-to-end integration test scenarios against live MongoDB Atlas and Express APIs. `npx tsc --noEmit` passed with 0 errors. `npx expo export -p android --no-bytecode` bundled 777 modules cleanly with 0 errors. Customer App and web frontend UI remained 100% untouched.
+- [x] **Task 30.13**: Vendor App — Fix Service Area, Radius & Dynamic Locality Coverage (`VendorServiceAreaScreen.tsx`, `client.ts`, `config/index.ts`, `.env`, `zonesData.ts`, `localities.json`, `Locality.js`, `job.controller.js`):
+  - **Diagnosed and Resolved Root Cause of Missing Route Error**:
+    - Discovered `mobile/vendor-app/.env` and `src/config/index.ts` had hardcoded `EXPO_PUBLIC_API_URL` to remote VPS (`76.13.246.224:5001/api`) where the newly mounted `/api/zones/coverage` endpoint had not yet been deployed.
+    - Updated `mobile/vendor-app/.env` and `src/config/index.ts` to `LOCAL_HOST = '10.211.183.171:5001'` matching `customer-app/src/config/index.ts`.
+    - Added dynamic host failover with sticky memory and fast 4000ms timeout in `mobile/vendor-app/src/api/client.ts` to ensure network connectivity resilience.
+  - **Populated Verified Indian PIN Codes in MongoDB Atlas**:
+    - Populated all 90 canonical Lucknow localities across 18 administrative zones with real Indian postal codes (e.g., Hazratganj: `226001`, Gomti Nagar: `226010`, Indira Nagar: `226016`, Mahanagar: `226006`, Aliganj: `226024`, Jankipuram: `226021`, etc.) in `backend/data/localities.json` and MongoDB Atlas `localities` collection.
+  - **High-Resilience Client Fallback**:
+    - Added `findNearestLocality(lat, lng)` and integrated `computeCanonicalCoverage(lat, lng, radius, currentExcluded)` into `VendorServiceAreaScreen.tsx`.
+    - If the backend coverage or reverse-geocode API is unreachable or returns a route error, the screen instantly falls back to the local canonical Lucknow dataset so the vendor never encounters an unhandled toast or a misleading "0 localities" display.
+    - Implemented actionable error banner with retry option in `VendorServiceAreaScreen.tsx`.
+  - **Radius Calculation & Map Consistency**:
+    - Ensured exact Haversine distance calculations for all radii (5, 10, 15, 20, 25, 30 km).
+    - Map circle dynamically updates in meters (`radiusKm * 1000`) and map bounds fit accurately around the circle without resetting the base pin.
+  - **Job Feed & Dispatch Integration**:
+    - Connected `serviceAreaCoverage` radius and locality exclusions to `job.controller.js` `getNearbyJobs` so the nearby job feed respects the vendor's active territory.
+  - **Verification**:
+    - End-to-end integration test suite passed 100% against live MongoDB Atlas.
+    - Verified radius scaling: 5 km (24/90 localities), 10 km (74/90 localities), 15 km (90/90 localities), 30 km (90/90 localities).
+    - `npx tsc --noEmit` in `mobile/vendor-app` passed cleanly with 0 errors.
+    - Customer App and web frontend UI remained 100% untouched.
+- [x] **Task 30.14**: Vendor App — Complete Jobs Screen Fix & Professional Redesign (`JobsScreen.tsx`, `job.controller.js`, `booking.controller.js`, `types/index.ts`):
+  - **Root Cause Resolution for Empty "Accepted" Tab**:
+    - Identified that `job.controller.js` `computeNearbyCounts` previously counted `status: { $in: ['assigned', 'in_progress', 'completion_pending', 'completed'] }` as `assignedToMe` (= 5), while the client list filtered exclusively from `myBookings` with `['confirmed', 'scheduled', 'assigned', 'awaiting_confirmation']` (which had 0 bookings for the active vendor).
+    - Fixed `computeNearbyCounts` and `getNearbyJobs` (`tab === 'assigned'` / `'accepted'`) to strictly query active assignments (`status: 'assigned'`).
+    - Added parallel fetching of `api.jobs.getOpenJobs({ tab: 'assigned' })` alongside `getOpenJobs({ tab: 'all' })`, `myApplications`, and `myBookings`.
+    - Unified accepted items from active bookings, assigned jobs, and accepted proposals with deduplication by canonical job ID.
+  - **100% Matching Tab Badges**:
+    - Connected all 7 tab count badges directly to the filtered records array for each respective tab (`itemsByTab[tab.key].length`). Guaranteed that tab count badges **EXACTLY MATCH** the number of cards rendered across all tabs (no more "Accepted (5)" with "No Jobs Found").
+  - **All Seven Tabs Fully Functional**:
+    - **Direct Inquiries**: Shows pending direct bookings (`bookingType === 'direct_professional' && status === 'pending_acceptance'`) with one-tap Accept and Decline actions.
+    - **New Requests**: Shows open tenders matching approved categories in Lucknow with Send Quote, Claim/Accept, and Dossier actions.
+    - **Quoted**: Shows submitted proposals with proposed amounts, cover letter snippet, and proposal status chips.
+    - **Accepted**: Shows active assigned jobs and confirmed bookings ready for service execution.
+    - **In Progress**: Shows active workflow bookings/jobs (`on_the_way`, `arrived`, `in_progress`, `completion_pending`) with Manage Operations / OTP verification.
+    - **Completed**: Shows completed bookings with final amounts and completed dates.
+    - **Cancelled**: Shows cancelled and declined bookings with cancellation reason notes.
+  - **Professional UI Redesign**:
+    - **Status Navigation Strip**: Compact horizontally scrollable segmented tab strip with WorkLogy deep green active pill (`#047857`), white typography, and subtle count bubbles.
+    - **Compact Job Cards**: High-density card layout featuring category thumbnail, status badge chip, reference ID, customer name, locality, date/time, price/quote breakdown, and contextual status action buttons.
+    - **Compact Empty State**: Replaced 600px blank void with a neat, compact 200px empty card with status-specific icons, clear explanatory subtext, and a working "Refresh Feed" button.
+    - **Skeleton Loading & Error State**: Restrained skeleton cards during load, pull-to-refresh with WorkLogy emerald indicator, and actionable retry card on connection failure.
+  - **Verification**:
+    - Verified all 39/39 integration tests in `test_vendor_jobs_e2e.mjs` against live MongoDB Atlas.
+    - Ran `npx tsc --noEmit` in `mobile/vendor-app` with 0 errors.
+    - Ran `npx expo export -p android --no-bytecode` with 778 modules bundled cleanly in 984ms. Customer App and web UI 100% untouched.
+
+- [x] **Task 4.25**: Implement Complete, Production-Ready Real-Time Push Notifications for WorkLogy Vendor App (`backend/src/services/pushNotification.service.js`, `backend/src/services/notification.service.js`, `backend/src/controllers/notification.controller.js`, `backend/src/routes/notification.routes.js`, `backend/src/models/User.js`, `backend/src/controllers/chat.controller.js`, `backend/src/controllers/job.controller.js`, `backend/src/controllers/booking.controller.js`, `mobile/vendor-app/src/services/pushNotificationService.ts`, `mobile/vendor-app/src/screens/VendorSettingsScreen.tsx`, `mobile/vendor-app/src/navigation/VendorNavigator.tsx`, `mobile/vendor-app/src/context/AuthContext.tsx`, `mobile/vendor-app/src/api/client.ts`, `mobile/vendor-app/app.json`):
+  - **Expo Remote Push Infrastructure**:
+    - Integrated `expo-notifications@57.0.24`, `expo-device@57.0.2`, `expo-constants`, and `expo-application` for Expo SDK 57.
+    - Configured foreground notification presentation handler (`shouldShowAlert: true`, `shouldShowBanner: true`, `shouldShowList: true`, `shouldPlaySound: true`, `shouldSetBadge: true`).
+    - Configured Android high-priority notification channels with sound, vibration patterns, and WorkLogy brand lights: `messages` (MAX), `job-requests` (HIGH), `bookings` (HIGH), `general` (DEFAULT).
+    - Handled Android 13+ `POST_NOTIFICATIONS` runtime permissions gracefully.
+    - Obtained real Expo push tokens and sent them securely to authenticated backend API.
+  - **Multi-Device & Token Lifecycle Management**:
+    - Enhanced MongoDB `User` schema with indexed `pushTokens` subdocuments (`token`, `platform`, `deviceId`, `deviceModel`, `appVersion`, `isActive`, `createdAt`, `lastUsedAt`) and granular user toggles (`pushMessages`, `pushJobLeads`, `pushBookings`, `pushStatusUpdates`, `pushCancellations`).
+    - Implemented token registration (`POST /api/notifications/push-token`), automatic token deduplication across users on the same physical device, multi-device support per account, and token deregistration (`DELETE /api/notifications/push-token`) on logout.
+    - Automatic deactivation of invalid/unregistered device tokens (`DeviceNotRegistered`) returned from Expo push tickets.
+  - **Notification Event Triggers & Routing**:
+    - **New Customer Messages**: Dispatches remote push (`Title: New message`, `Body: Customer name: message preview`) on message creation in `chat.controller.js`. Tapping routes directly to `ChatDetail` with `conversationId`.
+    - **New Job Posted Near You**: Dispatches remote push (`Title: New job near you`, `Body: New [category] request in [locality]`) exclusively to eligible vendors filtered by category, territory, and service radius via `matchEligibleVendors`. Tapping routes directly to `VendorJobDetail` with `jobId`.
+    - **Booking Confirmations & Status Transitions**: Dispatches push notifications for confirmed bookings, direct booking inquiries, arrival, work in progress, and completion approval requests. Tapping routes directly to `VendorJobDetail` with `bookingId`.
+    - **Cancellations & Reschedules**: Dispatches alerts with cancellation reasons to affected parties.
+    - **Non-blocking Error Isolation**: Push dispatch failures or network timeouts never roll back or break core business transactions.
+  - **In-App Notification Center & Device Settings**:
+    - Real-time unread badge counts connected to MongoDB.
+    - Mark single notification as read, mark all read, and pull-to-refresh history.
+    - Added Device Push Notifications section in `VendorSettingsScreen.tsx` with toggles for all 5 push categories and an interactive "Test Push" button.
+  - **Verification**:
+    - Ran comprehensive E2E test suite (`backend/src/scripts/test_push_e2e.mjs`) passing 34/34 tests against live MongoDB Atlas.
+    - Ran `npx tsc --noEmit` in `mobile/vendor-app` with 0 errors.
+    - Ran `npx expo export -p android --no-bytecode` with 843 modules bundled cleanly for Android. Customer App and web UI 100% untouched.
+- [x] **Task 4.26**: Fix KYC Document Upload and Verification Submission in WorkLogy Vendor App (`mobile/vendor-app/src/screens/VendorKycScreen.tsx`, `mobile/vendor-app/src/api/client.ts`, `backend/src/controllers/vendor.controller.js`, `backend/src/routes/vendor.routes.js`, `mobile/vendor-app/package.json`):
+  - **Identified Root Cause of `Unsupported FormDataPart implementation`**:
+    - Traced error directly to Expo WinterCG `convertFormDataAsync` (`node_modules/expo/src/winter/fetch/convertFormData.ts:77`) called when using global `fetch` with React Native multipart object `{ uri, name, type }`. WinterCG only supports strings, Blobs, or objects with `.bytes()`, throwing `throw new Error('Unsupported FormDataPart implementation')`.
+  - **Implemented React Native / Expo Native Multipart Upload Architecture**:
+    - Replaced `fetch` in `api.media.uploadImage` with native `XMLHttpRequest` sending standard React Native `FormData`.
+    - `XMLHttpRequest` delegates to React Native core `RCTNetworking` (Android OkHttp), which natively handles `{ uri, name, type }` and streams Android `content://` and `file://` URIs without calling Expo's WinterCG fetch serializer.
+    - Added MIME type detection for `image/jpeg`, `image/png`, `image/webp`, and `application/pdf`, and normalized filename extensions.
+    - Preserved `Authorization: Bearer <token>` and sent multipart payload with the expected field name `'image'`.
+  - **Backend Controller & Cloudinary Integration**:
+    - Enhanced `POST /api/vendors/upload-image` (`uploadVendorImage` controller) to support both image files and PDF documents.
+    - Connected to Cloudinary storage with local disk fallback (`backend/uploads/`).
+    - Enhanced `POST /api/vendors/verification` (`submitVerificationDocs` controller) to deduplicate and preserve previously submitted documents without overwriting past verified credentials.
+    - Strict P0 Privacy Guardrail: masked sensitive document IDs in database and API responses (`XXXX-XXXX-1234` for 12-digit Aadhaar, `XXXX-1234` for PAN/other IDs). Never logs full Aadhaar/PAN or sensitive credentials.
+  - **Vendor KYC Screen (`VendorKycScreen.tsx`) Polish**:
+    - Added real client-side validation for Aadhaar (12 numeric digits), PAN (10 characters alphanumeric regex), Voter ID, and Trade License.
+    - Form inputs now adapt `keyboardType="numeric"`, `autoCapitalize="characters"`, and `maxLength` according to selected document type.
+    - Gracefully handles PDF documents in preview modal without broken `<Image />` tags.
+    - Removed hardcoded fake demo documents, replacing with an empty state and live documents fetched from MongoDB.
+    - Supports all canonical statuses: Not Submitted, Under Review (`pending_review`, `under_review`, `submitted`), Verified, Rejected, and Changes Required.
+  - **Verification**:
+    - Verified live upload and KYC submission to MongoDB Atlas and Cloudinary via live API tests (HTTP 200).
+    - Syntax checks passed on backend routes and controller (`node --check`).
+    - TypeScript checks passed cleanly with 0 errors (`npx tsc --noEmit`).
+
+- [x] **Task 4.27**: Fix WorkLogy Admin Web Vendors Page Crash and Implement Complete Vendor Details & KYC Document Viewer (`frontend/src/pages/admin/Vendors.jsx`, `frontend/src/components/admin/VendorDetailsModal.jsx`, `frontend/src/components/admin/KycDocumentViewerModal.jsx`, `frontend/src/api/admin.api.js`, `frontend/src/utils/formatters.js`, `backend/src/controllers/admin.controller.js`, `backend/src/routes/admin.routes.js`, `backend/src/models/VendorProfile.js`):
+  - **Root Cause & Fix for Admin Vendors Page Crash**:
+    - Identified root cause of runtime error `CheckSquare is not defined` on `/admin/vendors` (`src/pages/admin/Vendors.jsx:59`): `CheckSquare` was used in the empty state JSX on line 276 but omitted from the `lucide-react` import statement.
+    - Added `CheckSquare` to the `lucide-react` imports. Verified that `/admin/vendors` renders cleanly without error boundary crashes or blank screens.
+  - **Complete 8-Tab Vendor Dossier Modal (`VendorDetailsModal.jsx`)**:
+    - Built comprehensive, responsive modal dossier matching WorkLogy design tokens with 8 organized tabs:
+      1. **Overview**: Highlights key account metrics, quick actions, contact details, and top trade services.
+      2. **Profile & Services**: Full business profile, description, experience years, service categories, pricing models, and specific skills.
+      3. **KYC & Documents**: Dedicated verification center displaying overall status badge, submission counts, document cards with masked IDs (`XXXX-XXXX-1234` / `XXXX-1234`), reviewer notes, and individual review actions.
+      4. **Service Area**: Primary city, PIN code, coverage radius, active zones, and covered Lucknow localities.
+      5. **Jobs & Bookings**: Live records of recent customer bookings, statuses, dates, and amounts.
+      6. **Earnings & Payments**: Completed job counts, total earnings in INR, pending balances, and transaction history.
+      7. **Ratings & Reviews**: Real star ratings, verified customer feedback, and review dates.
+      8. **Activity & Audit History**: Timestamped logs of status changes, reviewer IDs, notes, and verification events.
+  - **Interactive KYC Document Viewer Modal (`KycDocumentViewerModal.jsx`)**:
+    - High-performance modal supporting image zoom controls (+/- 25%, 100% reset), 90° clockwise rotation, and pan preview.
+    - Embedded PDF document viewer with fallback download/external preview button.
+    - Masked government identification numbers by default for Aadhaar and PAN privacy.
+    - Inline admin verification actions: Approve Document, Reject Document (with mandatory rejection reason), and Request Changes.
+  - **Secure Backend Endpoints & Data Model Enhancements**:
+    - Enhanced `VendorProfile` Mongoose schema to store individual document statuses (`pending`, `approved`, `rejected`, `changes_required`), `rejectionReason`, `reviewedAt`, and `reviewedBy`.
+    - Added `reviewedBy` to `approvalHistory` subschema to prevent Mongoose `StrictPopulateError`.
+    - Enhanced `GET /api/admin/vendors/:id` to populate vendor user, categories, audit users, recent bookings, customer reviews, and transactions.
+    - Added `PATCH /api/admin/vendors/:id/documents/:docIndex` to review individual documents, record admin audit trails, send vendor notifications, and synchronize overall `verifiedBadge.status`.
+    - Added `GET /api/admin/vendors/:id/documents/:docIndex/:mode` for authenticated document access and streaming.
+  - **Verification & Zero Scope Creep**:
+    - Frontend production build (`npm run build`) passed cleanly in 2.65s with 0 errors.
+    - Backend syntax checks passed cleanly (`node --check`).
+    - Verified all 6 E2E integration steps against live MongoDB Atlas (`backend/src/scripts/test_admin_kyc_e2e.mjs`).
+    - Zero modifications or regressions to Customer App or Vendor Mobile App.
 

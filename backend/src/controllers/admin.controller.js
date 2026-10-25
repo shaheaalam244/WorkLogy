@@ -1,3 +1,6 @@
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import mongoose from 'mongoose';
 import User from '../models/User.js';
 import VendorProfile from '../models/VendorProfile.js';
@@ -17,6 +20,9 @@ import { recalculateVendorRating } from '../utils/ratingAggregator.js';
 import { matchEligibleVendors } from '../services/vendorMatching.service.js';
 import { getIO } from '../config/socket.js';
 import { getAdminReports, resolveReport as handleResolveReport } from './report.controller.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Central audit logging helper
 const logAdminAction = async (adminUser, action, targetType, targetId, details = {}, ipAddress = '127.0.0.1') => {
@@ -260,17 +266,20 @@ export const getVendorById = async (req, res, next) => {
     const { id } = req.params;
     let vendor = null;
 
-    if (mongoose.Types.ObjectId.isValid(id)) {
-      vendor = await VendorProfile.findById(id)
-        .populate('user', 'name email phone avatar status createdAt suspensionReason')
-        .populate('categories', 'name slug icon')
-        .populate('approvalHistory.reviewedBy', 'name email');
+    const populateOpts = [
+      { path: 'user', select: 'name email phone avatar status createdAt suspensionReason', strictPopulate: false },
+      { path: 'categories', select: 'name slug icon', strictPopulate: false },
+      { path: 'approvalHistory.reviewedBy', select: 'name email', strictPopulate: false },
+      { path: 'approvalHistory.changedBy', select: 'name email', strictPopulate: false },
+      { path: 'verifiedBadge.reviewedBy', select: 'name email', strictPopulate: false },
+      { path: 'verifiedBadge.documents.reviewedBy', select: 'name email', strictPopulate: false },
+      { path: 'adminNotes.author', select: 'name email', strictPopulate: false }
+    ];
 
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      vendor = await VendorProfile.findById(id).populate(populateOpts);
       if (!vendor) {
-        vendor = await VendorProfile.findOne({ user: id })
-          .populate('user', 'name email phone avatar status createdAt suspensionReason')
-          .populate('categories', 'name slug icon')
-          .populate('approvalHistory.reviewedBy', 'name email');
+        vendor = await VendorProfile.findOne({ user: id }).populate(populateOpts);
       }
     }
 
@@ -278,24 +287,214 @@ export const getVendorById = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Professional profile not found' });
     }
 
-    // Attach past bookings, jobs completed, and reviews
-    const [recentBookings, reviews] = await Promise.all([
-      Booking.find({ vendor: vendor.user?._id })
+    // Attach past bookings, reviews, assigned jobs, and financial transactions
+    const vendorUserId = vendor.user?._id;
+    const [recentBookings, reviews, recentJobs, transactions] = await Promise.all([
+      Booking.find({ vendor: vendorUserId })
         .sort({ createdAt: -1 })
-        .limit(10)
-        .populate('customer', 'name email'),
-      Review.find({ vendor: vendor.user?._id })
+        .limit(20)
+        .populate('customer', 'name email phone'),
+      Review.find({ vendor: vendorUserId })
         .sort({ createdAt: -1 })
-        .limit(10)
-        .populate('customer', 'name')
+        .limit(20)
+        .populate('customer', 'name avatar'),
+      Job.find({ selectedVendor: vendorUserId })
+        .sort({ createdAt: -1 })
+        .limit(20)
+        .populate('customer', 'name email phone')
+        .populate('category', 'name'),
+      Transaction.find({ vendor: vendorUserId })
+        .sort({ createdAt: -1 })
+        .limit(20)
+        .populate('customer', 'name email')
     ]);
 
     res.status(200).json({
       success: true,
       vendor,
       recentBookings,
-      reviews
+      reviews,
+      recentJobs,
+      transactions
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * PATCH /api/admin/vendors/:id/documents/:docIndex
+ * Review an individual vendor KYC document (Approve, Reject, or Request Changes)
+ */
+export const reviewVendorDocument = async (req, res, next) => {
+  try {
+    const { id, docIndex } = req.params;
+    const { action, reason } = req.body; // 'approved' | 'rejected' | 'changes_required' | 'pending'
+
+    if (!['approved', 'rejected', 'changes_required', 'pending'].includes(action)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid document review action. Must be: approved, rejected, changes_required, or pending'
+      });
+    }
+
+    if (['rejected', 'changes_required'].includes(action) && (!reason || !reason.trim())) {
+      return res.status(400).json({
+        success: false,
+        message: 'A mandatory reason is required when rejecting or requesting changes on a KYC document'
+      });
+    }
+
+    let vendor = await VendorProfile.findById(id).populate('user');
+    if (!vendor && mongoose.Types.ObjectId.isValid(id)) {
+      vendor = await VendorProfile.findOne({ user: id }).populate('user');
+    }
+    if (!vendor) {
+      return res.status(404).json({ success: false, message: 'Vendor profile not found' });
+    }
+
+    const idx = parseInt(docIndex, 10);
+    if (isNaN(idx) || !vendor.verifiedBadge?.documents?.[idx]) {
+      return res.status(404).json({ success: false, message: 'Document not found at specified index' });
+    }
+
+    const doc = vendor.verifiedBadge.documents[idx];
+    doc.status = action;
+    doc.rejectionReason = reason ? reason.trim() : '';
+    doc.reviewedAt = new Date();
+    doc.reviewedBy = req.user._id;
+
+    // Synchronize overall verifiedBadge.status
+    const allDocs = vendor.verifiedBadge.documents;
+    const allApproved = allDocs.length > 0 && allDocs.every(d => d.status === 'approved');
+    const hasRejected = allDocs.some(d => d.status === 'rejected');
+    const hasChangesReq = allDocs.some(d => d.status === 'changes_required');
+
+    if (hasRejected) {
+      vendor.verifiedBadge.status = 'rejected';
+      vendor.verifiedBadge.rejectionReason = reason ? reason.trim() : `Document ${doc.name} was rejected.`;
+    } else if (hasChangesReq) {
+      vendor.verifiedBadge.status = 'changes_required';
+      vendor.verifiedBadge.resubmissionInstructions = reason ? reason.trim() : `Changes requested on document ${doc.name}.`;
+    } else if (allApproved) {
+      vendor.verifiedBadge.status = 'verified';
+      vendor.verifiedBadge.verifiedAt = new Date();
+      vendor.verifiedBadge.rejectionReason = '';
+      vendor.verifiedBadge.resubmissionInstructions = '';
+      vendor.approvalStatus = 'approved';
+      if (vendor.user) {
+        await User.findByIdAndUpdate(vendor.user._id, { status: 'active', isActive: true });
+      }
+    } else {
+      vendor.verifiedBadge.status = 'under_review';
+    }
+
+    vendor.verifiedBadge.reviewedBy = req.user._id;
+    vendor.verifiedBadge.reviewedAt = new Date();
+
+    await vendor.save();
+
+    // Log admin audit action
+    await logAdminAction(
+      req.user,
+      'VENDOR_DOCUMENT_REVIEWED',
+      'VendorProfile',
+      vendor._id,
+      {
+        documentName: doc.name,
+        documentIndex: idx,
+        docAction: action,
+        overallStatus: vendor.verifiedBadge.status,
+        reason: reason || ''
+      },
+      req.ip
+    );
+
+    // In-app notification to the vendor
+    if (vendor.user) {
+      try {
+        await Notification.create({
+          recipient: vendor.user._id,
+          sender: req.user._id,
+          title: `Document ${doc.name} Reviewed: ${action.replace('_', ' ').toUpperCase()}`,
+          message: action === 'approved'
+            ? `Your verification document "${doc.name}" has been approved by our compliance team.`
+            : `Your verification document "${doc.name}" requires attention: "${reason?.trim()}".`,
+          type: 'system',
+          link: '/vendor/verification'
+        });
+      } catch (err) {
+        console.warn('Failed to send notification for document review:', err.message);
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Document ${doc.name} marked as ${action}`,
+      document: doc,
+      verifiedBadge: vendor.verifiedBadge
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * GET /api/admin/vendors/:id/documents/:docIndex/:mode?
+ * Authenticated document access for inspection or downloading by authorized admins
+ */
+export const serveVendorDocument = async (req, res, next) => {
+  try {
+    const { id, docIndex, mode = 'view' } = req.params;
+
+    let vendor = await VendorProfile.findById(id);
+    if (!vendor && mongoose.Types.ObjectId.isValid(id)) {
+      vendor = await VendorProfile.findOne({ user: id });
+    }
+    if (!vendor) {
+      return res.status(404).json({ success: false, message: 'Vendor not found' });
+    }
+
+    const idx = parseInt(docIndex, 10);
+    const doc = vendor.verifiedBadge?.documents?.[idx];
+    if (!doc || !doc.url) {
+      return res.status(404).json({ success: false, message: 'Document not found' });
+    }
+
+    const isRemote = doc.url.startsWith('http://') || doc.url.startsWith('https://');
+
+    if (isRemote) {
+      return res.redirect(doc.url);
+    }
+
+    // Local file fallback
+    const cleanPath = doc.url.replace(/^\/?uploads\//, '');
+    const filePath = path.join(__dirname, '../../uploads', cleanPath);
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ success: false, message: 'Document file not found on server' });
+    }
+
+    const ext = path.extname(filePath).toLowerCase();
+    const mimeTypes = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.webp': 'image/webp',
+      '.pdf': 'application/pdf'
+    };
+
+    const contentType = mimeTypes[ext] || 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
+
+    if (mode === 'download') {
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(doc.name || 'document' + ext)}"`);
+    } else {
+      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(doc.name || 'document' + ext)}"`);
+    }
+
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.pipe(res);
   } catch (error) {
     next(error);
   }

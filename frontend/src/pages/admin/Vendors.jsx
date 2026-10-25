@@ -20,12 +20,17 @@ import {
   Briefcase,
   Layers,
   ChevronRight,
-  UserCheck
+  UserCheck,
+  CheckSquare,
+  Users,
+  Compass,
+  Star
 } from 'lucide-react';
 import { adminAPI } from '../../api/admin.api';
 import Loader from '../../components/common/Loader';
 import VerifiedBadge from '../../components/vendor/VerifiedBadge';
 import { formatCurrency, formatDate } from '../../utils/formatters';
+import VendorDetailsModal from '../../components/admin/VendorDetailsModal';
 
 const STATUS_PILLS = [
   { key: 'all', label: 'All Pros' },
@@ -44,13 +49,20 @@ export default function AdminVendors() {
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
+  
+  // Active Dossier Modal State
   const [selectedVendor, setSelectedVendor] = useState(null);
+  const [vendorBookings, setVendorBookings] = useState([]);
+  const [vendorReviews, setVendorReviews] = useState([]);
+  const [vendorJobs, setVendorJobs] = useState([]);
+  const [vendorTransactions, setVendorTransactions] = useState([]);
   const [dossierLoading, setDossierLoading] = useState(false);
+  const [savingNote, setSavingNote] = useState(false);
 
-  // Action Dialog State
+  // Action Confirmation Dialog State
   const [actionModal, setActionModal] = useState({
     open: false,
-    action: '', // 'approved' | 'changes_required' | 'rejected' | 'suspended'
+    action: '', // 'approved' | 'changes_required' | 'rejected' | 'suspended' | 'verify_approve' | 'verify_changes_required' | 'verify_reject'
     vendorId: null,
     vendorName: '',
     reason: '',
@@ -58,10 +70,6 @@ export default function AdminVendors() {
     submitting: false,
     error: ''
   });
-
-  // Admin Note State
-  const [newAdminNote, setNewAdminNote] = useState('');
-  const [savingNote, setSavingNote] = useState(false);
 
   const fetchVendors = async () => {
     try {
@@ -97,18 +105,42 @@ export default function AdminVendors() {
     fetchVendors();
   };
 
-  const openDossier = async (vendorId) => {
+  const openDossier = async (vendorOrId) => {
+    const vendorId = typeof vendorOrId === 'string' ? vendorOrId : vendorOrId?._id;
+    const initialVendor = typeof vendorOrId === 'object' ? vendorOrId : vendors.find(v => v._id === vendorId);
+
+    // 1. Immediately set initial vendor data so the modal opens with zero delay
+    if (initialVendor) {
+      setSelectedVendor(initialVendor);
+    }
+
     try {
       setDossierLoading(true);
       const res = await adminAPI.getVendorById(vendorId);
       if (res?.vendor) {
         setSelectedVendor(res.vendor);
+        setVendorBookings(res.recentBookings || []);
+        setVendorReviews(res.reviews || []);
+        setVendorJobs(res.recentJobs || []);
+        setVendorTransactions(res.transactions || []);
       }
     } catch (err) {
-      console.error('Failed to load dossier:', err);
+      console.error('Failed to load full dossier from API:', err);
+      // Fallback: If selectedVendor is not set, ensure it has initial vendor record
+      if (initialVendor) {
+        setSelectedVendor(initialVendor);
+      }
     } finally {
       setDossierLoading(false);
     }
+  };
+
+  const handleCloseDossier = () => {
+    setSelectedVendor(null);
+    setVendorBookings([]);
+    setVendorReviews([]);
+    setVendorJobs([]);
+    setVendorTransactions([]);
   };
 
   const openActionModal = (vendor, action) => {
@@ -130,7 +162,7 @@ export default function AdminVendors() {
     const effectiveAction = isVerificationAction ? action.replace('verify_', '') : action;
 
     if (['changes_required', 'rejected', 'suspended', 'request_resubmission'].includes(effectiveAction) && !reason.trim()) {
-      setActionModal(prev => ({ ...prev, error: 'A clear reason is required for this decision.' }));
+      setActionModal(prev => ({ ...prev, error: 'A clear reason is required for this administrative decision.' }));
       return;
     }
 
@@ -153,9 +185,9 @@ export default function AdminVendors() {
       }
 
       setActionModal({ open: false, action: '', vendorId: null, vendorName: '', reason: '', notes: '', submitting: false, error: '' });
-      fetchVendors();
-      if (selectedVendor && selectedVendor._id === vendorId) {
-        openDossier(vendorId);
+      await fetchVendors();
+      if (selectedVendor && (selectedVendor._id === vendorId || selectedVendor.user?._id === vendorId)) {
+        await openDossier(vendorId);
       }
     } catch (err) {
       setActionModal(prev => ({
@@ -166,14 +198,24 @@ export default function AdminVendors() {
     }
   };
 
-  const handleAddNote = async () => {
-    if (!newAdminNote.trim() || !selectedVendor) return;
+  // Review an individual KYC document (Aadhaar, PAN, etc.)
+  const handleReviewDocument = async (vendorId, docIndex, action, reason = '') => {
+    try {
+      await adminAPI.reviewVendorDocument(vendorId, docIndex, { action, reason });
+      await openDossier(vendorId);
+      await fetchVendors();
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to update document status');
+    }
+  };
+
+  const handleAddNote = async (noteText) => {
+    if (!selectedVendor || !noteText) return;
     try {
       setSavingNote(true);
-      const res = await adminAPI.addVendorNote(selectedVendor._id, { note: newAdminNote.trim() });
+      const res = await adminAPI.addVendorNote(selectedVendor._id, { note: noteText });
       if (res?.adminNotes) {
         setSelectedVendor(prev => ({ ...prev, adminNotes: res.adminNotes }));
-        setNewAdminNote('');
       }
     } catch (err) {
       alert(err.response?.data?.message || 'Failed to save admin note');
@@ -199,32 +241,67 @@ export default function AdminVendors() {
     }
   };
 
+  // Metrics summary
+  const totalCount = vendors.length;
+  const approvedCount = vendors.filter(v => v.approvalStatus === 'approved').length;
+  const pendingVerificationCount = vendors.filter(v => v.verifiedBadge?.status === 'pending_review' || v.verifiedBadge?.status === 'under_review').length;
+  const changesCount = vendors.filter(v => v.approvalStatus === 'changes_required' || v.verifiedBadge?.status === 'changes_required').length;
+  const suspendedCount = vendors.filter(v => v.approvalStatus === 'suspended').length;
+
   return (
     <div className="space-y-6 w-full">
-      {/* Header */}
+      {/* Header Banner */}
       <div className="bg-white border border-slate-200/90 shadow-2xs rounded-3xl p-6 sm:p-7 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
             <span className="text-xs font-bold text-purple-800 uppercase tracking-wider bg-purple-50 px-2.5 py-0.5 rounded-full border border-purple-200/60">
               Professional Governance
             </span>
-            <span className="text-xs text-slate-500 font-medium">· Live Review Engine</span>
+            <span className="text-xs text-slate-500 font-medium">· Live Compliance & Verification Engine</span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight mt-1">
             Professional Approvals & Management
           </h1>
           <p className="text-xs sm:text-sm text-slate-600 leading-relaxed max-w-2xl mt-1">
-            Review contractor registrations, inspect verification licenses, and manage public visibility. Unapproved professionals cannot bid or accept jobs.
+            Review contractor registrations, inspect uploaded KYC documents (Aadhaar, PAN, Voter ID, Trade License), and manage public marketplace visibility.
           </p>
         </div>
 
         <button
           onClick={fetchVendors}
-          className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition"
+          className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition shrink-0"
         >
           <RefreshCw className="w-3.5 h-3.5" />
-          <span>Refresh</span>
+          <span>Refresh Queue</span>
         </button>
+      </div>
+
+      {/* KPI Counters Strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">Total Pros</span>
+          <span className="text-xl font-black text-slate-900 mt-1 block">{totalCount}</span>
+        </div>
+
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">Active & Approved</span>
+          <span className="text-xl font-black text-emerald-700 mt-1 block">{approvedCount}</span>
+        </div>
+
+        <div className="bg-white p-4 rounded-2xl border border-purple-200 bg-purple-50/30 shadow-2xs">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-purple-800 block">Pending KYC 🛡️</span>
+          <span className="text-xl font-black text-purple-900 mt-1 block">{pendingVerificationCount}</span>
+        </div>
+
+        <div className="bg-white p-4 rounded-2xl border border-amber-200 bg-amber-50/30 shadow-2xs">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 block">Changes Required</span>
+          <span className="text-xl font-black text-amber-900 mt-1 block">{changesCount}</span>
+        </div>
+
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs col-span-2 sm:col-span-1">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">Suspended</span>
+          <span className="text-xl font-black text-slate-700 mt-1 block">{suspendedCount}</span>
+        </div>
       </div>
 
       {/* Search and Status Filters */}
@@ -234,7 +311,7 @@ export default function AdminVendors() {
             <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
             <input
               type="text"
-              placeholder="Search by professional name, business name, email, or phone..."
+              placeholder="Search by professional name, business name, email, phone, or ID..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full pl-10 pr-4 py-2 text-xs rounded-xl border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-purple-600 bg-slate-50/50"
@@ -272,40 +349,56 @@ export default function AdminVendors() {
           <Loader text="Loading professionals queue..." />
         </div>
       ) : vendors.length === 0 ? (
-        <div className="bg-white border border-slate-200/90 rounded-2xl p-12 text-center">
+        <div className="bg-white border border-slate-200/90 rounded-2xl p-12 text-center shadow-2xs">
           <CheckSquare className="w-12 h-12 text-slate-300 mx-auto mb-3" />
           <h3 className="text-base font-bold text-slate-800">No professionals found</h3>
           <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-            There are currently no professional profiles matching the selected filter.
+            There are currently no professional profiles matching the selected filter criteria.
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4">
+        <div className="grid grid-cols-1 gap-3.5">
           {vendors.map((v) => {
             const userName = v.user?.name || 'Unnamed Professional';
             const userEmail = v.user?.email || 'No email';
             const userPhone = v.user?.phone || 'No phone';
             const business = v.businessName || 'Independent Trade';
             const categories = v.categories?.map(c => c.name).join(', ') || 'General Trade';
+            const avatar = v.user?.avatar || v.avatar;
+            const docCount = v.verifiedBadge?.documents?.length || 0;
 
             return (
               <div
                 key={v._id}
-                className="bg-white border border-slate-200/90 hover:border-slate-300 shadow-2xs p-5 sm:p-6 rounded-2xl flex flex-col lg:flex-row lg:items-center justify-between gap-5 transition"
+                onClick={() => openDossier(v)}
+                className="bg-white border border-slate-200/90 hover:border-purple-300 shadow-2xs hover:shadow-xs p-5 sm:p-6 rounded-2xl flex flex-col lg:flex-row lg:items-center justify-between gap-5 transition cursor-pointer group"
               >
                 {/* Left Info */}
                 <div className="flex items-start gap-4 min-w-0">
-                  <div className="w-12 h-12 rounded-2xl bg-purple-100 text-purple-800 font-black text-lg flex items-center justify-center shrink-0 border border-purple-200">
-                    {userName[0]?.toUpperCase()}
-                  </div>
+                  {avatar ? (
+                    <img
+                      src={avatar}
+                      alt={userName}
+                      className="w-12 h-12 rounded-2xl object-cover border border-slate-200 shrink-0"
+                    />
+                  ) : (
+                    <div className="w-12 h-12 rounded-2xl bg-purple-100 text-purple-800 font-black text-lg flex items-center justify-center shrink-0 border border-purple-200 group-hover:scale-105 transition">
+                      {userName[0]?.toUpperCase()}
+                    </div>
+                  )}
 
                   <div className="space-y-1.5 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="text-base font-bold text-slate-900 truncate">
+                      <h3 className="text-base font-bold text-slate-900 truncate group-hover:text-purple-800 transition">
                         {userName}
                       </h3>
                       {getStatusBadge(v.approvalStatus)}
                       <VerifiedBadge status={v.verifiedBadge?.status || 'not_submitted'} size="xs" />
+                      {docCount > 0 && (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+                          📄 {docCount} Doc(s)
+                        </span>
+                      )}
                     </div>
 
                     <p className="text-xs font-semibold text-slate-700">
@@ -323,7 +416,7 @@ export default function AdminVendors() {
                       </span>
                       <span className="inline-flex items-center gap-1">
                         <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                        {v.serviceArea?.city || 'Lucknow Metro'}
+                        {v.locality || v.serviceArea?.city || v.city || 'Lucknow Metro'}
                       </span>
                       <span className="inline-flex items-center gap-1">
                         <Calendar className="w-3.5 h-3.5 text-slate-400" />
@@ -340,19 +433,24 @@ export default function AdminVendors() {
                 </div>
 
                 {/* Right Actions */}
-                <div className="flex items-center gap-2 shrink-0 self-end lg:self-center flex-wrap">
+                <div 
+                  className="flex items-center gap-2 shrink-0 self-end lg:self-center flex-wrap"
+                  onClick={(e) => e.stopPropagation()} // Prevent double trigger when clicking action buttons
+                >
                   <button
-                    onClick={() => openDossier(v._id)}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold transition"
+                    type="button"
+                    onClick={() => openDossier(v)}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-900 text-xs font-bold transition border border-purple-200"
                   >
                     <Eye className="w-3.5 h-3.5" />
-                    <span>View Full Dossier</span>
+                    <span>View Dossier</span>
                   </button>
 
                   {v.approvalStatus !== 'approved' && (
                     <button
+                      type="button"
                       onClick={() => openActionModal(v, 'approved')}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold transition shadow-2xs"
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold transition shadow-2xs"
                     >
                       <Check className="w-3.5 h-3.5" />
                       <span>Approve</span>
@@ -361,8 +459,9 @@ export default function AdminVendors() {
 
                   {v.approvalStatus !== 'changes_required' && v.approvalStatus !== 'suspended' && (
                     <button
+                      type="button"
                       onClick={() => openActionModal(v, 'changes_required')}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition shadow-2xs"
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition shadow-2xs"
                     >
                       <AlertTriangle className="w-3.5 h-3.5" />
                       <span>Request Changes</span>
@@ -371,8 +470,9 @@ export default function AdminVendors() {
 
                   {v.approvalStatus !== 'rejected' && v.approvalStatus !== 'suspended' && (
                     <button
+                      type="button"
                       onClick={() => openActionModal(v, 'rejected')}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition shadow-2xs"
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition shadow-2xs"
                     >
                       <X className="w-3.5 h-3.5" />
                       <span>Reject</span>
@@ -381,11 +481,12 @@ export default function AdminVendors() {
 
                   {v.approvalStatus === 'approved' && (
                     <button
+                      type="button"
                       onClick={() => openActionModal(v, 'suspended')}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold transition shadow-2xs"
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold transition shadow-2xs"
                     >
                       <Ban className="w-3.5 h-3.5" />
-                      <span>Suspend Pro</span>
+                      <span>Suspend</span>
                     </button>
                   )}
                 </div>
@@ -395,288 +496,39 @@ export default function AdminVendors() {
         </div>
       )}
 
-      {/* FULL DOSSIER MODAL */}
-      {selectedVendor && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-3xl w-full p-6 sm:p-8 space-y-6 shadow-2xl max-h-[90vh] overflow-y-auto animate-in zoom-in-95 duration-200">
-            {/* Modal Header */}
-            <div className="flex items-start justify-between pb-4 border-b border-slate-100">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-2xl bg-purple-100 text-purple-800 font-black text-xl flex items-center justify-center border border-purple-200">
-                  {(selectedVendor.user?.name || selectedVendor.businessName || 'P')[0]?.toUpperCase()}
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-xl font-black text-slate-900">
-                      {selectedVendor.user?.name || selectedVendor.businessName}
-                    </h2>
-                    {getStatusBadge(selectedVendor.approvalStatus)}
-                  </div>
-                  <p className="text-xs text-slate-500">
-                    ID: {selectedVendor._id} · Joined {formatDate(selectedVendor.createdAt)}
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setSelectedVendor(null)}
-                className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Business & Verification Overview */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-2">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Business Details</p>
-                <p className="text-xs font-bold text-slate-900">{selectedVendor.businessName || 'Individual'}</p>
-                <p className="text-xs text-slate-600">Experience: {selectedVendor.yearsOfExperience || 1} Years</p>
-                <p className="text-xs text-slate-600">Hourly Rate: {formatCurrency(selectedVendor.hourlyRate || 0)}/hr</p>
-                <p className="text-xs text-slate-600">Emergency Callout: {formatCurrency(selectedVendor.emergencyCallOutFee || 0)}</p>
-                <p className="text-xs text-slate-600">
-                  Emergency Ready: {selectedVendor.isEmergencyAvailable ? '✅ Active' : '❌ Disabled'}
-                </p>
-              </div>
-
-              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-2">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Contact & Area</p>
-                <p className="text-xs text-slate-700">Email: {selectedVendor.user?.email || 'N/A'}</p>
-                <p className="text-xs text-slate-700">Phone: {selectedVendor.user?.phone || 'N/A'}</p>
-                <p className="text-xs text-slate-700">City: {selectedVendor.serviceArea?.city || 'Lucknow'}</p>
-                <p className="text-xs text-slate-700">
-                  Localities: {selectedVendor.serviceArea?.localities?.join(', ') || 'All Metro Sectors'}
-                </p>
-              </div>
-            </div>
-
-            {/* Services Offered */}
-            <div className="space-y-2">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
-                <Layers className="w-3.5 h-3.5 text-purple-700" />
-                <span>Configured Services ({selectedVendor.servicesOffered?.length || 0})</span>
-              </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {selectedVendor.servicesOffered?.length > 0 ? (
-                  selectedVendor.servicesOffered.map((s, idx) => (
-                    <div key={idx} className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs flex justify-between items-center">
-                      <div>
-                        <p className="font-bold text-slate-800">{s.serviceName}</p>
-                        <p className="text-[11px] text-slate-500">{s.categoryName} · {s.pricingType} ({formatCurrency(s.price || 0)})</p>
-                      </div>
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                        s.isApproved ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
-                      }`}>
-                        {s.isApproved ? 'Approved' : 'Pending'}
-                      </span>
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-xs text-slate-500 italic col-span-2">No services configured yet</p>
-                )}
-              </div>
-            </div>
-
-            {/* Identity & Trade Verification Dossier */}
-            <div className="space-y-3 p-4 rounded-2xl bg-slate-50 border border-slate-200/90">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-                  <ShieldCheck className="w-4 h-4 text-emerald-700" />
-                  <span>Identity & Trade Verification Dossier</span>
-                </h3>
-                <VerifiedBadge status={selectedVendor.verifiedBadge?.status || 'not_submitted'} size="sm" />
-              </div>
-
-              {/* Dossier Meta */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                <div className="bg-white p-2.5 rounded-xl border border-slate-200">
-                  <span className="text-[10px] text-slate-500 font-bold block">Verification Request ID</span>
-                  <span className="font-mono font-bold text-slate-800">
-                    {selectedVendor.verifiedBadge?.verificationRequestId || 'N/A'}
-                  </span>
-                </div>
-                <div className="bg-white p-2.5 rounded-xl border border-slate-200">
-                  <span className="text-[10px] text-slate-500 font-bold block">Masked ID Number</span>
-                  <span className="font-mono font-bold text-slate-800">
-                    {selectedVendor.verifiedBadge?.maskedIdNumber || 'Not submitted'}
-                  </span>
-                </div>
-                <div className="bg-white p-2.5 rounded-xl border border-slate-200">
-                  <span className="text-[10px] text-slate-500 font-bold block">Applicant Consent</span>
-                  <span className="text-slate-800 font-semibold">
-                    {selectedVendor.verifiedBadge?.consentProvided ? '✅ Explicit Consent Recorded' : 'Not recorded'}
-                  </span>
-                </div>
-                <div className="bg-white p-2.5 rounded-xl border border-slate-200">
-                  <span className="text-[10px] text-slate-500 font-bold block">Submitted At</span>
-                  <span className="text-slate-800">
-                    {selectedVendor.verifiedBadge?.submittedAt ? formatDate(selectedVendor.verifiedBadge.submittedAt) : 'N/A'}
-                  </span>
-                </div>
-              </div>
-
-              {/* Document Files */}
-              <div className="space-y-1.5 pt-1">
-                <span className="text-[11px] font-bold text-slate-600 block">Submitted Document Files:</span>
-                {selectedVendor.verifiedBadge?.documents?.length > 0 ? (
-                  selectedVendor.verifiedBadge.documents.map((doc, idx) => (
-                    <div key={idx} className="p-2.5 rounded-xl bg-white border border-slate-200 flex items-center justify-between text-xs">
-                      <div className="flex items-center gap-2">
-                        <FileText className="w-4 h-4 text-blue-600 shrink-0" />
-                        <div>
-                          <span className="font-semibold text-slate-800 block">{doc.name || `Document #${idx + 1}`}</span>
-                          <span className="text-[10px] text-slate-400">Type: {doc.docType || 'identity'}</span>
-                        </div>
-                      </div>
-                      {doc.url && doc.url !== '#' ? (
-                        <a href={doc.url} target="_blank" rel="noopener noreferrer" className="text-xs text-purple-800 font-bold hover:underline">
-                          Inspect Document ↗
-                        </a>
-                      ) : (
-                        <span className="text-[11px] text-slate-400">Stored Securely</span>
-                      )}
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-xs text-slate-500 italic">No verification documents uploaded</p>
-                )}
-              </div>
-
-              {/* Direct Verification Actions Bar */}
-              <div className="flex items-center gap-2 pt-2 border-t border-slate-200 flex-wrap">
-                {selectedVendor.verifiedBadge?.status !== 'verified' && (
-                  <button
-                    type="button"
-                    onClick={() => openActionModal(selectedVendor, 'verify_approve')}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold transition shadow-2xs"
-                  >
-                    <ShieldCheck className="w-3.5 h-3.5" />
-                    <span>Approve Verification (Grant Badge)</span>
-                  </button>
-                )}
-
-                {selectedVendor.verifiedBadge?.status !== 'changes_required' && (
-                  <button
-                    type="button"
-                    onClick={() => openActionModal(selectedVendor, 'verify_changes_required')}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition shadow-2xs"
-                  >
-                    <AlertTriangle className="w-3.5 h-3.5" />
-                    <span>Request Resubmission</span>
-                  </button>
-                )}
-
-                {selectedVendor.verifiedBadge?.status !== 'rejected' && (
-                  <button
-                    type="button"
-                    onClick={() => openActionModal(selectedVendor, 'verify_reject')}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition shadow-2xs"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                    <span>Reject Verification</span>
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Approval History Audit Trail */}
-            <div className="space-y-2">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
-                <Clock className="w-3.5 h-3.5 text-purple-700" />
-                <span>Review History</span>
-              </h3>
-              <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
-                {selectedVendor.approvalHistory?.length > 0 ? (
-                  selectedVendor.approvalHistory.map((h, idx) => (
-                    <div key={idx} className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 text-xs space-y-0.5">
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-slate-800">{h.status?.replace('_', ' ').toUpperCase()}</span>
-                        <span className="text-[10px] text-slate-400">{formatDate(h.reviewedAt)}</span>
-                      </div>
-                      <p className="text-slate-600">{h.reason}</p>
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-xs text-slate-500 italic">No prior review decisions recorded</p>
-                )}
-              </div>
-            </div>
-
-            {/* Internal Admin Notes */}
-            <div className="space-y-2">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-600">
-                Internal Administrative Notes
-              </h3>
-              <div className="space-y-1.5 max-h-32 overflow-y-auto">
-                {selectedVendor.adminNotes?.map((n, idx) => (
-                  <div key={idx} className="p-2 rounded-xl bg-purple-50/60 border border-purple-100 text-xs">
-                    <p className="text-slate-800">{n.note}</p>
-                    <span className="text-[10px] text-purple-700 font-semibold">{formatDate(n.createdAt)}</span>
-                  </div>
-                ))}
-              </div>
-
-              <div className="flex gap-2 pt-1">
-                <input
-                  type="text"
-                  placeholder="Add internal note regarding this professional..."
-                  value={newAdminNote}
-                  onChange={(e) => setNewAdminNote(e.target.value)}
-                  className="flex-1 px-3 py-1.5 text-xs rounded-xl border border-slate-200 focus:outline-hidden focus:ring-1 focus:ring-purple-600"
-                />
-                <button
-                  onClick={handleAddNote}
-                  disabled={savingNote || !newAdminNote.trim()}
-                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition disabled:opacity-50"
-                >
-                  Save Note
-                </button>
-              </div>
-            </div>
-
-            {/* Decision Bar */}
-            <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-100">
-              <button
-                onClick={() => setSelectedVendor(null)}
-                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold"
-              >
-                Close
-              </button>
-              <button
-                onClick={() => openActionModal(selectedVendor, 'approved')}
-                className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold"
-              >
-                Approve Pro
-              </button>
-              <button
-                onClick={() => openActionModal(selectedVendor, 'changes_required')}
-                className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold"
-              >
-                Request Changes
-              </button>
-              <button
-                onClick={() => openActionModal(selectedVendor, 'rejected')}
-                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold"
-              >
-                Reject
-              </button>
-              <button
-                onClick={() => openActionModal(selectedVendor, 'suspended')}
-                className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-black text-white text-xs font-bold"
-              >
-                Suspend
-              </button>
-            </div>
+      {/* Loading Dossier Overlay */}
+      {dossierLoading && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-60 flex items-center justify-center p-4">
+          <div className="bg-white p-6 rounded-3xl shadow-xl border border-slate-200 flex items-center gap-3">
+            <Loader text="Loading vendor dossier..." />
           </div>
         </div>
       )}
 
-      {/* CONFIRMATION & REASON MODAL */}
+      {/* FULL 8-TAB VENDOR DETAILS & KYC DOSSIER MODAL */}
+      {selectedVendor && (
+        <VendorDetailsModal
+          isOpen={Boolean(selectedVendor)}
+          onClose={handleCloseDossier}
+          vendor={selectedVendor}
+          recentBookings={vendorBookings}
+          reviews={vendorReviews}
+          recentJobs={vendorJobs}
+          transactions={vendorTransactions}
+          onOpenActionModal={openActionModal}
+          onReviewDocument={handleReviewDocument}
+          onAddNote={handleAddNote}
+          savingNote={savingNote}
+        />
+      )}
+
+      {/* CONFIRMATION & DECISION MODAL */}
       {actionModal.open && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl animate-in zoom-in-95 duration-150">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-70 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl animate-in zoom-in-95 duration-150 border border-slate-200">
             <div>
               <h3 className="text-lg font-black text-slate-900">
-                Confirm Decision: {actionModal.action.replace('_', ' ').toUpperCase()}
+                Confirm Decision: {actionModal.action.replace('verify_', 'KYC ').replace('_', ' ').toUpperCase()}
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
                 Target Professional: <span className="font-bold text-slate-800">{actionModal.vendorName}</span>
@@ -696,7 +548,7 @@ export default function AdminVendors() {
                 </label>
                 <textarea
                   rows={3}
-                  placeholder={`Explain clearly to the professional why this action is being taken or what documents need to be resubmitted...`}
+                  placeholder={`Explain clearly to the professional why this action is being taken or what specific documents need to be resubmitted...`}
                   value={actionModal.reason}
                   onChange={(e) => setActionModal(prev => ({ ...prev, reason: e.target.value }))}
                   className="w-full p-2.5 text-xs rounded-xl border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-purple-600"
@@ -705,10 +557,10 @@ export default function AdminVendors() {
             )}
 
             <div className="space-y-1">
-              <label className="text-xs font-bold text-slate-700">Internal Admin Notes (Optional)</label>
+              <label className="text-xs font-bold text-slate-700">Internal Admin Audit Notes (Optional)</label>
               <input
                 type="text"
-                placeholder="Additional audit note for admin records..."
+                placeholder="Additional audit note for internal admin logs..."
                 value={actionModal.notes}
                 onChange={(e) => setActionModal(prev => ({ ...prev, notes: e.target.value }))}
                 className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-purple-600"
@@ -717,12 +569,14 @@ export default function AdminVendors() {
 
             <div className="flex items-center justify-end gap-2 pt-2">
               <button
+                type="button"
                 onClick={() => setActionModal(prev => ({ ...prev, open: false }))}
                 className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold"
               >
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={handleConfirmAction}
                 disabled={actionModal.submitting}
                 className="px-4 py-2 rounded-xl bg-purple-800 hover:bg-purple-900 text-white text-xs font-bold transition disabled:opacity-50"

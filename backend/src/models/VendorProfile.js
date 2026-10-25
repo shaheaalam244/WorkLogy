@@ -21,6 +21,10 @@ const VendorProfileSchema = new mongoose.Schema(
       type: String,
       default: ''
     },
+    avatar: {
+      type: String,
+      default: ''
+    },
     categories: [
       {
         type: mongoose.Schema.Types.ObjectId,
@@ -61,6 +65,57 @@ const VendorProfileSchema = new mongoose.Schema(
       type: String,
       default: 'Lucknow'
     },
+    zoneId: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      index: true
+    },
+    zoneName: {
+      type: String,
+      trim: true
+    },
+    locality: {
+      type: String,
+      trim: true
+    },
+    vendorServiceRadiusKm: {
+      type: Number,
+      default: 5
+    },
+    baseVisitCharge: {
+      type: Number,
+      default: 299
+    },
+    coordinates: {
+      lat: { type: Number, default: 26.8467 },
+      lng: { type: Number, default: 80.9462 }
+    },
+    location: {
+      type: {
+        type: String,
+        enum: ['Point'],
+        default: 'Point'
+      },
+      coordinates: {
+        type: [Number], // [longitude, latitude]
+        default: [80.9462, 26.8467]
+      }
+    },
+    serviceAreaCoverage: {
+      baseAddress: { type: String, default: 'Hazratganj, Lucknow' },
+      pincode: { type: String, default: '226001' },
+      coordinates: {
+        lat: { type: Number, default: 26.8467 },
+        lng: { type: Number, default: 80.9462 }
+      },
+      radiusKm: { type: Number, default: 15, enum: [5, 10, 15, 20, 25, 30] },
+      selectedLocalityIds: [{ type: String }],
+      selectedZoneIds: [{ type: String }],
+      excludedLocalityIds: [{ type: String }],
+      version: { type: Number, default: 1 },
+      updatedAt: { type: Date, default: Date.now }
+    },
     hourlyRate: {
       type: Number,
       default: 45
@@ -99,9 +154,11 @@ const VendorProfileSchema = new mongoose.Schema(
           enum: ['pending', 'under_review', 'changes_required', 'approved', 'rejected', 'suspended']
         },
         changedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         reason: { type: String, default: '' },
         notes: { type: String, default: '' },
-        timestamp: { type: Date, default: Date.now }
+        timestamp: { type: Date, default: Date.now },
+        reviewedAt: { type: Date, default: Date.now }
       }
     ],
     adminNotes: [
@@ -160,7 +217,18 @@ const VendorProfileSchema = new mongoose.Schema(
           name: { type: String, required: true },
           docType: { type: String, default: 'identity' },
           url: { type: String, required: true },
-          uploadedAt: { type: Date, default: Date.now }
+          uploadedAt: { type: Date, default: Date.now },
+          status: {
+            type: String,
+            enum: ['pending', 'approved', 'rejected', 'changes_required'],
+            default: 'pending'
+          },
+          rejectionReason: { type: String, default: '' },
+          reviewedAt: { type: Date },
+          reviewedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+          }
         }
       ]
     },
@@ -223,5 +291,9 @@ const VendorProfileSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+VendorProfileSchema.index({ location: '2dsphere' });
+VendorProfileSchema.index({ zoneId: 1, approvalStatus: 1 });
+VendorProfileSchema.index({ locality: 1, approvalStatus: 1 });
 
 export default mongoose.models.VendorProfile || mongoose.model('VendorProfile', VendorProfileSchema);

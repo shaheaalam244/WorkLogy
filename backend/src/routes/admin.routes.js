@@ -4,6 +4,8 @@ import {
   getVendors,
   getVendorById,
   updateVendorApproval,
+  reviewVendorDocument,
+  serveVendorDocument,
   getVerificationRequests,
   getVerificationRequestById,
   reviewVerificationRequest,
@@ -50,6 +52,9 @@ router.get('/stats', getAdminStats);
 router.get('/vendors', getVendors);
 router.get('/vendors/:id', getVendorById);
 router.patch('/vendors/:id/approval', authorizeAdminRole('super_admin', 'verification_admin'), updateVendorApproval);
+router.patch('/vendors/:id/documents/:docIndex', authorizeAdminRole('super_admin', 'verification_admin'), reviewVendorDocument);
+router.get('/vendors/:id/documents/:docIndex', serveVendorDocument);
+router.get('/vendors/:id/documents/:docIndex/:mode', serveVendorDocument);
 router.get('/verifications', authorizeAdminRole('super_admin', 'verification_admin'), getVerificationRequests);
 router.get('/verifications/:id', authorizeAdminRole('super_admin', 'verification_admin'), getVerificationRequestById);
 router.patch('/verifications/:id', authorizeAdminRole('super_admin', 'verification_admin'), reviewVerificationRequest);
