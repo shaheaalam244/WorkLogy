@@ -12,8 +12,10 @@ import {
   StatusBar
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { api } from '../api/client';
 import { COLORS } from '../theme/colors';
+import { dataSyncService } from '../services/dataSyncService';
 import { formatCurrency, formatDate, getStatusColor, formatStatusText } from '../utils/formatters';
 import type { Booking } from '../types';
 
@@ -23,26 +25,150 @@ export default function JobDetailScreen({ route, navigation }: any) {
     insets.top,
     Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 0
   );
-  const { bookingId } = route.params || {};
+
+  const rawParams = route.params || {};
+  const targetId = (
+    (typeof rawParams.bookingId === 'string' ? rawParams.bookingId : rawParams.bookingId?._id || rawParams.bookingId?.id) ||
+    (typeof rawParams.jobId === 'string' ? rawParams.jobId : rawParams.jobId?._id || rawParams.jobId?.id) ||
+    (typeof rawParams.id === 'string' ? rawParams.id : rawParams.id?._id || rawParams.id?.id) ||
+    rawParams.reference ||
+    rawParams.bookingReference ||
+    rawParams.orderId ||
+    ''
+  );
+
   const [booking, setBooking] = useState<Booking | null>(null);
   const [loading, setLoading] = useState(true);
+  const [cancelling, setCancelling] = useState(false);
 
   useEffect(() => {
     loadBooking();
-  }, [bookingId]);
+  }, [targetId]);
+
+  useEffect(() => {
+    const unsubscribe = dataSyncService.subscribe('BOOKINGS_CHANGED', () => {
+      loadBooking();
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, [targetId]);
+
+  const normalizeJobToBooking = (job: any): Booking => {
+    return {
+      _id: (job._id || job.id || '').toString(),
+      jobId: (job._id || job.id || '').toString(),
+      bookingReference: job.bookingReference || `REQ-${((job._id || job.id || 'ORDER').toString()).slice(-6).toUpperCase()}`,
+      bookingType: 'open_request',
+      serviceTitle: job.title || job.serviceTitle || 'Service Request',
+      category: job.category?.name || job.category || 'Home Services',
+      status: job.status || 'open',
+      urgency: job.urgency || 'medium',
+      scheduledDate: job.preferredDate || job.createdAt || new Date().toISOString(),
+      timeSlot: job.preferredTime || job.preferredTimeSlot || 'Flexible',
+      address: job.location || {
+        addressLabel: 'Service Address',
+        street: 'Service location on file',
+        city: 'Lucknow',
+        state: 'Uttar Pradesh'
+      },
+      pricing: {
+        amount: job.budget?.amount || job.finalPrice?.amount || job.pricing?.amount || 0,
+        paymentStatus: 'pending',
+        isPaid: false
+      },
+      totalAmount: job.budget?.amount || job.finalPrice?.amount || job.totalAmount || 0,
+      problemDescription: job.description || job.problemDescription || '',
+      isJobRequest: true,
+      customer: job.customer,
+      vendor: job.selectedVendor ? {
+        _id: job.selectedVendor._id || job.selectedVendor,
+        name: job.selectedVendor.name || job.selectedVendor.businessName || 'Assigned Specialist',
+        businessName: job.selectedVendor.businessName || job.selectedVendor.name,
+        phone: job.selectedVendor.phone,
+        avatar: job.selectedVendor.avatar,
+        rating: job.selectedVendor.rating || 4.9
+      } : null,
+      createdAt: job.createdAt || new Date().toISOString(),
+      updatedAt: job.updatedAt || new Date().toISOString()
+    } as any;
+  };
 
   const loadBooking = async () => {
+    if (!targetId) {
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
-      const res = await api.bookings.getBookingById(bookingId);
+      const res = await api.bookings.getBookingById(targetId);
       if (res?.booking) {
         setBooking(res.booking);
+      } else if ((res as any)?.job) {
+        setBooking(normalizeJobToBooking((res as any).job));
+      } else {
+        // Fallback to direct job endpoint
+        try {
+          const jobRes = await api.jobs.getJobById(targetId);
+          if (jobRes?.job) {
+            setBooking(normalizeJobToBooking(jobRes.job));
+          }
+        } catch {
+          // not found
+        }
       }
     } catch (err) {
-      console.warn('Failed to load booking details:', err);
+      console.warn('Failed to load booking details from booking endpoint:', err);
+      // Fallback: If booking ID was actually a job ID
+      try {
+        const jobRes = await api.jobs.getJobById(targetId);
+        if (jobRes?.job) {
+          setBooking(normalizeJobToBooking(jobRes.job));
+          return;
+        }
+      } catch {
+        // neither booking nor job
+      }
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleCancel = () => {
+    if (!booking || cancelling) return;
+    const canCancel = ['pending', 'pending_acceptance', 'open', 'confirmed', 'scheduled'].includes(booking.status);
+    if (!canCancel) {
+      Alert.alert('Cannot Cancel', `This booking is already ${booking.status} and cannot be cancelled.`);
+      return;
+    }
+
+    Alert.alert(
+      'Cancel Booking',
+      'Are you sure you want to cancel this booking? Held escrow will be processed for refund.',
+      [
+        { text: 'Keep Booking', style: 'cancel' },
+        {
+          text: 'Cancel Service',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setCancelling(true);
+              const identifier = booking._id || (booking as any).jobId || (booking as any).bookingReference;
+              await api.bookings.cancelBooking(identifier, 'Customer requested cancellation from booking dossier.');
+
+              setBooking((prev) => (prev ? { ...prev, status: 'cancelled' } : prev));
+              dataSyncService.notify('BOOKINGS_CHANGED', { bookingId: booking._id, status: 'cancelled' });
+              Alert.alert('Booking Cancelled', 'Your request has been cancelled.');
+              loadBooking();
+            } catch (err: any) {
+              Alert.alert('Cancellation Error', err.message || 'Could not cancel booking.');
+            } finally {
+              setCancelling(false);
+            }
+          }
+        }
+      ]
+    );
   };
 
   const handleCallTechnician = (phone?: string) => {
@@ -73,11 +199,44 @@ export default function JobDetailScreen({ route, navigation }: any) {
 
   if (!booking) {
     return (
-      <View style={styles.center}>
-        <Text style={styles.errorText}>Booking details not found.</Text>
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-          <Text style={styles.backBtnText}>Go Back</Text>
-        </TouchableOpacity>
+      <View style={styles.recoveryCenter}>
+        <View style={styles.recoveryCard}>
+          <View style={styles.recoveryIconCircle}>
+            <Ionicons name="document-text-outline" size={32} color={COLORS.primary} />
+          </View>
+          <Text style={styles.recoveryTitle}>Booking Dossier Unavailable</Text>
+          <Text style={styles.recoverySubtitle}>
+            This booking reference could not be found or may have been completed, archived, or cancelled.
+          </Text>
+
+          <View style={styles.recoveryBtnCol}>
+            <TouchableOpacity
+              style={styles.recoveryPrimaryBtn}
+              onPress={() => navigation.navigate('MyJobs')}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="briefcase-outline" size={16} color="#FFFFFF" />
+              <Text style={styles.recoveryPrimaryBtnText}>View My Service Bookings</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.recoverySecondaryBtn}
+              onPress={() => navigation.navigate('HomeTab')}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="home-outline" size={16} color={COLORS.primary} />
+              <Text style={styles.recoverySecondaryBtnText}>Back to Homepage</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.recoveryBackTextBtn}
+              onPress={() => navigation.goBack()}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.recoveryBackText}>‹ Return to Previous Screen</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </View>
     );
   }
@@ -135,15 +294,25 @@ export default function JobDetailScreen({ route, navigation }: any) {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Assigned Service Professional</Text>
           <View style={styles.vendorCard}>
-            <View style={styles.vendorHeader}>
+            <TouchableOpacity
+              activeOpacity={0.7}
+              style={styles.vendorHeader}
+              onPress={() => {
+                const targetVendorId = booking.vendor?._id || booking.vendor?.id || booking.vendor?.user?._id || booking.vendor;
+                if (targetVendorId) {
+                  navigation.navigate('ProfessionalProfile', { vendorId: targetVendorId, vendor: booking.vendor });
+                }
+              }}
+            >
               <View style={styles.vendorAvatar}>
                 <Text style={styles.vendorAvatarText}>{vendorName.charAt(0).toUpperCase()}</Text>
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.vendorName}>{vendorName}</Text>
-                <Text style={styles.vendorStatus}>✓ WorkLogy Verified Pro</Text>
+                <Text style={styles.vendorStatus}>✓ WorkLogy Verified Pro • Tap to view profile & reviews ›</Text>
               </View>
-            </View>
+              <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+            </TouchableOpacity>
 
             <View style={styles.actionRow}>
               {vendorPhone ? (
@@ -198,6 +367,60 @@ export default function JobDetailScreen({ route, navigation }: any) {
         </View>
       </View>
 
+      {/* Review Actions when Completed */}
+      {booking.status === 'completed' && !booking.hasReview && (
+        <View style={styles.section}>
+          <TouchableOpacity
+            style={styles.reviewServiceBtn}
+            activeOpacity={0.85}
+            onPress={() => {
+              const targetVendorId = booking.vendor?._id || booking.vendor?.id || booking.vendor?.user?._id || booking.vendor;
+              navigation.navigate('ReviewModal', {
+                bookingId: booking._id,
+                vendorName,
+                vendorId: targetVendorId
+              });
+            }}
+          >
+            <Text style={styles.reviewServiceBtnText}>Rate Service & Leave Review ⭐</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {booking.status === 'completed' && booking.hasReview && (
+        <View style={styles.section}>
+          <TouchableOpacity
+            style={styles.viewProfileReviewBtn}
+            activeOpacity={0.85}
+            onPress={() => {
+              const targetVendorId = booking.vendor?._id || booking.vendor?.id || booking.vendor?.user?._id || booking.vendor;
+              if (targetVendorId) {
+                navigation.navigate('ProfessionalProfile', { vendorId: targetVendorId, vendor: booking.vendor });
+              }
+            }}
+          >
+            <Text style={styles.viewProfileReviewBtnText}>View Your Review on Professional Profile ⭐ ›</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Cancellation Action */}
+      {['pending', 'pending_acceptance', 'open', 'confirmed', 'scheduled'].includes(booking.status) && (
+        <View style={styles.section}>
+          <TouchableOpacity
+            style={[styles.cancelBookingBtn, cancelling && { opacity: 0.6 }]}
+            onPress={handleCancel}
+            disabled={cancelling}
+          >
+            {cancelling ? (
+              <ActivityIndicator size="small" color="#DC2626" />
+            ) : (
+              <Text style={styles.cancelBookingBtnText}>Cancel Booking</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
+
       <View style={{ height: 40 }} />
     </ScrollView>
   );
@@ -219,20 +442,94 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: COLORS.textSecondary
   },
-  errorText: {
-    fontSize: 14,
-    color: COLORS.textSecondary
+  recoveryCenter: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24
   },
-  backBtn: {
-    marginTop: 12,
+  recoveryCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 24,
+    alignItems: 'center',
+    width: '100%',
+    maxWidth: 400,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
+    elevation: 3
+  },
+  recoveryIconCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#ECFDF5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16
+  },
+  recoveryTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: COLORS.textDark,
+    textAlign: 'center',
+    marginBottom: 8
+  },
+  recoverySubtitle: {
+    fontSize: 13,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    lineHeight: 18,
+    marginBottom: 20
+  },
+  recoveryBtnCol: {
+    width: '100%',
+    gap: 10
+  },
+  recoveryPrimaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
     backgroundColor: COLORS.primary,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8
+    paddingVertical: 12,
+    borderRadius: 12
   },
-  backBtnText: {
+  recoveryPrimaryBtnText: {
     color: '#FFFFFF',
+    fontSize: 13,
     fontWeight: '700'
+  },
+  recoverySecondaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    paddingVertical: 12,
+    borderRadius: 12
+  },
+  recoverySecondaryBtnText: {
+    color: COLORS.primary,
+    fontSize: 13,
+    fontWeight: '700'
+  },
+  recoveryBackTextBtn: {
+    alignItems: 'center',
+    paddingVertical: 8,
+    marginTop: 4
+  },
+  recoveryBackText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: COLORS.textSecondary
   },
   header: {
     backgroundColor: '#FFFFFF',
@@ -477,5 +774,48 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: COLORS.textSecondary,
     lineHeight: 14
+  },
+  cancelBookingBtn: {
+    backgroundColor: '#FEE2E2',
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8
+  },
+  cancelBookingBtnText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#DC2626'
+  },
+  reviewServiceBtn: {
+    backgroundColor: '#06684F',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8
+  },
+  reviewServiceBtnText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#FFFFFF'
+  },
+  viewProfileReviewBtn: {
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8
+  },
+  viewProfileReviewBtnText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#06684F'
   }
 });

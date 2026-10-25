@@ -11,11 +11,7 @@ export default function App() {
     <SafeAreaProvider>
       <AuthProvider>
         <View style={styles.root}>
-          <StatusBar
-            barStyle="dark-content"
-            backgroundColor="transparent"
-            translucent={Platform.OS === 'android'}
-          />
+          <StatusBar barStyle="dark-content" />
           <CustomerAppContainer />
         </View>
       </AuthProvider>

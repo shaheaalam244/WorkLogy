@@ -14,9 +14,11 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../api/client';
 import { COLORS } from '../theme/colors';
+import { dataSyncService } from '../services/dataSyncService';
 import { secureStorage } from '../storage/secureStorage';
 import { STORAGE_KEYS } from '../constants';
 import { getStoredLocation, detectCurrentLocation } from '../services/locationService';
+import type { ServiceAddress } from '../types';
 
 export default function EmergencyScreen({ navigation }: any) {
   const [selectedTrade, setSelectedTrade] = useState('Electrical Breakdown');
@@ -24,6 +26,9 @@ export default function EmergencyScreen({ navigation }: any) {
   const [address, setAddress] = useState('');
   const [city, setCity] = useState('Lucknow');
   const [pincode, setPincode] = useState('226010');
+  const [savedAddresses, setSavedAddresses] = useState<ServiceAddress[]>([]);
+  const [selectedSavedId, setSelectedSavedId] = useState<string | null>(null);
+  const [savedCoordinates, setSavedCoordinates] = useState<{ lat: number; lng: number } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [detectingLocation, setDetectingLocation] = useState(false);
 
@@ -40,14 +45,43 @@ export default function EmergencyScreen({ navigation }: any) {
 
   const loadSavedLocation = async () => {
     try {
+      const res = await api.customer.getAddresses();
+      if (res?.addresses && Array.isArray(res.addresses) && res.addresses.length > 0) {
+        setSavedAddresses(res.addresses);
+        const def = res.addresses.find((a) => a.isDefault) || res.addresses[0];
+        applyEmergencyAddress(def);
+        return;
+      }
+    } catch {
+      // Backend error fallback
+    }
+
+    try {
       const loc = await getStoredLocation(true);
       if (loc) {
         if (loc.city) setCity(loc.city);
         if (loc.street || loc.locality) setAddress(loc.street || loc.locality || '');
         if (loc.pincode) setPincode(loc.pincode);
+        if (loc.coordinates) setSavedCoordinates(loc.coordinates);
       }
     } catch {
       // Fallback
+    }
+  };
+
+  const applyEmergencyAddress = (addr: ServiceAddress) => {
+    setSelectedSavedId(addr._id || null);
+    const combined = [addr.houseNumber, addr.street, addr.locality || addr.landmark].filter(Boolean).join(', ');
+    setAddress(combined || addr.street || '');
+    setCity(addr.city || 'Lucknow');
+    setPincode(addr.zipCode || addr.pincode || '226010');
+    if (addr.coordinates && (Number(addr.coordinates.lat) !== 0 || Number(addr.coordinates.lng) !== 0)) {
+      setSavedCoordinates({
+        lat: Number(addr.coordinates.lat),
+        lng: Number(addr.coordinates.lng)
+      });
+    } else {
+      setSavedCoordinates(null);
     }
   };
 
@@ -125,6 +159,7 @@ export default function EmergencyScreen({ navigation }: any) {
     }
 
     const tradeObj = emergencyTrades.find((t) => t.title === selectedTrade) || emergencyTrades[0];
+    const selectedSaved = savedAddresses.find((a) => a._id === selectedSavedId);
 
     try {
       setSubmitting(true);
@@ -138,11 +173,26 @@ export default function EmergencyScreen({ navigation }: any) {
           amount: 499
         },
         location: {
+          addressLabel: selectedSaved?.label || 'Emergency Site',
           address: address.trim() || 'Urgent Site Location',
-          city: city.trim() || 'Noida',
-          zipCode: pincode.trim() || '201301'
+          city: city.trim() || 'Lucknow',
+          zipCode: pincode.trim() || '226010',
+          state: 'Uttar Pradesh',
+          locationSource: selectedSavedId ? 'saved_address' : (savedCoordinates ? 'gps' : 'manual'),
+          coordinates: savedCoordinates
+            ? {
+                lat: Number(savedCoordinates.lat) || 0,
+                lng: Number(savedCoordinates.lng) || 0
+              }
+            : {
+                lat: 0,
+                lng: 0
+              }
         }
       });
+
+      // Synchronize affected queries across all screens
+      dataSyncService.notify('BOOKINGS_CHANGED');
 
       Alert.alert(
         'Emergency Radar Active 🚨',
@@ -249,6 +299,71 @@ export default function EmergencyScreen({ navigation }: any) {
             onChangeText={setDescription}
           />
 
+          {savedAddresses.length > 0 && (
+            <View style={{ marginBottom: 10 }}>
+              <Text style={{ fontSize: 11, fontWeight: '700', color: '#64748B', marginBottom: 5 }}>
+                Select Saved Dispatch Address:
+              </Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 2 }}>
+                {savedAddresses.map((sa) => {
+                  const isSelected = selectedSavedId === sa._id;
+                  return (
+                    <TouchableOpacity
+                      key={sa._id || sa.label}
+                      onPress={() => applyEmergencyAddress(sa)}
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 5,
+                        backgroundColor: isSelected ? '#DC2626' : '#FFFFFF',
+                        borderWidth: 1.5,
+                        borderColor: isSelected ? '#DC2626' : '#E2E8F0',
+                        borderRadius: 8,
+                        paddingHorizontal: 10,
+                        paddingVertical: 6
+                      }}
+                    >
+                      <Ionicons
+                        name={sa.label?.toLowerCase() === 'work' ? 'business' : 'home'}
+                        size={13}
+                        color={isSelected ? '#FFFFFF' : '#64748B'}
+                      />
+                      <Text
+                        style={{
+                          fontSize: 11.5,
+                          fontWeight: '700',
+                          color: isSelected ? '#FFFFFF' : COLORS.textDark
+                        }}
+                      >
+                        {sa.label || 'Home'}
+                      </Text>
+                      {sa.isDefault && (
+                        <View
+                          style={{
+                            backgroundColor: isSelected ? 'rgba(255,255,255,0.25)' : '#D1FAE5',
+                            paddingHorizontal: 4,
+                            paddingVertical: 1,
+                            borderRadius: 3
+                          }}
+                        >
+                          <Text
+                            style={{
+                              fontSize: 9,
+                              fontWeight: '700',
+                              color: isSelected ? '#FFFFFF' : '#065F46'
+                            }}
+                          >
+                            Default
+                          </Text>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          )}
+
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, marginBottom: 6 }}>
             <Text style={[styles.fieldLabel, { marginTop: 0, marginBottom: 0 }]}>Emergency Address / Locality</Text>
             <TouchableOpacity
@@ -272,7 +387,10 @@ export default function EmergencyScreen({ navigation }: any) {
             placeholder="Flat / Society / Landmark"
             placeholderTextColor={COLORS.textMuted}
             value={address}
-            onChangeText={setAddress}
+            onChangeText={(val) => {
+              setSelectedSavedId(null);
+              setAddress(val);
+            }}
           />
 
           <View style={styles.locationRow}>

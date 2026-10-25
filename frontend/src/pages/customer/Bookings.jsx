@@ -30,6 +30,7 @@ import ServiceStartOtpCard from '../../components/booking/ServiceStartOtpCard';
 import { customerAPI } from '../../api/customer.api';
 import { bookingAPI } from '../../api/booking.api';
 import { reviewAPI } from '../../api/review.api';
+import { useSocketContext } from '../../context/SocketContext';
 import { formatCurrency, formatRelativeTime, formatFullAddress, formatDate } from '../../utils/formatters';
 import { getServiceImage } from '../../constants/serviceImages';
 
@@ -45,6 +46,7 @@ const TABS = [
 ];
 
 export default function CustomerBookings() {
+  const { socket } = useSocketContext();
   const [searchParams] = useSearchParams();
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -174,6 +176,32 @@ export default function CustomerBookings() {
   useEffect(() => {
     fetchBookings();
   }, [activeTab]);
+
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleSync = () => {
+      fetchBookings();
+    };
+
+    socket.on('booking_cancelled', handleSync);
+    socket.on('booking_status_updated', handleSync);
+    socket.on('booking_updated', handleSync);
+    socket.on('job_cancelled', handleSync);
+    socket.on('job_assigned', handleSync);
+    socket.on('job_status_updated', handleSync);
+    socket.on('service_started', handleSync);
+
+    return () => {
+      socket.off('booking_cancelled', handleSync);
+      socket.off('booking_status_updated', handleSync);
+      socket.off('booking_updated', handleSync);
+      socket.off('job_cancelled', handleSync);
+      socket.off('job_assigned', handleSync);
+      socket.off('job_status_updated', handleSync);
+      socket.off('service_started', handleSync);
+    };
+  }, [socket]);
 
   const handleApproveCompletion = async (bookingId) => {
     const confirmed = window.confirm(

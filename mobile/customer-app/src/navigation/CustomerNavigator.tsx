@@ -28,6 +28,9 @@ import RegisterScreen from '../screens/RegisterScreen';
 import ProfessionalProfileScreen from '../screens/ProfessionalProfileScreen';
 import { COLORS } from '../theme/colors';
 import { api } from '../api/client';
+import { useAuth } from '../hooks/useAuth';
+import { socketService } from '../services/socketService';
+import { dataSyncService } from '../services/dataSyncService';
 import type { RouteEntry, AppNavigation } from '../types';
 
 export const NavigationContext = createContext<AppNavigation | null>(null);
@@ -51,8 +54,10 @@ export function CustomerAppContainer() {
   );
   const bottomInset = insets.bottom;
 
+  const { user } = useAuth();
   const [history, setHistory] = useState<RouteEntry[]>([{ name: 'HomeTab', params: {} }]);
-  const [unreadCount, setUnreadCount] = useState<number>(0);
+  const [unreadNotificationsCount, setUnreadNotificationsCount] = useState<number>(0);
+  const [unreadMessagesCount, setUnreadMessagesCount] = useState<number>(0);
 
   const historyRef = useRef<RouteEntry[]>(history);
   historyRef.current = history;
@@ -64,22 +69,66 @@ export function CustomerAppContainer() {
   const currentRoute = currentEntry.name;
   const routeParams = currentEntry.params || {};
 
+  // Connect socket and listen for real-time notifications
   useEffect(() => {
-    fetchUnread();
-    const interval = setInterval(fetchUnread, 30000);
-    return () => clearInterval(interval);
-  }, []);
+    if (user?._id) {
+      socketService.connect(user._id).catch(() => {});
+    }
+  }, [user?._id]);
 
-  const fetchUnread = async () => {
+  const fetchUnreadNotifications = async () => {
     try {
       const res = await api.notifications.getUnreadCount();
-      if (typeof res?.count === 'number') {
-        setUnreadCount(res.count);
-      }
+      const count = typeof res?.unreadCount === 'number' ? res.unreadCount : (typeof res?.count === 'number' ? res.count : 0);
+      setUnreadNotificationsCount(count);
     } catch {
       // Ignore background error
     }
   };
+
+  const fetchUnreadMessages = async () => {
+    try {
+      const res = await api.chat.getUnreadCount();
+      const count = typeof res?.unreadCount === 'number' ? res.unreadCount : 0;
+      setUnreadMessagesCount(count);
+    } catch {
+      // Ignore background error
+    }
+  };
+
+  useEffect(() => {
+    if (!user?._id) {
+      setUnreadNotificationsCount(0);
+      setUnreadMessagesCount(0);
+      return;
+    }
+
+    fetchUnreadNotifications();
+    fetchUnreadMessages();
+
+    const notifInterval = setInterval(fetchUnreadNotifications, 30000);
+    const msgInterval = setInterval(fetchUnreadMessages, 30000);
+
+    const unsubNotif = dataSyncService.subscribe('NOTIFICATIONS_CHANGED', () => {
+      fetchUnreadNotifications();
+    });
+
+    const unsubMsg = dataSyncService.subscribe('MESSAGES_CHANGED', () => {
+      fetchUnreadMessages();
+    });
+
+    const unsubRead = dataSyncService.subscribe('MESSAGES_READ', () => {
+      fetchUnreadMessages();
+    });
+
+    return () => {
+      clearInterval(notifInterval);
+      clearInterval(msgInterval);
+      unsubNotif();
+      unsubMsg();
+      unsubRead();
+    };
+  }, [user?._id]);
 
   const registerBackHandler = useCallback((handler: () => boolean) => {
     backHandlersRef.current.push(handler);
@@ -170,6 +219,16 @@ export function CustomerAppContainer() {
       }
     } else {
       setHistory((prev) => {
+        const top = prev[prev.length - 1];
+        if (top && top.name === screen) {
+          try {
+            if (JSON.stringify(top.params || {}) === JSON.stringify(params || {})) {
+              return prev; // Ignore rapid duplicate navigation to identical screen with identical params
+            }
+          } catch {
+            if (top.params === params) return prev;
+          }
+        }
         const next = [...prev, { name: screen, params }];
         historyRef.current = next;
         return next;
@@ -302,11 +361,7 @@ export function CustomerAppContainer() {
         {/* Top Back Header for Stack Screens with safe status bar positioning */}
         {showNavHeader && (
           <>
-            <StatusBar
-              barStyle="dark-content"
-              backgroundColor="#FFFFFF"
-              translucent={Platform.OS === 'android'}
-            />
+            <StatusBar barStyle="dark-content" />
             <View style={[styles.navHeader, { paddingTop: topInset, minHeight: 52 + topInset }]}>
               <TouchableOpacity
                 onPress={() => handleBack()}
@@ -385,9 +440,9 @@ export function CustomerAppContainer() {
                   size={22}
                   color={currentRoute === 'MessagesTab' ? COLORS.secondary : COLORS.textMuted}
                 />
-                {unreadCount > 0 && (
+                {unreadMessagesCount > 0 && (
                   <View style={styles.tabBadge}>
-                    <Text style={styles.tabBadgeText}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
+                    <Text style={styles.tabBadgeText}>{unreadMessagesCount > 9 ? '9+' : unreadMessagesCount}</Text>
                   </View>
                 )}
               </View>

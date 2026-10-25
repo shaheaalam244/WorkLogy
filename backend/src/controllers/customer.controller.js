@@ -8,6 +8,8 @@ import Notification from '../models/Notification.js';
 import Review from '../models/Review.js';
 import { hashOtp } from '../utils/otp.js';
 import { getIO } from '../config/socket.js';
+import { cancelJob } from './job.controller.js';
+import { notifyCancellation } from '../services/notification.service.js';
 
 export const getCustomerDashboardSummary = async (req, res, next) => {
   try {
@@ -336,8 +338,26 @@ export const getCustomerBookings = async (req, res, next) => {
       query.bookingType = bookingType;
     }
 
+    const ACTIVE_BOOKING_STATUSES = [
+      'open',
+      'quotations_received',
+      'pending_acceptance',
+      'awaiting_confirmation',
+      'assigned',
+      'confirmed',
+      'scheduled',
+      'on_the_way',
+      'arrived',
+      'in_progress',
+      'completion_pending',
+      'payment_pending',
+      'pending'
+    ];
+
     if (status && status !== 'all') {
-      if (status === 'awaiting_response') {
+      if (status === 'active') {
+        query.status = { $in: ACTIVE_BOOKING_STATUSES };
+      } else if (status === 'awaiting_response') {
         query.status = { $in: ['pending_acceptance', 'awaiting_confirmation'] };
       } else if (status === 'confirmed') {
         query.status = { $in: ['assigned', 'confirmed', 'scheduled'] };
@@ -348,7 +368,7 @@ export const getCustomerBookings = async (req, res, next) => {
       } else if (status === 'completed') {
         query.status = 'completed';
       } else if (status === 'cancelled') {
-        query.status = { $in: ['cancelled', 'declined'] };
+        query.status = { $in: ['cancelled', 'declined', 'disputed'] };
       } else if (status !== 'quotations_received') {
         query.status = status;
       }
@@ -365,46 +385,70 @@ export const getCustomerBookings = async (req, res, next) => {
       .populate('review', 'rating comment moderationStatus isPublic response createdAt')
       .sort({ scheduledDate: 1, createdAt: -1 });
 
-    // Also fetch customer open requests to display in unified view if status matches 'all' or 'awaiting_response' or 'quotations_received'
+    // Also fetch customer open requests to display in unified view if status matches 'all', 'active', 'awaiting_response', 'quotations_received', or 'cancelled'
     let openJobsAsOrders = [];
-    if (!status || status === 'all' || status === 'awaiting_response' || status === 'quotations_received') {
-      let jobQuery = { customer: req.user.id, status: 'open', isDeleted: { $ne: true } };
-      if (status === 'quotations_received') {
+    if (!status || status === 'all' || status === 'active' || status === 'awaiting_response' || status === 'quotations_received' || status === 'cancelled') {
+      let jobQuery = { customer: req.user.id, isDeleted: { $ne: true } };
+      if (status === 'cancelled') {
+        jobQuery.status = 'cancelled';
+        jobQuery.$or = [{ booking: { $exists: false } }, { booking: null }];
+      } else if (status === 'quotations_received') {
+        jobQuery.status = 'open';
         jobQuery.applicantsCount = { $gt: 0 };
+        jobQuery.$or = [{ booking: { $exists: false } }, { booking: null }];
+      } else if (status === 'awaiting_response') {
+        jobQuery.status = 'open';
+        jobQuery.$or = [{ booking: { $exists: false } }, { booking: null }];
+      } else if (status === 'active') {
+        jobQuery.status = { $in: ['open', 'quotations_received', 'dispatching'] };
+        jobQuery.$or = [{ booking: { $exists: false } }, { booking: null }];
+      } else if (status === 'all') {
+        jobQuery.status = { $in: ['open', 'quotations_received', 'dispatching', 'cancelled'] };
+        jobQuery.$or = [{ booking: { $exists: false } }, { booking: null }];
+      } else {
+        jobQuery.status = { $in: ['open', 'quotations_received', 'dispatching'] };
+        jobQuery.$or = [{ booking: { $exists: false } }, { booking: null }];
       }
       const openJobs = await Job.find(jobQuery)
         .populate('category', 'name icon')
         .sort({ createdAt: -1 });
 
-      openJobsAsOrders = openJobs.map(j => ({
-        _id: j._id,
-        isJobRequest: true,
-        bookingReference: `REQ-${j._id.toString().slice(-6).toUpperCase()}`,
-        bookingType: 'open_request',
-        serviceTitle: j.title,
-        category: j.category?.name || 'Home Services',
-        serviceType: j.serviceType || 'repair',
-        status: (j.applicantsCount || 0) > 0 ? 'quotations_received' : 'open',
-        displayStatus: (j.applicantsCount || 0) > 0 ? 'Quotations Received' : 'Awaiting Bids',
-        applicantsCount: j.applicantsCount || 0,
-        scheduledDate: j.preferredDate ? new Date(j.preferredDate) : j.createdAt,
-        timeSlot: j.preferredTime || 'Flexible',
-        address: j.location,
-        pricing: {
-          amount: j.budget?.amount || 0,
-          budgetType: j.budget?.type || 'quote',
-          paymentStatus: 'pending'
-        },
-        problemDescription: j.description,
-        urgency: j.urgency,
-        createdAt: j.createdAt,
-        jobId: j._id
-      }));
-    }
+      openJobsAsOrders = openJobs.map(j => {
+        let displayStatus = 'Awaiting Bids';
+        if ((j.applicantsCount || 0) > 0) {
+          displayStatus = 'Quotations Received';
+        } else if (j.status === 'cancelled') {
+          displayStatus = 'Cancelled Request';
+        } else if (j.status === 'dispatching') {
+          displayStatus = 'Dispatching Specialist';
+        }
 
-    // Note: OTP generation for active bookings is handled at booking creation/assignment time.
-    // Performing DB writes inside a read endpoint on every page load is a performance anti-pattern.
-    // Active bookings without an OTP will display a 'Request OTP' affordance instead.
+        return {
+          _id: j._id,
+          isJobRequest: true,
+          bookingReference: `REQ-${j._id.toString().slice(-6).toUpperCase()}`,
+          bookingType: 'open_request',
+          serviceTitle: j.title,
+          category: j.category?.name || 'Home Services',
+          serviceType: j.serviceType || 'repair',
+          status: (j.applicantsCount || 0) > 0 ? 'quotations_received' : j.status,
+          displayStatus,
+          applicantsCount: j.applicantsCount || 0,
+          scheduledDate: j.preferredDate ? new Date(j.preferredDate) : j.createdAt,
+          timeSlot: j.preferredTime || 'Flexible',
+          address: j.location,
+          pricing: {
+            amount: j.budget?.amount || 0,
+            budgetType: j.budget?.type || 'quote',
+            paymentStatus: 'pending'
+          },
+          problemDescription: j.description,
+          urgency: j.urgency,
+          createdAt: j.createdAt,
+          jobId: j._id
+        };
+      });
+    }
 
     // Fetch any reviews submitted by this customer for these bookings
     const bookingIds = bookings.map(b => b._id);
@@ -419,6 +463,8 @@ export const getCustomerBookings = async (req, res, next) => {
     const formattedBookings = bookings.map(b => {
       const bObj = b.toObject();
       bObj.bookingType = bObj.bookingType || (bObj.job ? 'open_request' : 'direct_professional');
+      bObj.isJobRequest = false;
+      bObj.jobId = bObj.job?._id ? bObj.job._id.toString() : (bObj.job ? bObj.job.toString() : null);
       if (!bObj.review && reviewByBookingMap.has(b._id.toString())) {
         bObj.review = reviewByBookingMap.get(b._id.toString());
         bObj.hasReview = true;
@@ -446,39 +492,122 @@ export const getCustomerBookings = async (req, res, next) => {
 
 export const cancelCustomerBooking = async (req, res, next) => {
   try {
-    const booking = await Booking.findById(req.params.id);
+    const currentUserId = (req.user._id || req.user.id).toString();
+    const isAdmin = req.user.role === 'admin';
+    const rawId = (req.params.id || req.body.bookingId || req.body.jobId || '').trim();
+
+    if (!rawId) {
+      return res.status(400).json({ success: false, message: 'Booking identifier is required for cancellation.' });
+    }
+
+    const isHex24 = mongoose.Types.ObjectId.isValid(rawId) && /^[0-9a-fA-F]{24}$/.test(rawId);
+    let booking = null;
+
+    // 1. Try finding by MongoDB _id
+    if (isHex24) {
+      booking = await Booking.findById(rawId)
+        .populate('customer', 'name email phone avatar')
+        .populate('vendor', 'name email phone businessName')
+        .populate('job');
+
+      // If not found by booking _id, check if rawId is the associated job's _id
+      if (!booking) {
+        booking = await Booking.findOne({ job: rawId })
+          .populate('customer', 'name email phone avatar')
+          .populate('vendor', 'name email phone businessName')
+          .populate('job');
+      }
+    }
+
+    // 2. Try finding by bookingReference (e.g. "BK-86251993")
     if (!booking) {
+      booking = await Booking.findOne({ bookingReference: rawId.toUpperCase() })
+        .populate('customer', 'name email phone avatar')
+        .populate('vendor', 'name email phone businessName')
+        .populate('job');
+    }
+
+    // 3. If still no booking found, check if this is an unbooked open Job request
+    if (!booking) {
+      let job = null;
+      if (isHex24) {
+        job = await Job.findById(rawId);
+      }
+      if (!job && rawId.toUpperCase().startsWith('REQ-')) {
+        const suffix = rawId.slice(4);
+        job = await Job.findOne({
+          customer: currentUserId,
+          _id: { $regex: new RegExp(suffix + '$', 'i') }
+        });
+      }
+      if (job) {
+        req.params.id = job._id.toString();
+        return cancelJob(req, res, next);
+      }
+
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
-    if (booking.customer.toString() !== req.user.id && req.user.role !== 'admin') {
+    // Verify customer ownership
+    const bookingCustId = (booking.customer?._id || booking.customer)?.toString();
+    if (bookingCustId !== currentUserId && !isAdmin) {
       return res.status(403).json({ success: false, message: 'Not authorized to cancel this booking' });
     }
 
-    if (!['awaiting_confirmation', 'confirmed', 'scheduled'].includes(booking.status)) {
+    // Idempotent handling: If already cancelled, return success without error
+    if (booking.status === 'cancelled') {
+      return res.status(200).json({
+        success: true,
+        message: 'Booking is already cancelled',
+        booking
+      });
+    }
+
+    // Prevent cancellation of completed services
+    if (booking.status === 'completed') {
+      return res.status(400).json({
+        success: false,
+        message: 'Completed bookings cannot be cancelled'
+      });
+    }
+
+    // Check allowed cancellation states
+    if (!['pending', 'pending_acceptance', 'awaiting_confirmation', 'assigned', 'confirmed', 'scheduled', 'open'].includes(booking.status)) {
       return res.status(400).json({
         success: false,
         message: `Booking cannot be cancelled because it is already ${booking.status}`
       });
     }
 
+    const cancelReason = req.body.reason || req.body.cancellationReason || 'Cancelled by customer';
+    const comments = req.body.comments ? ` - ${req.body.comments}` : '';
+    const fullReason = `${cancelReason}${comments}`;
+
     booking.status = 'cancelled';
+    booking.declineReason = fullReason;
     if (booking.pricing) {
       booking.pricing.paymentStatus = 'refunded';
     }
+    booking.statusHistory = booking.statusHistory || [];
     booking.statusHistory.push({
       status: 'cancelled',
-      updatedBy: req.user.id,
+      updatedBy: currentUserId,
       timestamp: new Date(),
-      note: req.body.reason || 'Cancelled by customer'
+      note: fullReason
     });
 
     await booking.save();
 
+    // Refund and settle any associated transactions
+    await Transaction.updateMany(
+      { booking: booking._id },
+      { $set: { paymentStatus: 'refunded', settlementStatus: 'settled' } }
+    );
+
     // If booking is linked to a Job, also cancel the Job and reject pending applications
-    const fullReason = req.body.reason || 'Cancelled by customer';
+    let jobIdStr = null;
     if (booking.job) {
-      const jobIdStr = (booking.job?._id || booking.job).toString();
+      jobIdStr = (booking.job?._id || booking.job).toString();
       await Job.findByIdAndUpdate(jobIdStr, {
         $set: {
           status: 'cancelled',
@@ -489,7 +618,7 @@ export const cancelCustomerBooking = async (req, res, next) => {
           eventHistory: {
             event: 'cancelled',
             note: fullReason,
-            actor: req.user.id,
+            actor: currentUserId,
             timestamp: new Date()
           }
         }
@@ -499,46 +628,66 @@ export const cancelCustomerBooking = async (req, res, next) => {
         { job: jobIdStr, status: { $in: ['pending', 'submitted', 'shortlisted'] } },
         { status: 'rejected' }
       );
+    }
 
-      // Socket.IO synchronization across all WorkLogy surfaces
-      const io = getIO();
-      if (io) {
-        const cancelPayload = {
-          jobId: jobIdStr,
-          title: booking.serviceTitle,
-          status: 'cancelled',
-          reason: fullReason,
-          cancelledAt: new Date().toISOString()
-        };
+    // Socket.IO synchronization across all WorkLogy surfaces
+    const io = getIO();
+    if (io) {
+      const cancelPayload = {
+        bookingId: booking._id.toString(),
+        bookingReference: booking.bookingReference,
+        jobId: jobIdStr,
+        title: booking.serviceTitle,
+        status: 'cancelled',
+        reason: fullReason,
+        cancelledAt: new Date().toISOString()
+      };
 
+      // 1. Emit booking events
+      io.emit('booking_cancelled', cancelPayload);
+      io.emit('booking_status_updated', { bookingId: booking._id.toString(), status: 'cancelled' });
+      io.emit('booking_updated', { bookingId: booking._id.toString(), status: 'cancelled' });
+      io.to('booking_' + booking._id.toString()).emit('booking_cancelled', cancelPayload);
+      io.to('user_' + currentUserId).emit('booking_cancelled', cancelPayload);
+
+      if (booking.vendor) {
+        const vendorId = (booking.vendor?._id || booking.vendor).toString();
+        io.to('user_' + vendorId).emit('booking_cancelled', cancelPayload);
+        io.to('user_' + vendorId).emit('booking_status_updated', { bookingId: booking._id.toString(), status: 'cancelled' });
+      }
+
+      // 2. Emit job events if linked
+      if (jobIdStr) {
         io.emit('job_cancelled', cancelPayload);
         io.emit('job_taken', { jobId: jobIdStr, title: booking.serviceTitle, reason: 'cancelled' });
         io.emit('job_status_updated', { jobId: jobIdStr, status: 'cancelled' });
         io.to('job_' + jobIdStr).emit('job_cancelled', cancelPayload);
-        io.to('user_' + req.user.id).emit('job_cancelled', cancelPayload);
+        io.to('user_' + currentUserId).emit('job_cancelled', cancelPayload);
         if (booking.vendor) {
-          io.to('user_' + (booking.vendor?._id || booking.vendor).toString()).emit('job_cancelled', cancelPayload);
+          const vendorId = (booking.vendor?._id || booking.vendor).toString();
+          io.to('user_' + vendorId).emit('job_cancelled', cancelPayload);
         }
       }
     }
 
-    // Notify vendor
+    // Persistent In-App & Email notification
     try {
-      await Notification.create({
-        recipient: booking.vendor,
-        sender: req.user.id,
-        type: 'job_alert',
-        title: 'Booking Cancelled',
-        message: `The booking for "${booking.serviceTitle}" was cancelled by the customer.`,
-        link: `/vendor/bookings`
+      await notifyCancellation({
+        customerId: booking.customer?._id || booking.customer,
+        vendorId: booking.vendor?._id || booking.vendor,
+        cancelledByUserId: currentUserId,
+        jobTitle: booking.serviceTitle,
+        resourceId: booking._id,
+        resourceType: 'booking',
+        reason: fullReason
       });
     } catch (notifErr) {
-      console.warn('Notification warning on booking cancel:', notifErr.message);
+      console.warn('Notification error on booking cancel:', notifErr.message);
     }
 
     res.status(200).json({
       success: true,
-      message: 'Booking cancelled and escrow refunded',
+      message: 'Booking cancelled successfully and escrow refunded',
       booking
     });
   } catch (error) {
@@ -611,3 +760,99 @@ export const getCustomerTransactions = async (req, res, next) => {
     next(error);
   }
 };
+
+export const getCustomerStats = async (req, res, next) => {
+  try {
+    const customerId = req.user.id;
+
+    const ACTIVE_BOOKING_STATUSES = [
+      'open',
+      'quotations_received',
+      'pending_acceptance',
+      'awaiting_confirmation',
+      'assigned',
+      'confirmed',
+      'scheduled',
+      'on_the_way',
+      'arrived',
+      'in_progress',
+      'completion_pending',
+      'payment_pending',
+      'pending'
+    ];
+
+    const [
+      activeBookings,
+      openStandaloneJobs,
+      totalJobsCount,
+      totalBookingsCount,
+      directTxCount,
+      profile
+    ] = await Promise.all([
+      // 1. Active bookings
+      Booking.find({
+        customer: customerId,
+        status: { $in: ACTIVE_BOOKING_STATUSES }
+      }).select('_id status job'),
+
+      // 2. Open standalone jobs that have no booking attached
+      Job.find({
+        customer: customerId,
+        isDeleted: { $ne: true },
+        status: { $in: ['open', 'quotations_received', 'dispatching'] },
+        $or: [{ booking: { $exists: false } }, { booking: null }]
+      }).select('_id status'),
+
+      // 3. Total jobs ever posted
+      Job.countDocuments({
+        customer: customerId,
+        isDeleted: { $ne: true }
+      }),
+
+      // 4. Total bookings
+      Booking.countDocuments({
+        customer: customerId
+      }),
+
+      // 5. Direct transactions count
+      Transaction.countDocuments({
+        customer: customerId
+      }),
+
+      // 6. Customer Profile for saved vendors & addresses
+      CustomerProfile.findOne({ user: customerId }).select('savedVendors addresses')
+    ]);
+
+    // Deduplicate any job that might be referenced in active bookings
+    const activeBookingJobIds = new Set(
+      activeBookings.map(b => b.job?.toString()).filter(Boolean)
+    );
+    const deduplicatedOpenJobs = openStandaloneJobs.filter(
+      j => !activeBookingJobIds.has(j._id.toString())
+    );
+
+    const activeBookingsCount = activeBookings.length;
+    const openRequestsCount = deduplicatedOpenJobs.length;
+    const activeJobsCount = activeBookingsCount + openRequestsCount;
+
+    // Use actual transactions or fallback to bookings count if transactions collection is empty
+    const transactionCount = directTxCount > 0 ? directTxCount : totalBookingsCount;
+    const savedVendorsCount = profile?.savedVendors?.length || 0;
+    const savedAddressesCount = profile?.addresses?.length || 0;
+
+    res.status(200).json({
+      success: true,
+      activeJobsCount,
+      activeBookingsCount,
+      openRequestsCount,
+      totalJobsCount,
+      totalBookingsCount,
+      transactionCount,
+      savedVendorsCount,
+      savedAddressesCount
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+

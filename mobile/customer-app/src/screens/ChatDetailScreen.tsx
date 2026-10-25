@@ -21,6 +21,7 @@ import { Ionicons, Feather, MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../hooks/useAuth';
 import { api } from '../api/client';
 import { socketService } from '../services/socketService';
+import { dataSyncService } from '../services/dataSyncService';
 import { COLORS, SOCKET_EVENTS } from '../constants';
 import { formatTime, formatChatDateSeparator, getStatusColor, formatStatusText } from '../utils/formatters';
 import type { ChatMessage } from '../types';
@@ -66,17 +67,25 @@ export default function ChatDetailScreen({ route, navigation }: any) {
   const [isOnline, setIsOnline] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isSessionExpired, setIsSessionExpired] = useState<boolean>(false);
+  const [showNewMessageIndicator, setShowNewMessageIndicator] = useState<boolean>(false);
 
   const flatListRef = useRef<FlatList>(null);
   const isMountedRef = useRef(true);
   const isNearBottomRef = useRef(true);
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
 
+  const targetScrollIndexRef = useRef<number>(-1);
+  const hasAutoScrolledRef = useRef<boolean>(false);
+
   // Track whether user is scrolled near bottom of messages
   const handleScroll = useCallback((event: any) => {
     const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
     const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
-    isNearBottomRef.current = distanceFromBottom <= 80;
+    const nearBottom = distanceFromBottom <= 80;
+    isNearBottomRef.current = nearBottom;
+    if (nearBottom) {
+      setShowNewMessageIndicator(false);
+    }
   }, []);
 
   // Listen to keyboard show/hide events to adapt layout and preserve bottom message position
@@ -160,9 +169,21 @@ export default function ChatDetailScreen({ route, navigation }: any) {
 
       // If no direct conversationId, resolve or create via API
       if (!targetConvId) {
-        if (otherUser._id) {
+        const resolvedRecipientId =
+          otherUser._id ||
+          otherUser.id ||
+          otherUser.user?._id ||
+          otherUser.user ||
+          activeBooking?.vendor?.user?._id ||
+          activeBooking?.vendor?.user ||
+          (typeof activeBooking?.vendor === 'string' ? activeBooking.vendor : activeBooking?.vendor?._id) ||
+          route?.params?.recipientId ||
+          route?.params?.receiverId ||
+          route?.params?.vendorId;
+
+        if (resolvedRecipientId) {
           const startRes = await api.chat.startConversation({
-            recipientId: String(otherUser._id),
+            recipientId: String(resolvedRecipientId),
             relatedBooking: activeBooking?._id || bookingId,
             relatedJob: activeJob?._id
           });
@@ -195,6 +216,30 @@ export default function ChatDetailScreen({ route, navigation }: any) {
     }
   };
 
+  const performInitialScroll = useCallback(() => {
+    if (hasAutoScrolledRef.current || messages.length === 0) return;
+    hasAutoScrolledRef.current = true;
+
+    const targetIdx = targetScrollIndexRef.current;
+    if (targetIdx >= 0 && targetIdx < messages.length) {
+      setTimeout(() => {
+        try {
+          flatListRef.current?.scrollToIndex({
+            index: targetIdx,
+            animated: true,
+            viewPosition: 0.5
+          });
+        } catch {
+          flatListRef.current?.scrollToEnd({ animated: false });
+        }
+      }, 80);
+    } else {
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: false });
+      }, 80);
+    }
+  }, [messages.length]);
+
   const loadMessages = async (convId: string) => {
     try {
       const res = await api.chat.getMessages(convId, { limit: 50 });
@@ -203,12 +248,30 @@ export default function ChatDetailScreen({ route, navigation }: any) {
           ...m,
           status: 'sent' as const
         }));
+
+        // Determine the latest unread incoming message index
+        let latestUnreadIdx = -1;
+        for (let i = sorted.length - 1; i >= 0; i--) {
+          const m = sorted[i];
+          const senderId = typeof m.sender === 'object' ? m.sender._id : m.sender;
+          const isIncoming = senderId !== user?._id && String(senderId) !== String(user?._id);
+          const isUnread = !m.isRead && !m.read;
+          if (isIncoming && isUnread) {
+            latestUnreadIdx = i;
+            break;
+          }
+        }
+
+        targetScrollIndexRef.current = latestUnreadIdx;
+        hasAutoScrolledRef.current = false;
         setMessages(sorted);
         setHasMore(!!res.hasMore);
         setOldestCursor(res.oldestCursor || null);
 
-        // Mark read
-        api.chat.markConversationRead(convId).catch(() => {});
+        // Mark read asynchronously and notify sync service without disrupting scroll
+        api.chat.markConversationRead(convId).then(() => {
+          dataSyncService.notify('MESSAGES_READ', { conversationId: convId });
+        }).catch(() => {});
       }
     } catch (err: any) {
       if (isMountedRef.current) {
@@ -305,15 +368,20 @@ export default function ChatDetailScreen({ route, navigation }: any) {
 
         // Mark read if incoming from vendor
         const senderId = typeof incoming.sender === 'object' ? incoming.sender._id : incoming.sender;
-        if (senderId !== user?._id && conversationId) {
-          api.chat.markConversationRead(conversationId).catch(() => {});
+        const isIncoming = senderId !== user?._id && String(senderId) !== String(user?._id);
+        if (isIncoming && conversationId) {
+          api.chat.markConversationRead(conversationId).then(() => {
+            dataSyncService.notify('MESSAGES_READ', { conversationId });
+          }).catch(() => {});
         }
 
-        setTimeout(() => {
-          if (isNearBottomRef.current) {
+        if (isNearBottomRef.current) {
+          setTimeout(() => {
             flatListRef.current?.scrollToEnd({ animated: true });
-          }
-        }, 100);
+          }, 100);
+        } else if (isIncoming) {
+          setShowNewMessageIndicator(true);
+        }
       });
 
       // Messages read receipt update
@@ -345,8 +413,10 @@ export default function ChatDetailScreen({ route, navigation }: any) {
 
     return () => {
       isSubscribed = false;
-      if (socket && conversationId) {
-        socket.emit('leave_conversation', conversationId);
+      if (socket) {
+        if (conversationId) {
+          socket.emit('leave_conversation', conversationId);
+        }
         socket.off(SOCKET_EVENTS.RECEIVE_MESSAGE);
         socket.off('messages_read');
         socket.off('user_presence');
@@ -520,10 +590,10 @@ export default function ChatDetailScreen({ route, navigation }: any) {
   return (
     <KeyboardAvoidingView
       style={styles.container}
-      behavior="padding"
-      keyboardVerticalOffset={0}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
     >
-      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" translucent={true} />
+      <StatusBar barStyle="dark-content" />
 
       {/* Top Header Bar */}
       <View style={[styles.headerContainer, { paddingTop: topInset + (Platform.OS === 'ios' ? 8 : 10) }]}>
@@ -758,16 +828,44 @@ export default function ChatDetailScreen({ route, navigation }: any) {
             ) : null
           }
           onLayout={() => {
-            if (isNearBottomRef.current) {
-              flatListRef.current?.scrollToEnd({ animated: false });
+            if (!hasAutoScrolledRef.current) {
+              performInitialScroll();
             }
           }}
           onContentSizeChange={() => {
-            if (isNearBottomRef.current) {
-              flatListRef.current?.scrollToEnd({ animated: false });
+            if (!hasAutoScrolledRef.current) {
+              performInitialScroll();
             }
           }}
+          onScrollToIndexFailed={(info) => {
+            setTimeout(() => {
+              try {
+                flatListRef.current?.scrollToIndex({
+                  index: info.index,
+                  animated: false,
+                  viewPosition: 0.5
+                });
+              } catch {
+                flatListRef.current?.scrollToEnd({ animated: false });
+              }
+            }, 100);
+          }}
         />
+      )}
+
+      {/* Floating New Message Indicator */}
+      {showNewMessageIndicator && (
+        <TouchableOpacity
+          style={styles.newMessageIndicator}
+          onPress={() => {
+            setShowNewMessageIndicator(false);
+            flatListRef.current?.scrollToEnd({ animated: true });
+          }}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="arrow-down" size={14} color="#FFFFFF" style={{ marginRight: 4 }} />
+          <Text style={styles.newMessageIndicatorText}>New message</Text>
+        </TouchableOpacity>
       )}
 
       {/* Message Composer */}
@@ -1271,5 +1369,27 @@ const styles = StyleSheet.create({
   },
   sendButtonDisabled: {
     backgroundColor: '#CBD5E1'
+  },
+  newMessageIndicator: {
+    position: 'absolute',
+    bottom: 80,
+    alignSelf: 'center',
+    backgroundColor: COLORS.primary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 5,
+    zIndex: 99
+  },
+  newMessageIndicatorText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700'
   }
 });

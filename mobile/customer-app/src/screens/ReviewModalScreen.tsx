@@ -10,9 +10,10 @@ import {
 } from 'react-native';
 import { api } from '../api/client';
 import { COLORS } from '../theme/colors';
+import { dataSyncService } from '../services/dataSyncService';
 
 export default function ReviewModalScreen({ route, navigation }: any) {
-  const { bookingId, vendorName } = route.params || {};
+  const { bookingId, vendorName, vendorId } = route.params || {};
   const [rating, setRating] = useState(5);
   const [title, setTitle] = useState('');
   const [comment, setComment] = useState('');
@@ -52,9 +53,26 @@ export default function ReviewModalScreen({ route, navigation }: any) {
         comment: comment.trim()
       });
 
-      Alert.alert('Review Submitted! ⭐', 'Thank you for rating your service experience. Your feedback helps maintain high marketplace standards.', [
-        { text: 'Done', onPress: () => navigation.goBack() }
-      ]);
+      dataSyncService.notify('BOOKINGS_CHANGED', { bookingId, hasReview: true });
+
+      Alert.alert(
+        'Review Published! ⭐',
+        `Thank you! Your verified rating and review are now published directly on ${vendorName || 'the professional'}'s profile.`,
+        [
+          ...(vendorId
+            ? [
+                {
+                  text: 'View on Profile',
+                  onPress: () => {
+                    navigation.goBack();
+                    navigation.navigate('ProfessionalProfile', { vendorId });
+                  }
+                }
+              ]
+            : []),
+          { text: 'Done', onPress: () => navigation.goBack() }
+        ]
+      );
     } catch (err: any) {
       Alert.alert('Submission Error', err.message || 'Could not submit review. You can only review once per completed booking.');
     } finally {

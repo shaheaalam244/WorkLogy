@@ -4,7 +4,8 @@ import {
   getCustomerBookings,
   cancelCustomerBooking,
   getCustomerQuotations,
-  getCustomerTransactions
+  getCustomerTransactions,
+  getCustomerStats
 } from '../controllers/customer.controller.js';
 import { protect } from '../middleware/auth.middleware.js';
 import { authorize } from '../middleware/role.middleware.js';
@@ -12,6 +13,7 @@ import { authorize } from '../middleware/role.middleware.js';
 const router = express.Router();
 
 router.get('/dashboard/summary', protect, authorize('customer', 'admin'), getCustomerDashboardSummary);
+router.get('/stats', protect, authorize('customer', 'admin'), getCustomerStats);
 router.get('/bookings', protect, authorize('customer', 'admin'), getCustomerBookings);
 router.patch('/bookings/:id/cancel', protect, authorize('customer', 'admin'), cancelCustomerBooking);
 router.get('/quotations', protect, authorize('customer', 'admin'), getCustomerQuotations);

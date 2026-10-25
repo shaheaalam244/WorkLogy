@@ -14,16 +14,19 @@ import {
   Platform,
   StatusBar,
   KeyboardAvoidingView,
-  Linking
+  Linking,
+  PermissionsAndroid
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, Feather, MaterialIcons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../hooks/useAuth';
 import { COLORS } from '../theme/colors';
 import { api } from '../api/client';
 import { secureStorage } from '../storage/secureStorage';
 import { STORAGE_KEYS } from '../constants';
-import { saveLocation } from '../services/locationService';
+import { saveLocation, detectGpsLocation } from '../services/locationService';
+import { dataSyncService } from '../services/dataSyncService';
 import type { ServiceAddress, TransactionItem, SupportTicketItem, NotificationPreferences } from '../types';
 
 const STATUSBAR_HEIGHT =
@@ -49,8 +52,11 @@ export default function ProfileScreen({ navigation }: any) {
   // Push Sound State (persisted locally)
   const [pushSoundEnabled, setPushSoundEnabled] = useState(true);
 
+  const DEFAULT_AVATAR = 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=300&q=80';
+
   // Modals Visibility
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [showAddAddressModal, setShowAddAddressModal] = useState(false);
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
   const [showTransactionsModal, setShowTransactionsModal] = useState(false);
@@ -60,18 +66,41 @@ export default function ProfileScreen({ navigation }: any) {
 
   // Edit Profile Form State
   const [editName, setEditName] = useState('');
+  const [editEmail, setEditEmail] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editAvatar, setEditAvatar] = useState('');
+  const [pickedImageUri, setPickedImageUri] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<{ name?: string; email?: string; phone?: string }>({});
   const [savingProfile, setSavingProfile] = useState(false);
 
-  // Add Address Form State
+  // Security & Password Form State
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showCurrentPass, setShowCurrentPass] = useState(false);
+  const [showNewPass, setShowNewPass] = useState(false);
+  const [showConfirmPass, setShowConfirmPass] = useState(false);
+  const [passwordErrors, setPasswordErrors] = useState<{ current?: string; new?: string; confirm?: string }>({});
+  const [savingPassword, setSavingPassword] = useState(false);
+
+  // Device Notification Permissions State
+  const [deviceNotificationStatus, setDeviceNotificationStatus] = useState<string>('checking');
+
+  // Add/Edit Address Form State
   const [addrLabel, setAddrLabel] = useState('Home');
+  const [addrHouseNumber, setAddrHouseNumber] = useState('');
   const [addrStreet, setAddrStreet] = useState('');
   const [addrLocality, setAddrLocality] = useState('');
   const [addrCity, setAddrCity] = useState('');
   const [addrState, setAddrState] = useState('');
   const [addrZip, setAddrZip] = useState('');
+  const [addrErrors, setAddrErrors] = useState<{ street?: string; city?: string; zip?: string }>({});
+  const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
   const [savingAddress, setSavingAddress] = useState(false);
+  const [detectingGps, setDetectingGps] = useState(false);
+  const [detectedCoords, setDetectedCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
+  const [gpsLocationLabel, setGpsLocationLabel] = useState<string | null>(null);
 
   // Notification Preferences State
   const [notifPrefs, setNotifPrefs] = useState<NotificationPreferences>({
@@ -106,12 +135,26 @@ export default function ProfileScreen({ navigation }: any) {
     loadInitialData();
   }, [user?._id]);
 
+  useEffect(() => {
+    const unsubBookings = dataSyncService.subscribe('BOOKINGS_CHANGED', () => {
+      loadBookingStats();
+    });
+    const unsubProfile = dataSyncService.subscribe('PROFILE_CHANGED', () => {
+      loadInitialData();
+    });
+    return () => {
+      unsubBookings();
+      unsubProfile();
+    };
+  }, []);
+
   const loadInitialData = async () => {
     loadAddresses();
     loadTransactions();
     loadPushSoundPreference();
     loadNotificationPreferences();
     loadBookingStats();
+    checkDeviceNotificationPermission();
   };
 
   const handleManualRefresh = async () => {
@@ -150,13 +193,19 @@ export default function ProfileScreen({ navigation }: any) {
     try {
       setLoadingAddresses(true);
       const res = await api.customer.getProfile();
+      let addrList: ServiceAddress[] = [];
       if (res?.profile?.addresses) {
-        setAddresses(res.profile.addresses);
+        addrList = res.profile.addresses;
       } else {
         const addrRes = await api.customer.getAddresses();
         if (addrRes?.addresses) {
-          setAddresses(addrRes.addresses);
+          addrList = addrRes.addresses;
         }
+      }
+      setAddresses(addrList);
+      const defIdx = addrList.findIndex((a) => a.isDefault);
+      if (defIdx >= 0) {
+        setSelectedAddressIndex(defIdx);
       }
       if (res?.profile?.savedVendors) {
         setSavedVendors(res.profile.savedVendors);
@@ -170,12 +219,24 @@ export default function ProfileScreen({ navigation }: any) {
 
   const loadBookingStats = async () => {
     try {
-      const res = await api.jobs.getMyJobs();
-      if (res?.jobs && Array.isArray(res.jobs)) {
-        setBookingCount(res.jobs.length);
+      const statsRes = await api.customer.getStats();
+      if (statsRes?.success && typeof statsRes.activeJobsCount === 'number') {
+        setBookingCount(statsRes.activeJobsCount);
+        if (typeof statsRes.transactionCount === 'number' && statsRes.transactionCount > 0) {
+          setTransactionCount(statsRes.transactionCount);
+        }
+        return;
       }
     } catch {
-      // ignore
+      // Fallback: query active bookings directly
+      try {
+        const res = await api.bookings.getMyBookings({ status: 'active' });
+        if (res?.bookings && Array.isArray(res.bookings)) {
+          setBookingCount(res.bookings.length);
+        }
+      } catch {
+        // ignore
+      }
     }
   };
 
@@ -222,28 +283,133 @@ export default function ProfileScreen({ navigation }: any) {
     }
   };
 
+  // Profile Photo Picker & Handlers
+  const handlePickAvatar = async () => {
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert(
+          'Gallery Permission Required',
+          'Access to your device photo gallery is needed to select a profile picture. Please enable permission in Settings.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() }
+          ]
+        );
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.85
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        if (asset.fileSize && asset.fileSize > 10 * 1024 * 1024) {
+          Alert.alert('File Too Large', 'Please choose an image under 10 MB.');
+          return;
+        }
+        setPickedImageUri(asset.uri);
+      }
+    } catch (err: any) {
+      Alert.alert('Image Selection Error', err.message || 'Could not pick image.');
+    }
+  };
+
+  const handleRemoveAvatar = () => {
+    Alert.alert(
+      'Remove Profile Photo',
+      'Are you sure you want to remove your custom photo and restore the default avatar?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: () => {
+            setPickedImageUri(null);
+            setEditAvatar(DEFAULT_AVATAR);
+          }
+        }
+      ]
+    );
+  };
+
   // Open Edit Profile Modal
   const openEditProfile = () => {
     setEditName(user?.name || '');
+    setEditEmail(user?.email || '');
     setEditPhone(user?.phone || '');
-    setEditAvatar(user?.avatar || '');
+    setEditAvatar(user?.avatar || DEFAULT_AVATAR);
+    setPickedImageUri(null);
+    setFieldErrors({});
     setShowEditModal(true);
   };
 
-  const handleSaveProfile = async () => {
+  const validateProfileForm = (): boolean => {
+    const errors: { name?: string; email?: string; phone?: string } = {};
+
     if (!editName.trim()) {
-      Alert.alert('Required Field', 'Please enter your full name.');
-      return;
+      errors.name = 'Full name is required.';
+    } else if (editName.trim().length < 2) {
+      errors.name = 'Full name must be at least 2 characters.';
     }
+
+    if (!editEmail.trim()) {
+      errors.email = 'Email address is required.';
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(editEmail.trim())) {
+      errors.email = 'Please enter a valid email address.';
+    }
+
+    if (editPhone.trim()) {
+      const cleanPhone = editPhone.replace(/[\s\-\+\(\)]/g, '');
+      if (cleanPhone.length < 10) {
+        errors.phone = 'Please enter a valid 10-digit mobile number.';
+      }
+    }
+
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const handleSaveProfile = async () => {
+    if (!validateProfileForm()) return;
+
     try {
       setSavingProfile(true);
+      let finalAvatarUrl = editAvatar.trim() || user?.avatar || DEFAULT_AVATAR;
+
+      // Upload local image to Cloudinary if user selected a new photo
+      if (pickedImageUri) {
+        try {
+          const uploadRes = await api.media.uploadImage(pickedImageUri);
+          if (uploadRes?.url) {
+            finalAvatarUrl = uploadRes.url;
+          }
+        } catch (uploadErr: any) {
+          Alert.alert(
+            'Photo Upload Failed',
+            `Could not upload profile picture: ${uploadErr.message || 'Network error'}. Your other profile details were not saved.`
+          );
+          setSavingProfile(false);
+          return;
+        }
+      }
+
       await updateProfile({
         name: editName.trim(),
+        email: editEmail.trim(),
         phone: editPhone.trim(),
-        avatar: editAvatar.trim()
+        avatar: finalAvatarUrl
       });
+
       setShowEditModal(false);
-      Alert.alert('Profile Updated', 'Your customer profile details have been saved successfully.');
+      setPickedImageUri(null);
+      setFieldErrors({});
+      await refreshProfile();
+      Alert.alert('Profile Updated 🎉', 'Your customer profile details have been saved successfully.');
     } catch (err: any) {
       Alert.alert('Update Failed', err.message || 'Could not save profile changes.');
     } finally {
@@ -251,37 +417,355 @@ export default function ProfileScreen({ navigation }: any) {
     }
   };
 
+  // Security & Password Handlers
+  const openChangePassword = () => {
+    setCurrentPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setShowCurrentPass(false);
+    setShowNewPass(false);
+    setShowConfirmPass(false);
+    setPasswordErrors({});
+    setShowPasswordModal(true);
+  };
+
+  const validatePasswordForm = (): boolean => {
+    const errors: { current?: string; new?: string; confirm?: string } = {};
+
+    if (!currentPassword) {
+      errors.current = 'Current password is required.';
+    }
+
+    if (!newPassword) {
+      errors.new = 'New password is required.';
+    } else if (newPassword.length < 6) {
+      errors.new = 'New password must be at least 6 characters.';
+    } else if (newPassword === currentPassword) {
+      errors.new = 'New password must be different from current password.';
+    }
+
+    if (!confirmPassword) {
+      errors.confirm = 'Please confirm your new password.';
+    } else if (confirmPassword !== newPassword) {
+      errors.confirm = 'Passwords do not match.';
+    }
+
+    setPasswordErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const handleSavePassword = async () => {
+    if (!validatePasswordForm()) return;
+
+    try {
+      setSavingPassword(true);
+      const res = await api.auth.updatePassword({
+        currentPassword,
+        newPassword
+      });
+
+      if (res?.success) {
+        setShowPasswordModal(false);
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+        setPasswordErrors({});
+        Alert.alert('Password Updated 🎉', 'Your account password has been updated securely.');
+      } else {
+        Alert.alert('Update Failed', res?.message || 'Could not update password.');
+      }
+    } catch (err: any) {
+      Alert.alert('Password Update Failed', err.message || 'Incorrect current password or server error.');
+    } finally {
+      setSavingPassword(false);
+    }
+  };
+
+  // Device Notification Permissions
+  const checkDeviceNotificationPermission = async () => {
+    try {
+      if (Platform.OS === 'android') {
+        if (typeof Platform.Version === 'number' && Platform.Version >= 33) {
+          const hasPerm = await PermissionsAndroid.check(
+            PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+          );
+          setDeviceNotificationStatus(hasPerm ? 'granted' : 'denied');
+        } else {
+          setDeviceNotificationStatus('granted');
+        }
+      } else {
+        setDeviceNotificationStatus('granted');
+      }
+    } catch {
+      setDeviceNotificationStatus('undetermined');
+    }
+  };
+
+  const handleRequestNotificationPermission = async () => {
+    try {
+      if (Platform.OS === 'android') {
+        if (typeof Platform.Version === 'number' && Platform.Version >= 33) {
+          const result = await PermissionsAndroid.request(
+            PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+            {
+              title: 'WorkLogy Service Alerts',
+              message: 'Allow WorkLogy to notify you about technician arrivals, emergency dispatch, and quotations.',
+              buttonPositive: 'Allow',
+              buttonNegative: 'Not Now'
+            }
+          );
+          if (result === PermissionsAndroid.RESULTS.GRANTED) {
+            setDeviceNotificationStatus('granted');
+            Alert.alert('Notifications Enabled 🎉', 'You will receive immediate alerts for technician arrivals and quotes.');
+          } else {
+            setDeviceNotificationStatus('denied');
+            Alert.alert(
+              'Notification Permission',
+              'Push notifications are currently disabled. To receive immediate emergency arrival alerts, please enable them in settings.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Open Settings', onPress: () => Linking.openSettings() }
+              ]
+            );
+          }
+        } else {
+          setDeviceNotificationStatus('granted');
+          Alert.alert('Notifications Enabled 🎉', 'Your device is configured to receive service alerts.');
+        }
+      } else {
+        setDeviceNotificationStatus('granted');
+        Alert.alert('Notifications Enabled 🎉', 'Your device is configured to receive service alerts.');
+      }
+    } catch (err: any) {
+      Alert.alert('Settings', 'Please configure notification permissions in device settings.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Open Settings', onPress: () => Linking.openSettings() }
+      ]);
+    }
+  };
+
   // Address Actions
-  const handleAddAddress = async () => {
-    if (!addrStreet.trim() || !addrCity.trim() || !addrZip.trim()) {
-      Alert.alert('Missing Details', 'Street, City, and PIN code are required.');
+  const handleUseGpsForAddress = async () => {
+    try {
+      setDetectingGps(true);
+      const res = await detectGpsLocation();
+      if (!res.success || !res.location) {
+        Alert.alert(
+          'GPS Detection Failed',
+          res.error || 'Could not auto-detect location. Please enter your address details manually.'
+        );
+        return;
+      }
+
+      const loc = res.location;
+      if (loc.coordinates && (loc.coordinates.lat !== 0 || loc.coordinates.lng !== 0)) {
+        setDetectedCoords({
+          lat: Number(loc.coordinates.lat),
+          lng: Number(loc.coordinates.lng)
+        });
+      }
+      if (loc.accuracyMeters != null) {
+        setGpsAccuracy(loc.accuracyMeters);
+      }
+      setGpsLocationLabel(loc.fullAddress || `${loc.city || ''}, ${loc.locality || ''}`);
+
+      // Populate fields with freshly acquired GPS location — replaces old mismatched location data
+      setAddrHouseNumber(loc.houseNumber || '');
+      const streetVal = loc.street || loc.locality || '';
+      setAddrStreet(streetVal);
+      const localityVal =
+        loc.locality && loc.locality.toLowerCase() !== streetVal.toLowerCase()
+          ? loc.locality
+          : (loc.district && loc.district.toLowerCase() !== (loc.city || '').toLowerCase()
+              ? loc.district
+              : loc.locality || '');
+      setAddrLocality(localityVal);
+      setAddrCity(loc.city || 'Lucknow');
+      setAddrState(loc.state || 'Uttar Pradesh');
+      setAddrZip(loc.pincode || '');
+
+      // Clear field errors for newly auto-filled address
+      setAddrErrors({});
+    } catch (err: any) {
+      Alert.alert('GPS Error', err?.message || 'Failed to detect current GPS location.');
+    } finally {
+      setDetectingGps(false);
+    }
+  };
+
+  const handleOpenEditAddress = (addr: ServiceAddress) => {
+    setEditingAddressId(addr._id || null);
+    setAddrLabel(addr.label || 'Home');
+    setAddrHouseNumber(addr.houseNumber || '');
+    setAddrStreet(addr.street || '');
+    setAddrLocality(addr.locality || addr.landmark || '');
+    setAddrCity(addr.city || 'Lucknow');
+    setAddrState(addr.state || 'Uttar Pradesh');
+    setAddrZip(addr.zipCode || addr.pincode || '');
+    setAddrErrors({});
+
+    if (addr.coordinates && (Number(addr.coordinates.lat) !== 0 || Number(addr.coordinates.lng) !== 0)) {
+      setDetectedCoords({
+        lat: Number(addr.coordinates.lat),
+        lng: Number(addr.coordinates.lng)
+      });
+      setGpsLocationLabel(`${Number(addr.coordinates.lat).toFixed(4)}, ${Number(addr.coordinates.lng).toFixed(4)}`);
+    } else {
+      setDetectedCoords(null);
+      setGpsLocationLabel(null);
+    }
+    setGpsAccuracy(null);
+    setShowAddAddressModal(true);
+  };
+
+  const handleSaveAddress = async () => {
+    const errors: { street?: string; city?: string; zip?: string } = {};
+    if (!addrStreet.trim()) errors.street = 'Street or road name is required.';
+    if (!addrCity.trim()) errors.city = 'City is required.';
+    if (!addrZip.trim()) {
+      errors.zip = 'PIN code is required.';
+    } else if (!/^\d{6}$/.test(addrZip.trim())) {
+      errors.zip = 'Please enter a valid 6-digit PIN code.';
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setAddrErrors(errors);
+      Alert.alert('Missing Details', 'Please fill in all required address fields.');
       return;
     }
+
     try {
       setSavingAddress(true);
-      const newAddress = {
-        label: addrLabel,
-        street: addrStreet.trim(),
-        locality: addrLocality.trim(),
-        city: addrCity.trim(),
-        state: addrState.trim() || 'Delhi NCR',
-        zipCode: addrZip.trim()
-      };
-      const res = await api.customer.addAddress(newAddress);
-      if (res?.addresses) {
-        setAddresses(res.addresses);
+
+      const coordinates = detectedCoords || { lat: 0, lng: 0 };
+
+      if (editingAddressId) {
+        const updatePayload: Partial<ServiceAddress> = {
+          label: addrLabel,
+          houseNumber: addrHouseNumber.trim(),
+          street: addrStreet.trim(),
+          locality: addrLocality.trim(),
+          landmark: addrLocality.trim(),
+          city: addrCity.trim(),
+          state: addrState.trim() || 'Uttar Pradesh',
+          zipCode: addrZip.trim(),
+          coordinates
+        };
+
+        const res = await api.customer.updateAddress(editingAddressId, updatePayload);
+        if (res?.addresses && res.addresses.length > 0) {
+          setAddresses(res.addresses);
+        } else {
+          await loadAddresses();
+        }
+
+        // Check if the edited address is the current active address
+        const wasActive =
+          (selectedAddressIndex !== -1 && addresses[selectedAddressIndex]?._id === editingAddressId) ||
+          addresses.find((a) => a._id === editingAddressId)?.isDefault;
+
+        if (wasActive) {
+          const fullAddr = [
+            addrHouseNumber.trim(),
+            addrStreet.trim(),
+            addrLocality.trim(),
+            addrCity.trim(),
+            addrZip.trim()
+          ].filter(Boolean).join(', ');
+
+          await saveLocation({
+            city: addrCity.trim(),
+            locality: addrLocality.trim(),
+            state: addrState.trim() || 'Uttar Pradesh',
+            pincode: addrZip.trim(),
+            street: addrStreet.trim(),
+            houseNumber: addrHouseNumber.trim(),
+            fullAddress: fullAddr,
+            coordinates,
+            method: 'saved',
+            addressId: editingAddressId
+          });
+          dataSyncService.notify('LOCATION_CHANGED');
+        }
+
+        setShowAddAddressModal(false);
+        setEditingAddressId(null);
+        Alert.alert('Address Updated', 'Your service address changes have been saved.');
       } else {
-        await loadAddresses();
+        // Prevent duplicate addresses
+        const isDuplicate = addresses.some(
+          (a) =>
+            (a.houseNumber || '').toLowerCase().trim() === addrHouseNumber.toLowerCase().trim() &&
+            a.street.toLowerCase().trim() === addrStreet.toLowerCase().trim() &&
+            (a.locality || a.landmark || '').toLowerCase().trim() === addrLocality.toLowerCase().trim() &&
+            a.city.toLowerCase().trim() === addrCity.toLowerCase().trim() &&
+            (a.zipCode || a.pincode || '').trim() === addrZip.trim()
+        );
+
+        if (isDuplicate) {
+          Alert.alert('Duplicate Address', 'An address with these identical details is already saved in your profile.');
+          return;
+        }
+
+        const newAddress = {
+          label: addrLabel,
+          houseNumber: addrHouseNumber.trim(),
+          street: addrStreet.trim(),
+          locality: addrLocality.trim(),
+          landmark: addrLocality.trim(),
+          city: addrCity.trim(),
+          state: addrState.trim() || 'Uttar Pradesh',
+          zipCode: addrZip.trim(),
+          coordinates,
+          isDefault: addresses.length === 0
+        };
+        const res = await api.customer.addAddress(newAddress);
+        if (res?.addresses && res.addresses.length > 0) {
+          setAddresses(res.addresses);
+        } else {
+          await loadAddresses();
+        }
+
+        if (addresses.length === 0) {
+          const fullAddr = [
+            addrHouseNumber.trim(),
+            addrStreet.trim(),
+            addrLocality.trim(),
+            addrCity.trim(),
+            addrZip.trim()
+          ].filter(Boolean).join(', ');
+
+          await saveLocation({
+            city: addrCity.trim(),
+            locality: addrLocality.trim(),
+            state: addrState.trim() || 'Uttar Pradesh',
+            pincode: addrZip.trim(),
+            street: addrStreet.trim(),
+            houseNumber: addrHouseNumber.trim(),
+            fullAddress: fullAddr,
+            coordinates,
+            method: 'saved'
+          });
+          dataSyncService.notify('LOCATION_CHANGED');
+        }
+
+        setShowAddAddressModal(false);
+        Alert.alert('Address Saved', 'Your service address has been added to your profile.');
       }
-      setShowAddAddressModal(false);
+
+      setAddrHouseNumber('');
       setAddrStreet('');
       setAddrLocality('');
       setAddrCity('');
       setAddrState('');
       setAddrZip('');
-      Alert.alert('Address Saved', 'Your service address has been added to your profile.');
+      setDetectedCoords(null);
+      setGpsAccuracy(null);
+      setGpsLocationLabel(null);
+      setAddrErrors({});
+      setEditingAddressId(null);
     } catch (err: any) {
-      Alert.alert('Failed to Save', err.message || 'Could not add address. Please verify your details.');
+      Alert.alert('Failed to Save', err.message || 'Could not save address. Please verify your details.');
     } finally {
       setSavingAddress(false);
     }
@@ -291,7 +775,7 @@ export default function ProfileScreen({ navigation }: any) {
     if (!addrId) return;
     Alert.alert(
       'Delete Address',
-      `Are you sure you want to delete "${label || 'this address'}"?`,
+      `Are you sure you want to delete "${label || 'this address'}"?\n\nNote: Existing past bookings will preserve their historical address snapshot.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -302,6 +786,8 @@ export default function ProfileScreen({ navigation }: any) {
               const res = await api.customer.deleteAddress(addrId);
               if (res?.addresses) {
                 setAddresses(res.addresses);
+                const defIdx = res.addresses.findIndex((a: any) => a.isDefault);
+                if (defIdx >= 0) setSelectedAddressIndex(defIdx);
               } else {
                 await loadAddresses();
               }
@@ -317,12 +803,22 @@ export default function ProfileScreen({ navigation }: any) {
 
   const handleSelectActiveAddress = async (addr: ServiceAddress, index: number) => {
     setSelectedAddressIndex(index);
-    const formatted = `${addr.street}${addr.locality ? ', ' + addr.locality : ''}, ${addr.city} ${addr.zipCode || addr.pincode || ''}`;
+    const formatted = `${addr.houseNumber ? addr.houseNumber + ', ' : ''}${addr.street}${addr.locality ? ', ' + addr.locality : ''}, ${addr.city} ${addr.zipCode || addr.pincode || ''}`;
     try {
-      await saveLocation(formatted, addr);
-      Alert.alert('Active Location Set', `Your dispatch location is set to: \n\n${formatted}`);
-    } catch {
-      // ignore
+      if (addr._id) {
+        const res = await api.customer.setDefaultAddress(addr._id);
+        if (res?.addresses) {
+          setAddresses(res.addresses);
+        }
+      } else {
+        setAddresses((prev) =>
+          prev.map((a, i) => ({ ...a, isDefault: i === index }))
+        );
+      }
+      await saveLocation(formatted, { ...addr, isDefault: true, isExplicit: true, addressId: addr._id });
+      Alert.alert('Active Location Set', `Your primary service location is set to:\n\n${formatted}`);
+    } catch (err: any) {
+      Alert.alert('Notice', err.message || 'Could not persist active address to server, but active for this session.');
     }
   };
 
@@ -583,7 +1079,7 @@ export default function ProfileScreen({ navigation }: any) {
               activeOpacity={0.8}
             >
               <Text style={styles.statNumber}>{bookingCount}</Text>
-              <Text style={styles.statLabel}>My Bookings</Text>
+              <Text style={styles.statLabel}>Active Bookings</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -665,7 +1161,21 @@ export default function ProfileScreen({ navigation }: any) {
             {user && (
               <TouchableOpacity
                 style={styles.addAddressHeaderBtn}
-                onPress={() => setShowAddAddressModal(true)}
+                onPress={() => {
+                  setEditingAddressId(null);
+                  setAddrLabel('Home');
+                  setAddrHouseNumber('');
+                  setAddrStreet('');
+                  setAddrLocality('');
+                  setAddrCity('Lucknow');
+                  setAddrState('Uttar Pradesh');
+                  setAddrZip('');
+                  setDetectedCoords(null);
+                  setGpsAccuracy(null);
+                  setGpsLocationLabel(null);
+                  setAddrErrors({});
+                  setShowAddAddressModal(true);
+                }}
                 activeOpacity={0.7}
               >
                 <Ionicons name="add" size={15} color={COLORS.primary} />
@@ -681,7 +1191,7 @@ export default function ProfileScreen({ navigation }: any) {
             </View>
           ) : addresses.length > 0 ? (
             addresses.map((addr, idx) => {
-              const isSelected = selectedAddressIndex === idx;
+              const isSelected = !!addr.isDefault || selectedAddressIndex === idx;
               return (
                 <View key={addr._id || idx} style={[styles.addressCard, isSelected && styles.addressCardSelected]}>
                   <View style={styles.addressLeftRow}>
@@ -703,7 +1213,7 @@ export default function ProfileScreen({ navigation }: any) {
                         )}
                       </View>
                       <Text style={styles.addressFullText}>
-                        {addr.street}
+                        {addr.houseNumber ? `${addr.houseNumber}, ` : ''}{addr.street}
                         {addr.locality ? `, ${addr.locality}` : ''}
                       </Text>
                       <Text style={styles.addressCityZip}>
@@ -713,25 +1223,40 @@ export default function ProfileScreen({ navigation }: any) {
                   </View>
 
                   <View style={styles.addressActionsRow}>
-                    {!isSelected && (
-                      <TouchableOpacity
-                        style={styles.selectAddressBtn}
-                        onPress={() => handleSelectActiveAddress(addr, idx)}
-                        activeOpacity={0.7}
-                      >
-                        <Ionicons name="location-outline" size={13} color={COLORS.primary} />
-                        <Text style={styles.selectAddressText}>Set as Active</Text>
-                      </TouchableOpacity>
-                    )}
+                    <View style={styles.addressActionsLeft}>
+                      {!isSelected && (
+                        <TouchableOpacity
+                          style={styles.selectAddressBtn}
+                          onPress={() => handleSelectActiveAddress(addr, idx)}
+                          activeOpacity={0.7}
+                        >
+                          <Ionicons name="location-outline" size={13} color={COLORS.primary} />
+                          <Text style={styles.selectAddressText}>Set as Active</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
 
-                    <TouchableOpacity
-                      style={styles.deleteAddressBtn}
-                      onPress={() => handleDeleteAddress(addr._id, addr.label)}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                      activeOpacity={0.7}
-                    >
-                      <Ionicons name="trash-outline" size={16} color="#EF4444" />
-                    </TouchableOpacity>
+                    <View style={styles.addressActionsRight}>
+                      <TouchableOpacity
+                        style={styles.editAddressBtn}
+                        onPress={() => handleOpenEditAddress(addr)}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        activeOpacity={0.7}
+                        accessibilityLabel="Edit address"
+                      >
+                        <Ionicons name="pencil-outline" size={16} color={COLORS.primary} />
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.deleteAddressBtn}
+                        onPress={() => handleDeleteAddress(addr._id, addr.label)}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        activeOpacity={0.7}
+                        accessibilityLabel="Delete address"
+                      >
+                        <Ionicons name="trash-outline" size={16} color="#EF4444" />
+                      </TouchableOpacity>
+                    </View>
                   </View>
                 </View>
               );
@@ -778,8 +1303,40 @@ export default function ProfileScreen({ navigation }: any) {
               <Feather name="chevron-right" size={18} color={COLORS.textMuted} />
             </TouchableOpacity>
 
+            {/* Device Push Notification Permissions */}
+            <TouchableOpacity
+              style={styles.menuRow}
+              onPress={handleRequestNotificationPermission}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.menuIconCircle, { backgroundColor: '#F0FDF4' }]}>
+                <Ionicons name="phone-portrait-outline" size={18} color={COLORS.primary} />
+              </View>
+              <View style={styles.menuTextCol}>
+                <Text style={styles.menuTitle}>Device Push Notifications</Text>
+                <Text style={styles.menuSubtitle}>
+                  {deviceNotificationStatus === 'granted'
+                    ? 'Active — instant technician arrival & OTP alerts'
+                    : deviceNotificationStatus === 'denied'
+                    ? 'Disabled in device settings — tap to resolve'
+                    : 'Tap to check and request permissions'}
+                </Text>
+              </View>
+              <View style={[
+                styles.permissionStatusBadge,
+                deviceNotificationStatus === 'granted' ? styles.permissionStatusGranted : styles.permissionStatusPending
+              ]}>
+                <Text style={[
+                  styles.permissionStatusText,
+                  deviceNotificationStatus === 'granted' ? styles.permissionTextGranted : styles.permissionTextPending
+                ]}>
+                  {deviceNotificationStatus === 'granted' ? 'Enabled' : deviceNotificationStatus === 'denied' ? 'Denied' : 'Check'}
+                </Text>
+              </View>
+            </TouchableOpacity>
+
             {/* Push Notification Sound Toggle */}
-            <View style={[styles.menuRow, { borderBottomWidth: 0 }]}>
+            <View style={styles.menuRow}>
               <View style={[styles.menuIconCircle, { backgroundColor: '#ECFDF5' }]}>
                 <Ionicons name="volume-high-outline" size={18} color="#059669" />
               </View>
@@ -794,6 +1351,24 @@ export default function ProfileScreen({ navigation }: any) {
                 thumbColor={pushSoundEnabled ? COLORS.primary : '#94A3B8'}
               />
             </View>
+
+            {/* Account Security & Password */}
+            {user && (
+              <TouchableOpacity
+                style={[styles.menuRow, { borderBottomWidth: 0 }]}
+                onPress={openChangePassword}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.menuIconCircle, { backgroundColor: '#FEF3C7' }]}>
+                  <Ionicons name="key-outline" size={18} color="#D97706" />
+                </View>
+                <View style={styles.menuTextCol}>
+                  <Text style={styles.menuTitle}>Account Security & Password</Text>
+                  <Text style={styles.menuSubtitle}>Change password and review session safety</Text>
+                </View>
+                <Feather name="chevron-right" size={18} color={COLORS.textMuted} />
+              </TouchableOpacity>
+            )}
           </View>
         </View>
 
@@ -864,49 +1439,127 @@ export default function ProfileScreen({ navigation }: any) {
         >
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Edit Customer Profile</Text>
+              <View>
+                <Text style={styles.modalTitle}>Edit Customer Profile</Text>
+                <Text style={styles.modalHeaderSubtitle}>Update personal info, avatar and verified credentials</Text>
+              </View>
               <TouchableOpacity onPress={() => setShowEditModal(false)}>
                 <Ionicons name="close" size={24} color={COLORS.textDark} />
               </TouchableOpacity>
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false}>
+              {/* Profile Photo Picker Section */}
+              <View style={styles.avatarEditSection}>
+                <View style={styles.avatarPreviewWrapper}>
+                  {(pickedImageUri || editAvatar) &&
+                  ((pickedImageUri || editAvatar).startsWith('http') ||
+                   (pickedImageUri || editAvatar).startsWith('file:') ||
+                   (pickedImageUri || editAvatar).startsWith('content:')) ? (
+                    <Image
+                      source={{ uri: pickedImageUri || editAvatar }}
+                      style={styles.avatarPreviewImage}
+                    />
+                  ) : (
+                    <View style={styles.avatarPreviewPlaceholder}>
+                      <Text style={styles.avatarPreviewInitials}>
+                        {(editName || user?.name || 'C').charAt(0).toUpperCase()}
+                      </Text>
+                    </View>
+                  )}
+                  {pickedImageUri && (
+                    <View style={styles.newPhotoBadge}>
+                      <Ionicons name="sparkles" size={11} color="#FFFFFF" />
+                      <Text style={styles.newPhotoBadgeText}>New</Text>
+                    </View>
+                  )}
+                </View>
+
+                <View style={styles.avatarActionRow}>
+                  <TouchableOpacity
+                    style={styles.avatarPickBtn}
+                    onPress={handlePickAvatar}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="image-outline" size={16} color={COLORS.primary} />
+                    <Text style={styles.avatarPickBtnText}>
+                      {pickedImageUri || (editAvatar && editAvatar !== DEFAULT_AVATAR) ? 'Change Photo' : 'Select Photo'}
+                    </Text>
+                  </TouchableOpacity>
+
+                  {(pickedImageUri || (editAvatar && editAvatar !== DEFAULT_AVATAR)) && (
+                    <TouchableOpacity
+                      style={styles.avatarRemoveBtn}
+                      onPress={handleRemoveAvatar}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons name="trash-outline" size={15} color="#DC2626" />
+                      <Text style={styles.avatarRemoveBtnText}>Remove</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                <Text style={styles.avatarHelperText}>
+                  JPG or PNG up to 10 MB. Stored securely on Cloudinary CDN.
+                </Text>
+              </View>
+
+              {/* Full Name Field */}
               <Text style={styles.inputLabel}>Full Name *</Text>
               <TextInput
-                style={styles.textInput}
+                style={[styles.textInput, fieldErrors.name ? styles.inputError : null]}
                 value={editName}
-                onChangeText={setEditName}
-                placeholder="e.g. John Doe"
+                onChangeText={(val) => {
+                  setEditName(val);
+                  if (fieldErrors.name) setFieldErrors((prev) => ({ ...prev, name: undefined }));
+                }}
+                placeholder="e.g. Rahul Sharma"
                 placeholderTextColor={COLORS.textMuted}
               />
+              {fieldErrors.name && <Text style={styles.fieldErrorText}>{fieldErrors.name}</Text>}
 
-              <Text style={styles.inputLabel}>Registered Email (Locked)</Text>
+              {/* Email Address Field */}
+              <Text style={styles.inputLabel}>Email Address *</Text>
               <TextInput
-                style={[styles.textInput, styles.disabledInput]}
-                value={user?.email || ''}
-                editable={false}
+                style={[styles.textInput, fieldErrors.email ? styles.inputError : null]}
+                value={editEmail}
+                onChangeText={(val) => {
+                  setEditEmail(val);
+                  if (fieldErrors.email) setFieldErrors((prev) => ({ ...prev, email: undefined }));
+                }}
+                placeholder="e.g. rahul.sharma@example.com"
+                placeholderTextColor={COLORS.textMuted}
+                autoCapitalize="none"
+                keyboardType="email-address"
               />
-              <Text style={styles.inputHelp}>Email cannot be changed directly for account security.</Text>
+              {fieldErrors.email ? (
+                <Text style={styles.fieldErrorText}>{fieldErrors.email}</Text>
+              ) : (
+                <Text style={styles.inputHelp}>
+                  Used for verified WorkLogy invoices, booking receipts, and account recovery.
+                </Text>
+              )}
 
+              {/* Phone Number Field */}
               <Text style={styles.inputLabel}>Phone Number</Text>
               <TextInput
-                style={styles.textInput}
+                style={[styles.textInput, fieldErrors.phone ? styles.inputError : null]}
                 value={editPhone}
-                onChangeText={setEditPhone}
-                placeholder="e.g. +91 9876543210"
+                onChangeText={(val) => {
+                  setEditPhone(val);
+                  if (fieldErrors.phone) setFieldErrors((prev) => ({ ...prev, phone: undefined }));
+                }}
+                placeholder="e.g. 9876543210"
                 placeholderTextColor={COLORS.textMuted}
                 keyboardType="phone-pad"
               />
-
-              <Text style={styles.inputLabel}>Avatar Image URL (Optional)</Text>
-              <TextInput
-                style={styles.textInput}
-                value={editAvatar}
-                onChangeText={setEditAvatar}
-                placeholder="https://example.com/avatar.jpg"
-                placeholderTextColor={COLORS.textMuted}
-                autoCapitalize="none"
-              />
+              {fieldErrors.phone ? (
+                <Text style={styles.fieldErrorText}>{fieldErrors.phone}</Text>
+              ) : (
+                <Text style={styles.inputHelp}>
+                  Technicians call this number on arrival for entry coordination and OTP verification.
+                </Text>
+              )}
 
               <View style={styles.modalActionRow}>
                 <TouchableOpacity
@@ -943,13 +1596,66 @@ export default function ProfileScreen({ navigation }: any) {
         >
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Add Service Address</Text>
-              <TouchableOpacity onPress={() => setShowAddAddressModal(false)}>
+              <Text style={styles.modalTitle}>
+                {editingAddressId ? 'Edit Service Address' : 'Add Service Address'}
+              </Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowAddAddressModal(false);
+                  setEditingAddressId(null);
+                }}
+              >
                 <Ionicons name="close" size={24} color={COLORS.textDark} />
               </TouchableOpacity>
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false}>
+              {/* GPS Auto-Detection Header Action */}
+              <TouchableOpacity
+                style={styles.gpsDetectBtn}
+                onPress={handleUseGpsForAddress}
+                disabled={detectingGps}
+                activeOpacity={0.85}
+              >
+                {detectingGps ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Ionicons name="navigate-circle" size={18} color="#FFFFFF" />
+                )}
+                <Text style={styles.gpsDetectBtnText}>
+                  {detectingGps ? 'Detecting GPS Satellite Coordinates...' : 'Use Current Location (GPS)'}
+                </Text>
+              </TouchableOpacity>
+
+              {/* GPS Coordinates Feedback Banner */}
+              {detectedCoords && (
+                <View style={styles.gpsConfirmedBox}>
+                  <View style={styles.gpsConfirmedHeader}>
+                    <Ionicons name="shield-checkmark" size={15} color="#065F46" />
+                    <Text style={styles.gpsConfirmedTitle}>High-Precision GPS Captured</Text>
+                    {gpsAccuracy != null && (
+                      <View style={styles.gpsAccuracyBadge}>
+                        <Text style={styles.gpsAccuracyText}>±{Math.round(gpsAccuracy)}m accuracy</Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text style={styles.gpsCoordsText}>
+                    Latitude: {detectedCoords.lat.toFixed(5)}  •  Longitude: {detectedCoords.lng.toFixed(5)}
+                  </Text>
+                  {gpsLocationLabel ? (
+                    <Text style={styles.gpsResolvedText} numberOfLines={2}>
+                      📍 {gpsLocationLabel}
+                    </Text>
+                  ) : null}
+                </View>
+              )}
+
+              <View style={styles.orDividerRow}>
+                <View style={styles.orDividerLine} />
+                <Text style={styles.orDividerText}>or enter address details manually</Text>
+                <View style={styles.orDividerLine} />
+              </View>
+
               <Text style={styles.inputLabel}>Address Label</Text>
               <View style={styles.labelPickerRow}>
                 {['Home', 'Office', 'Site'].map((lbl) => (
@@ -967,16 +1673,29 @@ export default function ProfileScreen({ navigation }: any) {
                 ))}
               </View>
 
-              <Text style={styles.inputLabel}>House / Flat / Street *</Text>
+              <Text style={styles.inputLabel}>House / Flat / Building Name</Text>
               <TextInput
                 style={styles.textInput}
-                value={addrStreet}
-                onChangeText={setAddrStreet}
+                value={addrHouseNumber}
+                onChangeText={setAddrHouseNumber}
                 placeholder="e.g. Flat 402, Lotus Court"
                 placeholderTextColor={COLORS.textMuted}
               />
 
-              <Text style={styles.inputLabel}>Locality / Landmark</Text>
+              <Text style={styles.inputLabel}>Street / Road / Colony *</Text>
+              <TextInput
+                style={[styles.textInput, addrErrors.street ? styles.inputError : null]}
+                value={addrStreet}
+                onChangeText={(t) => {
+                  setAddrStreet(t);
+                  if (addrErrors.street) setAddrErrors((prev) => ({ ...prev, street: undefined }));
+                }}
+                placeholder="e.g. Main Ring Road, Sector B"
+                placeholderTextColor={COLORS.textMuted}
+              />
+              {addrErrors.street && <Text style={styles.fieldErrorText}>{addrErrors.street}</Text>}
+
+              <Text style={styles.inputLabel}>Locality / Sector / Area</Text>
               <TextInput
                 style={styles.textInput}
                 value={addrLocality}
@@ -989,24 +1708,32 @@ export default function ProfileScreen({ navigation }: any) {
                 <View style={{ flex: 1, marginRight: 8 }}>
                   <Text style={styles.inputLabel}>City *</Text>
                   <TextInput
-                    style={styles.textInput}
+                    style={[styles.textInput, addrErrors.city ? styles.inputError : null]}
                     value={addrCity}
-                    onChangeText={setAddrCity}
-                    placeholder="e.g. Noida"
+                    onChangeText={(t) => {
+                      setAddrCity(t);
+                      if (addrErrors.city) setAddrErrors((prev) => ({ ...prev, city: undefined }));
+                    }}
+                    placeholder="e.g. Lucknow"
                     placeholderTextColor={COLORS.textMuted}
                   />
+                  {addrErrors.city && <Text style={styles.fieldErrorText}>{addrErrors.city}</Text>}
                 </View>
 
                 <View style={{ flex: 1 }}>
                   <Text style={styles.inputLabel}>PIN Code *</Text>
                   <TextInput
-                    style={styles.textInput}
+                    style={[styles.textInput, addrErrors.zip ? styles.inputError : null]}
                     value={addrZip}
-                    onChangeText={setAddrZip}
-                    placeholder="201309"
+                    onChangeText={(t) => {
+                      setAddrZip(t);
+                      if (addrErrors.zip) setAddrErrors((prev) => ({ ...prev, zip: undefined }));
+                    }}
+                    placeholder="226010"
                     placeholderTextColor={COLORS.textMuted}
                     keyboardType="numeric"
                   />
+                  {addrErrors.zip && <Text style={styles.fieldErrorText}>{addrErrors.zip}</Text>}
                 </View>
               </View>
 
@@ -1022,20 +1749,25 @@ export default function ProfileScreen({ navigation }: any) {
               <View style={styles.modalActionRow}>
                 <TouchableOpacity
                   style={styles.cancelBtn}
-                  onPress={() => setShowAddAddressModal(false)}
+                  onPress={() => {
+                    setShowAddAddressModal(false);
+                    setEditingAddressId(null);
+                  }}
                 >
                   <Text style={styles.cancelBtnText}>Cancel</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
                   style={styles.saveBtn}
-                  onPress={handleAddAddress}
+                  onPress={handleSaveAddress}
                   disabled={savingAddress}
                 >
                   {savingAddress ? (
                     <ActivityIndicator size="small" color="#FFFFFF" />
                   ) : (
-                    <Text style={styles.saveBtnText}>Save Address</Text>
+                    <Text style={styles.saveBtnText}>
+                      {editingAddressId ? 'Update Address' : 'Save Address'}
+                    </Text>
                   )}
                 </TouchableOpacity>
               </View>
@@ -1480,6 +2212,117 @@ export default function ProfileScreen({ navigation }: any) {
           </View>
         </View>
       </Modal>
+
+      {/* ========================================================================= */}
+      {/* MODAL 7: CHANGE PASSWORD & ACCOUNT SECURITY                                */}
+      {/* ========================================================================= */}
+      <Modal visible={showPasswordModal} animationType="slide" transparent>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.modalOverlay}
+        >
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <View>
+                <Text style={styles.modalTitle}>Change Password</Text>
+                <Text style={styles.modalHeaderSubtitle}>Update your password for WorkLogy account security</Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowPasswordModal(false)}>
+                <Ionicons name="close" size={24} color={COLORS.textDark} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text style={styles.inputLabel}>Current Password *</Text>
+              <View style={[styles.passwordInputContainer, passwordErrors.current ? styles.inputError : null]}>
+                <TextInput
+                  style={styles.passwordTextInput}
+                  value={currentPassword}
+                  onChangeText={(val) => {
+                    setCurrentPassword(val);
+                    if (passwordErrors.current) setPasswordErrors((prev) => ({ ...prev, current: undefined }));
+                  }}
+                  placeholder="Enter current password"
+                  placeholderTextColor={COLORS.textMuted}
+                  secureTextEntry={!showCurrentPass}
+                />
+                <TouchableOpacity
+                  style={styles.eyeBtn}
+                  onPress={() => setShowCurrentPass(!showCurrentPass)}
+                >
+                  <Ionicons name={showCurrentPass ? 'eye-off-outline' : 'eye-outline'} size={18} color={COLORS.textSecondary} />
+                </TouchableOpacity>
+              </View>
+              {passwordErrors.current && <Text style={styles.fieldErrorText}>{passwordErrors.current}</Text>}
+
+              <Text style={styles.inputLabel}>New Password *</Text>
+              <View style={[styles.passwordInputContainer, passwordErrors.new ? styles.inputError : null]}>
+                <TextInput
+                  style={styles.passwordTextInput}
+                  value={newPassword}
+                  onChangeText={(val) => {
+                    setNewPassword(val);
+                    if (passwordErrors.new) setPasswordErrors((prev) => ({ ...prev, new: undefined }));
+                  }}
+                  placeholder="At least 6 characters"
+                  placeholderTextColor={COLORS.textMuted}
+                  secureTextEntry={!showNewPass}
+                />
+                <TouchableOpacity
+                  style={styles.eyeBtn}
+                  onPress={() => setShowNewPass(!showNewPass)}
+                >
+                  <Ionicons name={showNewPass ? 'eye-off-outline' : 'eye-outline'} size={18} color={COLORS.textSecondary} />
+                </TouchableOpacity>
+              </View>
+              {passwordErrors.new && <Text style={styles.fieldErrorText}>{passwordErrors.new}</Text>}
+
+              <Text style={styles.inputLabel}>Confirm New Password *</Text>
+              <View style={[styles.passwordInputContainer, passwordErrors.confirm ? styles.inputError : null]}>
+                <TextInput
+                  style={styles.passwordTextInput}
+                  value={confirmPassword}
+                  onChangeText={(val) => {
+                    setConfirmPassword(val);
+                    if (passwordErrors.confirm) setPasswordErrors((prev) => ({ ...prev, confirm: undefined }));
+                  }}
+                  placeholder="Re-enter new password"
+                  placeholderTextColor={COLORS.textMuted}
+                  secureTextEntry={!showConfirmPass}
+                />
+                <TouchableOpacity
+                  style={styles.eyeBtn}
+                  onPress={() => setShowConfirmPass(!showConfirmPass)}
+                >
+                  <Ionicons name={showConfirmPass ? 'eye-off-outline' : 'eye-outline'} size={18} color={COLORS.textSecondary} />
+                </TouchableOpacity>
+              </View>
+              {passwordErrors.confirm && <Text style={styles.fieldErrorText}>{passwordErrors.confirm}</Text>}
+
+              <View style={styles.modalActionRow}>
+                <TouchableOpacity
+                  style={styles.cancelBtn}
+                  onPress={() => setShowPasswordModal(false)}
+                >
+                  <Text style={styles.cancelBtnText}>Cancel</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.saveBtn}
+                  onPress={handleSavePassword}
+                  disabled={savingPassword}
+                >
+                  {savingPassword ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.saveBtnText}>Update Password</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
@@ -1526,7 +2369,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: 16,
     paddingTop: 16,
-    paddingBottom: 100
+    paddingBottom: 20
   },
   profileCard: {
     backgroundColor: '#FFFFFF',
@@ -1906,6 +2749,17 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#F1F5F9'
   },
+  addressActionsLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1
+  },
+  addressActionsRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginLeft: 'auto'
+  },
   selectAddressBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1922,8 +2776,95 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: COLORS.primary
   },
+  editAddressBtn: {
+    padding: 6,
+    borderRadius: 8,
+    backgroundColor: '#F0FDF4'
+  },
   deleteAddressBtn: {
-    padding: 4
+    padding: 6,
+    borderRadius: 8,
+    backgroundColor: '#FEF2F2'
+  },
+  gpsDetectBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.primary,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    gap: 8,
+    marginTop: 6,
+    marginBottom: 10,
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 2
+  },
+  gpsDetectBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF'
+  },
+  gpsConfirmedBox: {
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 12
+  },
+  gpsConfirmedHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6
+  },
+  gpsConfirmedTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#065F46'
+  },
+  gpsAccuracyBadge: {
+    backgroundColor: '#D1FAE5',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    marginLeft: 'auto'
+  },
+  gpsAccuracyText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#047857'
+  },
+  gpsCoordsText: {
+    fontSize: 11,
+    color: '#065F46',
+    fontWeight: '600',
+    marginTop: 4
+  },
+  gpsResolvedText: {
+    fontSize: 11,
+    color: '#047857',
+    marginTop: 2
+  },
+  orDividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 10,
+    gap: 8
+  },
+  orDividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#E2E8F0'
+  },
+  orDividerText: {
+    fontSize: 11,
+    color: COLORS.textMuted,
+    fontWeight: '600',
+    textTransform: 'uppercase'
   },
   emptyAddressBox: {
     backgroundColor: '#FFFFFF',
@@ -2365,5 +3306,154 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: 20,
     lineHeight: 16
+  },
+  modalHeaderSubtitle: {
+    fontSize: 11,
+    color: COLORS.textSecondary,
+    marginTop: 2
+  },
+  fieldErrorText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#DC2626',
+    marginTop: 4,
+    marginLeft: 2
+  },
+  inputError: {
+    borderColor: '#EF4444',
+    backgroundColor: '#FEF2F2'
+  },
+  avatarEditSection: {
+    alignItems: 'center',
+    marginTop: 6,
+    marginBottom: 16
+  },
+  avatarPreviewWrapper: {
+    position: 'relative',
+    marginBottom: 10
+  },
+  avatarPreviewImage: {
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+    borderWidth: 3,
+    borderColor: COLORS.primary
+  },
+  avatarPreviewPlaceholder: {
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+    backgroundColor: '#ECFDF5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#A7F3D0'
+  },
+  avatarPreviewInitials: {
+    fontSize: 36,
+    fontWeight: '900',
+    color: COLORS.primary
+  },
+  newPhotoBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 10,
+    gap: 2,
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF'
+  },
+  newPhotoBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#FFFFFF'
+  },
+  avatarActionRow: {
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'center'
+  },
+  avatarPickBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    paddingVertical: 7,
+    paddingHorizontal: 14,
+    borderRadius: 10
+  },
+  avatarPickBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: COLORS.primary,
+    marginLeft: 6
+  },
+  avatarRemoveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: 10
+  },
+  avatarRemoveBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#DC2626',
+    marginLeft: 4
+  },
+  avatarHelperText: {
+    fontSize: 10,
+    color: COLORS.textMuted,
+    marginTop: 8,
+    textAlign: 'center'
+  },
+  passwordInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 10,
+    paddingRight: 10
+  },
+  passwordTextInput: {
+    flex: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 13,
+    color: COLORS.textDark
+  },
+  eyeBtn: {
+    padding: 6
+  },
+  permissionStatusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8
+  },
+  permissionStatusGranted: {
+    backgroundColor: '#DCFCE7'
+  },
+  permissionStatusPending: {
+    backgroundColor: '#FEF3C7'
+  },
+  permissionStatusText: {
+    fontSize: 10,
+    fontWeight: '800'
+  },
+  permissionTextGranted: {
+    color: '#15803D'
+  },
+  permissionTextPending: {
+    color: '#B45309'
   }
 });

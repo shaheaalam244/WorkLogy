@@ -12,7 +12,7 @@ interface AuthContextType {
   logout: () => Promise<void>;
   switchRole: (role: 'customer' | 'vendor') => Promise<void>;
   refreshProfile: () => Promise<void>;
-  updateProfile: (data: { name: string; phone?: string; avatar?: string }) => Promise<void>;
+  updateProfile: (data: { name?: string; email?: string; phone?: string; avatar?: string }) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -89,8 +89,13 @@ export const AuthProvider = ({ children }: { children?: React.ReactNode }) => {
     }
   };
 
-  const updateProfile = async (data: { name: string; phone?: string; avatar?: string }) => {
-    const res = await api.auth.updateDetails(data);
+  const updateProfile = async (data: { name?: string; email?: string; phone?: string; avatar?: string }) => {
+    let res: any;
+    if (data.email) {
+      res = await api.auth.updateProfile(data);
+    } else {
+      res = await api.auth.updateDetails(data);
+    }
     if (res?.user) {
       setUser(res.user);
     }

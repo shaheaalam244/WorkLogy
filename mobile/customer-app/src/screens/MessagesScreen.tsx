@@ -17,6 +17,7 @@ import { Ionicons, Feather, MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../hooks/useAuth';
 import { api } from '../api/client';
 import { socketService } from '../services/socketService';
+import { dataSyncService } from '../services/dataSyncService';
 import { COLORS, SOCKET_EVENTS } from '../constants';
 import { formatConversationTime, getStatusColor, formatStatusText } from '../utils/formatters';
 import type { ConversationItem, ConversationParticipant } from '../types';
@@ -24,6 +25,8 @@ import type { ConversationItem, ConversationParticipant } from '../types';
 const STATUSBAR_HEIGHT = Platform.OS === 'android' ? (StatusBar.currentHeight || 24) : (Platform.OS === 'ios' ? 44 : 0);
 
 type FilterType = 'all' | 'unread';
+
+let cachedConversations: ConversationItem[] = [];
 
 export default function MessagesScreen({ navigation }: any) {
   const insets = useSafeAreaInsets();
@@ -33,8 +36,8 @@ export default function MessagesScreen({ navigation }: any) {
   );
   const { user, isLoading: authLoading } = useAuth();
 
-  const [conversations, setConversations] = useState<ConversationItem[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [conversations, setConversations] = useState<ConversationItem[]>(cachedConversations);
+  const [loading, setLoading] = useState<boolean>(cachedConversations.length === 0);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [isSessionExpired, setIsSessionExpired] = useState<boolean>(false);
@@ -44,9 +47,10 @@ export default function MessagesScreen({ navigation }: any) {
   const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(new Set());
 
   const isMountedRef = useRef<boolean>(true);
+  const isFetchingRef = useRef<boolean>(false);
 
   // 1. Fetch Conversations from Backend
-  const loadConversations = useCallback(async (isPullRefresh: boolean = false) => {
+  const loadConversations = useCallback(async (isSilentOrPull: boolean = false) => {
     if (!user) {
       if (isMountedRef.current) {
         setLoading(false);
@@ -55,8 +59,13 @@ export default function MessagesScreen({ navigation }: any) {
       return;
     }
 
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
+
     try {
-      if (!isPullRefresh) setLoading(true);
+      if (!isSilentOrPull && conversations.length === 0 && cachedConversations.length === 0) {
+        setLoading(true);
+      }
       setError(null);
       setIsSessionExpired(false);
 
@@ -65,6 +74,7 @@ export default function MessagesScreen({ navigation }: any) {
       if (!isMountedRef.current) return;
 
       if (res?.success && Array.isArray(res.conversations)) {
+        cachedConversations = res.conversations;
         setConversations(res.conversations);
 
         // Extract other participants (vendors) to query online status
@@ -77,7 +87,9 @@ export default function MessagesScreen({ navigation }: any) {
 
         checkOnlinePresence(vendorIds);
       } else {
-        setConversations([]);
+        if (conversations.length === 0) {
+          setConversations([]);
+        }
       }
     } catch (err: any) {
       if (!isMountedRef.current) return;
@@ -92,16 +104,17 @@ export default function MessagesScreen({ navigation }: any) {
       ) {
         setIsSessionExpired(true);
         setError('Your login session has expired. Please sign in again.');
-      } else {
+      } else if (conversations.length === 0 && cachedConversations.length === 0) {
         setError(err?.message || 'Could not load messages. Please check your network connection.');
       }
     } finally {
+      isFetchingRef.current = false;
       if (isMountedRef.current) {
         setLoading(false);
         setRefreshing(false);
       }
     }
-  }, [user?._id]);
+  }, [user?._id, conversations.length]);
 
   // 2. Presence Checker
   const checkOnlinePresence = useCallback((userIds: string[]) => {
@@ -135,7 +148,20 @@ export default function MessagesScreen({ navigation }: any) {
 
     // C. User is authenticated, load conversations & subscribe to socket
     setIsSessionExpired(false);
-    loadConversations();
+    loadConversations(cachedConversations.length > 0);
+
+    const unsubSyncMsg = dataSyncService.subscribe('MESSAGES_CHANGED', () => {
+      loadConversations(true);
+    });
+
+    const unsubSyncRead = dataSyncService.subscribe('MESSAGES_READ', (payload) => {
+      if (payload?.conversationId) {
+        setConversations((prev) =>
+          prev.map((c) => (String(c._id) === String(payload.conversationId) ? { ...c, unreadCount: 0 } : c))
+        );
+      }
+      loadConversations(true);
+    });
 
     let socketInstance: any = null;
 
@@ -216,6 +242,8 @@ export default function MessagesScreen({ navigation }: any) {
 
     return () => {
       isMountedRef.current = false;
+      unsubSyncMsg();
+      unsubSyncRead();
       if (socketInstance) {
         socketInstance.off('new_message_notification');
         socketInstance.off(SOCKET_EVENTS.RECEIVE_MESSAGE);
@@ -223,7 +251,7 @@ export default function MessagesScreen({ navigation }: any) {
         socketInstance.off('messages_read');
       }
     };
-  }, [user?._id, authLoading]);
+  }, [user?._id, authLoading, loadConversations]);
 
   // 4. Refresh & Helpers
   const handleRefresh = () => {
@@ -378,7 +406,7 @@ export default function MessagesScreen({ navigation }: any) {
   if (authLoading) {
     return (
       <View style={styles.container}>
-        <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" translucent={true} />
+        <StatusBar barStyle="dark-content" />
         <View style={[styles.header, { paddingTop: topInset + (Platform.OS === 'ios' ? 10 : 8) }]}>
           <View style={styles.headerTopRow}>
             <Text style={styles.screenTitle}>Messages</Text>
@@ -396,7 +424,7 @@ export default function MessagesScreen({ navigation }: any) {
   if (!user) {
     return (
       <View style={styles.container}>
-        <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" translucent={true} />
+        <StatusBar barStyle="dark-content" />
         <View style={[styles.header, { paddingTop: topInset + (Platform.OS === 'ios' ? 10 : 8) }]}>
           <View style={styles.headerTopRow}>
             <Text style={styles.screenTitle}>Messages</Text>
@@ -437,7 +465,7 @@ export default function MessagesScreen({ navigation }: any) {
   if (isSessionExpired) {
     return (
       <View style={styles.container}>
-        <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" translucent={true} />
+        <StatusBar barStyle="dark-content" />
         <View style={[styles.header, { paddingTop: topInset + (Platform.OS === 'ios' ? 10 : 8) }]}>
           <View style={styles.headerTopRow}>
             <Text style={styles.screenTitle}>Messages</Text>
@@ -468,7 +496,7 @@ export default function MessagesScreen({ navigation }: any) {
   // STATE 4, 5, 6, 7: Authenticated Customer with Messages / Loading / Network Error / Empty
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" translucent={true} />
+      <StatusBar barStyle="dark-content" />
 
       {/* Header Bar */}
       <View style={[styles.header, { paddingTop: topInset + (Platform.OS === 'ios' ? 10 : 8) }]}>
@@ -735,7 +763,7 @@ const styles = StyleSheet.create({
   listContainer: {
     paddingHorizontal: 16,
     paddingTop: 12,
-    paddingBottom: 100,
+    paddingBottom: 20,
     gap: 10
   },
   convCard: {

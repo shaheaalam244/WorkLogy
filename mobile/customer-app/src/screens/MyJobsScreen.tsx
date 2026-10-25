@@ -7,10 +7,13 @@ import {
   TouchableOpacity,
   RefreshControl,
   ActivityIndicator,
-  Alert
+  Alert,
+  LayoutAnimation,
+  Platform
 } from 'react-native';
 import { api } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
+import { dataSyncService } from '../services/dataSyncService';
 import { COLORS } from '../theme/colors';
 import { formatCurrency, formatDate, getStatusColor, formatStatusText } from '../utils/formatters';
 import type { Booking } from '../types';
@@ -20,6 +23,7 @@ export default function MyJobsScreen({ navigation }: any) {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'all' | 'active' | 'completed' | 'cancelled'>('active');
 
   useEffect(() => {
@@ -29,16 +33,29 @@ export default function MyJobsScreen({ navigation }: any) {
       return;
     }
     loadBookings();
-  }, [user, activeTab]);
+  }, [user?._id]);
 
-  const loadBookings = async () => {
+  // Subscribe to centralized data synchronization events
+  useEffect(() => {
+    const unsubscribe = dataSyncService.subscribe('BOOKINGS_CHANGED', () => {
+      loadBookings(true);
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  const loadBookings = async (silent: boolean = false) => {
     if (!user) {
       setLoading(false);
       setRefreshing(false);
       return;
     }
     try {
-      setLoading(true);
+      // Only display the full-screen spinner if it is the very first load and no bookings exist yet
+      if (!silent && bookings.length === 0) {
+        setLoading(true);
+      }
       const res = await api.bookings.getMyBookings();
       if (res?.bookings) {
         setBookings(res.bookings);
@@ -55,13 +72,20 @@ export default function MyJobsScreen({ navigation }: any) {
 
   const handleRefresh = () => {
     setRefreshing(true);
-    loadBookings();
+    loadBookings(true);
   };
 
-  const handleCancel = (bookingId: string) => {
+  const handleCancel = (item: any) => {
+    if (cancellingId) return;
+
+    // A record is an unbooked open request ONLY if it is a job request without an assigned technician
+    const isUnbookedJob = Boolean(item.isJobRequest && !item.vendor);
+    const identifier = item._id || item.jobId || item.bookingReference;
+    const refCode = item.bookingReference || (item._id ? `#${item._id.slice(-6).toUpperCase()}` : '');
+
     Alert.alert(
       'Cancel Service',
-      'Are you sure you want to cancel this booking? Cancellation before technician dispatch incurs zero fee.',
+      `Are you sure you want to cancel booking ${refCode}? Cancellation before technician dispatch incurs zero fee.`,
       [
         { text: 'Keep Booking', style: 'cancel' },
         {
@@ -69,11 +93,59 @@ export default function MyJobsScreen({ navigation }: any) {
           style: 'destructive',
           onPress: async () => {
             try {
-              await api.bookings.cancelBooking(bookingId, 'Customer requested cancellation via mobile app.');
-              Alert.alert('Booking Cancelled', 'Your request has been cancelled.');
-              loadBookings();
+              // 1. Show spinner strictly on this item's Cancel button
+              setCancellingId(item._id);
+
+              // 2. Perform API cancellation
+              try {
+                if (isUnbookedJob) {
+                  await api.jobs.cancelJob(identifier, 'Customer requested cancellation via mobile app.');
+                } else {
+                  await api.bookings.cancelBooking(identifier, 'Customer requested cancellation via mobile app.');
+                }
+              } catch (initialErr: any) {
+                // If route or resource type mismatched, attempt graceful cross-fallback
+                if (
+                  initialErr?.message?.includes('Route not found') ||
+                  initialErr?.message?.includes('not found') ||
+                  initialErr?.status === 404
+                ) {
+                  if (isUnbookedJob) {
+                    await api.bookings.cancelBooking(identifier, 'Customer requested cancellation via mobile app.');
+                  } else {
+                    await api.jobs.cancelJob(identifier, 'Customer requested cancellation via mobile app.');
+                  }
+                } else {
+                  throw initialErr;
+                }
+              }
+
+              // 3. Smoothly animate and update ONLY this specific card in-place without whole page reload
+              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+              setBookings((prev) =>
+                prev.map((b) =>
+                  b._id === item._id || (b.bookingReference && b.bookingReference === item.bookingReference)
+                    ? { ...b, status: 'cancelled' }
+                    : b
+                )
+              );
+
+              // 4. Notify other screens (e.g. ProfileScreen, HomeScreen) to update their counters in background
+              dataSyncService.notify('BOOKINGS_CHANGED', { bookingId: item._id, status: 'cancelled' });
+
+              // 5. Silent background re-sync (ZERO full page flash or scroll jump)
+              await loadBookings(true);
             } catch (err: any) {
-              Alert.alert('Error', err.message || 'Could not cancel booking.');
+              Alert.alert(
+                'Cancellation Failed',
+                err.message || 'Could not cancel booking. Please check your connection and try again.',
+                [
+                  { text: 'Close', style: 'cancel' },
+                  { text: 'Retry', onPress: () => handleCancel(item) }
+                ]
+              );
+            } finally {
+              setCancellingId(null);
             }
           }
         }
@@ -176,16 +248,44 @@ export default function MyJobsScreen({ navigation }: any) {
           </Text>
           <View style={styles.actionRow}>
             {canCancel && (
-              <TouchableOpacity style={styles.cancelBtn} onPress={() => handleCancel(item._id)}>
-                <Text style={styles.cancelBtnText}>Cancel</Text>
+              <TouchableOpacity
+                style={[styles.cancelBtn, cancellingId === item._id && { opacity: 0.6 }]}
+                onPress={() => handleCancel(item)}
+                disabled={Boolean(cancellingId)}
+              >
+                {cancellingId === item._id ? (
+                  <ActivityIndicator size="small" color="#EF4444" />
+                ) : (
+                  <Text style={styles.cancelBtnText}>Cancel</Text>
+                )}
               </TouchableOpacity>
             )}
             {isCompleted && !item.hasReview && (
               <TouchableOpacity
                 style={styles.reviewBtn}
-                onPress={() => navigation.navigate('ReviewModal', { bookingId: item._id, vendorName: item.vendor?.businessName })}
+                onPress={() => {
+                  const targetVendorId = item.vendor?._id || item.vendor?.id || item.vendor?.user?._id || item.vendor;
+                  navigation.navigate('ReviewModal', {
+                    bookingId: item._id,
+                    vendorName: item.vendor?.businessName || item.vendor?.name,
+                    vendorId: targetVendorId
+                  });
+                }}
               >
                 <Text style={styles.reviewBtnText}>Write Review ⭐</Text>
+              </TouchableOpacity>
+            )}
+            {isCompleted && item.hasReview && (
+              <TouchableOpacity
+                style={[styles.reviewBtn, { backgroundColor: '#ECFDF5', borderColor: '#A7F3D0' }]}
+                onPress={() => {
+                  const targetVendorId = item.vendor?._id || item.vendor?.id || item.vendor?.user?._id || item.vendor;
+                  if (targetVendorId) {
+                    navigation.navigate('ProfessionalProfile', { vendorId: targetVendorId, vendor: item.vendor });
+                  }
+                }}
+              >
+                <Text style={[styles.reviewBtnText, { color: '#06684F' }]}>View Review ⭐</Text>
               </TouchableOpacity>
             )}
             <TouchableOpacity
@@ -259,7 +359,7 @@ export default function MyJobsScreen({ navigation }: any) {
       ) : (
         <FlatList
           data={filteredBookings}
-          keyExtractor={(item: Booking) => item._id}
+          keyExtractor={(item: any) => item._id || item.bookingReference || String(Math.random())}
           renderItem={renderBookingCard}
           contentContainerStyle={styles.listContent}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}
@@ -318,7 +418,7 @@ const styles = StyleSheet.create({
   },
   listContent: {
     padding: 16,
-    paddingBottom: 100,
+    paddingBottom: 20,
     gap: 12
   },
   card: {

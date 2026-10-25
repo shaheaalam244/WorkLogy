@@ -6,6 +6,11 @@ export const customerAPI = {
     return res.data;
   },
 
+  getStats: async () => {
+    const res = await api.get('/customer/stats');
+    return res.data;
+  },
+
   getBookings: async (params) => {
     const res = await api.get('/customer/bookings', { params });
     return res.data;

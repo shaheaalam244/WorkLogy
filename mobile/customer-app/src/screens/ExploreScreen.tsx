@@ -269,11 +269,7 @@ export default function ExploreScreen({ navigation, route }: any) {
 
   return (
     <View style={styles.screenWrapper}>
-      <StatusBar
-        barStyle="dark-content"
-        backgroundColor="#FFFFFF"
-        translucent={Platform.OS === 'android'}
-      />
+      <StatusBar barStyle="dark-content" />
 
       {/* ══════════════════════════════════════════════════════════════════
           1. HEADER (Explore Title, Location Selector, Notification Bell)
@@ -808,7 +804,7 @@ const styles = StyleSheet.create({
     flex: 1
   },
   scrollBody: {
-    paddingBottom: 100
+    paddingBottom: 20
   },
   centerContainer: {
     flex: 1,

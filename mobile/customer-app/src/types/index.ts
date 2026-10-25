@@ -118,10 +118,23 @@ export interface Job {
     maxAmount?: number;
   };
   location?: {
+    addressLabel?: string;
     address?: string;
+    houseNumber?: string;
+    street?: string;
+    locality?: string;
+    landmark?: string;
     city?: string;
+    state?: string;
     zipCode?: string;
+    coordinates?: {
+      lat: number;
+      lng: number;
+    };
+    locationSource?: string;
+    locationAccuracyMeters?: number | null;
   };
+  accessInstructions?: string;
   selectedVendor?: string | any;
   proposalsCount?: number;
   createdAt: string;

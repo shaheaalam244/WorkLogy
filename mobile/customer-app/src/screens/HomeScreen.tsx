@@ -17,12 +17,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useAuth } from '../hooks/useAuth';
 import { api } from '../api/client';
-import { secureStorage } from '../storage/secureStorage';
 import { STORAGE_KEYS } from '../constants';
 import { COLORS } from '../theme/colors';
-import { getStoredLocation, saveLocation } from '../services/locationService';
+import { getStoredLocation, saveLocation, resolveActiveLocation, DEFAULT_LOCATION, type DetectedLocation } from '../services/locationService';
 import { formatCurrency, formatDate, getStatusColor, formatStatusText } from '../utils/formatters';
 import { getServiceImage } from '../utils/serviceImages';
+import { dataSyncService } from '../services/dataSyncService';
 import LocationModal from '../components/LocationModal';
 import type { ServiceCategory, Booking, ServiceAddress } from '../types';
 
@@ -88,33 +88,6 @@ const PROMO_SLIDES = [
   }
 ];
 
-// ── Verified Customer Testimonials (Matching Screenshot 1) ──
-const FALLBACK_TESTIMONIALS = [
-  {
-    id: 'rev-1',
-    quote: 'Hired an AC technician for foam jet servicing. Extremely polite, transparent pricing, and arrived on time!',
-    author: 'Priya Srivastava',
-    location: 'Hazratganj • AC Servicing',
-    avatarLetter: 'P',
-    rating: 5
-  },
-  {
-    id: 'rev-2',
-    quote: 'WorkLogy made house repairs completely hassle-free. Direct communication with verified pros!',
-    author: 'Mohd. Sahil',
-    location: 'Aliganj • Wiring & Installation',
-    avatarLetter: 'M',
-    rating: 5
-  },
-  {
-    id: 'rev-3',
-    quote: 'Prompt emergency plumbing visit within 35 minutes when our bathroom tap burst. Highly recommended!',
-    author: 'Amitabh Verma',
-    location: 'Gomti Nagar • Emergency Plumbing',
-    avatarLetter: 'A',
-    rating: 5
-  }
-];
 
 interface VerifiedVendor {
   _id: string;
@@ -126,9 +99,72 @@ interface VerifiedVendor {
   reviewCount?: number;
   experienceYears?: number;
   city?: string;
+  locality?: string;
+  zoneId?: string;
+  zoneName?: string;
+  distanceKm?: number;
+  distanceText?: string;
+  isNearest?: boolean;
+  isApproximateDistance?: boolean;
+  verifiedBadge?: { status?: string };
   hourlyRate?: number;
   isAvailable?: boolean;
 }
+
+const VERIFIED_FALLBACK_PROS: VerifiedVendor[] = [
+  {
+    _id: '6ad8929d4bd0f2c1cd3f31ac',
+    businessName: 'Vikram Power Solutions',
+    name: 'Vikram Electrician',
+    user: { name: 'Vikram Electrician', phone: '9876500003' },
+    categories: [{ name: 'Electrical Services', slug: 'electrical-services' }],
+    rating: 5.0,
+    reviewCount: 38,
+    experienceYears: 6,
+    city: 'Lucknow',
+    hourlyRate: 299,
+    isAvailable: true
+  },
+  {
+    _id: '6ad8929d4bd0f2c1cd3f31a5',
+    businessName: 'Suresh Expert Pipes',
+    name: 'Suresh Plumber',
+    user: { name: 'Suresh Plumber', phone: '9876500002' },
+    categories: [{ name: 'Plumbing Services', slug: 'plumbing-services' }],
+    rating: 4.9,
+    reviewCount: 52,
+    experienceYears: 5,
+    city: 'Lucknow',
+    hourlyRate: 249,
+    isAvailable: true
+  },
+  {
+    _id: '6accc342d9a98de465ce847f',
+    businessName: 'FlowPro Master Plumbing',
+    name: 'Elena Rostova',
+    user: { name: 'Elena Rostova', phone: '+1 (555) 456-7890' },
+    categories: [{ name: 'Plumbing Services', slug: 'plumbing-services' }],
+    rating: 4.92,
+    reviewCount: 98,
+    experienceYears: 9,
+    city: 'Lucknow',
+    hourlyRate: 350,
+    isAvailable: true
+  },
+  {
+    _id: '6accc343d9a98de465ce8480',
+    businessName: 'Precision Carpentry & Millwork',
+    name: 'Carlos Mendez',
+    user: { name: 'Carlos Mendez', phone: '+1 (555) 567-8901' },
+    categories: [{ name: 'Carpentry & Furniture', slug: 'carpentry-furniture' }],
+    rating: 4.88,
+    reviewCount: 76,
+    experienceYears: 10,
+    city: 'Lucknow',
+    hourlyRate: 399,
+    isAvailable: true
+  }
+];
 
 export default function HomeScreen({ navigation }: any) {
   const insets = useSafeAreaInsets();
@@ -139,29 +175,54 @@ export default function HomeScreen({ navigation }: any) {
   const { user } = useAuth();
   const [categories, setCategories] = useState<ServiceCategory[]>([]);
   const [activeBookings, setActiveBookings] = useState<Booking[]>([]);
-  const [nearbyVendors, setNearbyVendors] = useState<VerifiedVendor[]>([]);
+  const [nearbyVendors, setNearbyVendors] = useState<VerifiedVendor[]>(VERIFIED_FALLBACK_PROS);
   const [publishedServices, setPublishedServices] = useState<any[]>([]);
-  const [customerReviews, setCustomerReviews] = useState<any[]>(FALLBACK_TESTIMONIALS);
-  const [unreadNotifications, setUnreadNotifications] = useState(3); // default badge matching screenshot
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentLocation, setCurrentLocation] = useState('Lucknow, Gomti Nagar');
   const [showLocationModal, setShowLocationModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activePromoIndex, setActivePromoIndex] = useState(0);
-  const [activeReviewIndex, setActiveReviewIndex] = useState(0);
   const [favoritedVendors, setFavoritedVendors] = useState<Record<string, boolean>>({});
 
   const promoScrollRef = useRef<any>(null);
-  const promoTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const promoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const initHome = async () => {
-      const detectedCity = await restoreLocation();
-      await loadHomeData(detectedCity);
+      const activeLoc = await restoreLocation();
+      await loadHomeData({
+        city: activeLoc.city || 'Lucknow',
+        locality: activeLoc.locality,
+        zoneId: activeLoc.zoneId,
+        lat: activeLoc.coordinates?.lat,
+        lng: activeLoc.coordinates?.lng,
+        mode: 'nearby'
+      });
     };
     initHome();
   }, [user]);
+
+  // Periodic and focus-based unread notification count sync
+  useEffect(() => {
+    if (!user) {
+      setUnreadNotifications(0);
+      return;
+    }
+    const syncUnread = async () => {
+      try {
+        const res = await api.notifications.getUnreadCount();
+        const count = typeof res?.unreadCount === 'number' ? res.unreadCount : (typeof res?.count === 'number' ? res.count : 0);
+        setUnreadNotifications(count);
+      } catch {
+        // ignore background fetch failures
+      }
+    };
+    syncUnread();
+    const interval = setInterval(syncUnread, 15000);
+    return () => clearInterval(interval);
+  }, [user, navigation?.currentRoute]);
 
   // Intercept back button to dismiss LocationModal first if open
   useEffect(() => {
@@ -190,30 +251,92 @@ export default function HomeScreen({ navigation }: any) {
     };
   }, []);
 
-  const restoreLocation = async (): Promise<string> => {
+  // Real-time synchronization of active bookings banner and orders
+  useEffect(() => {
+    const unsub = dataSyncService.subscribe('BOOKINGS_CHANGED', () => {
+      if (user) {
+        api.bookings.getMyBookings()
+          .then((res) => {
+            if (res?.bookings) {
+              setActiveBookings(res.bookings.filter((b) => b.status !== 'completed' && b.status !== 'cancelled'));
+            }
+          })
+          .catch(() => {});
+      }
+    });
+    return () => {
+      unsub();
+    };
+  }, [user?._id]);
+
+  const restoreLocation = async (): Promise<DetectedLocation> => {
     try {
-      const loc = await getStoredLocation(true);
-      if (loc?.fullAddress) {
-        setCurrentLocation(loc.fullAddress);
-        return loc.city || loc.fullAddress.split(',')[0].trim();
+      const activeLoc = await resolveActiveLocation({ allowGpsDetect: false });
+      if (activeLoc?.fullAddress) {
+        setCurrentLocation(activeLoc.fullAddress);
+        return activeLoc;
       }
     } catch {
-      // Default to Lucknow, Gomti Nagar as fallback
+      // fallback
     }
-    return 'Lucknow';
+    setCurrentLocation(DEFAULT_LOCATION.fullAddress);
+    return DEFAULT_LOCATION;
   };
 
-  const loadHomeData = async (cityOverride?: string) => {
+  const loadHomeData = async (
+    locationOverride?:
+      | {
+          city?: string;
+          locality?: string;
+          zoneId?: string;
+          lat?: number;
+          lng?: number;
+          mode?: 'nearby' | 'job';
+        }
+      | string
+  ) => {
     try {
       setLoading(true);
-      const city = cityOverride || currentLocation || 'Lucknow';
+      let locParams: {
+        city?: string;
+        locality?: string;
+        zoneId?: string;
+        lat?: number;
+        lng?: number;
+        mode?: 'nearby' | 'job';
+      } = {};
 
-      const [catRes, bookRes, vendorRes, notifRes, reviewRes, servicesRes] = await Promise.all([
+      if (typeof locationOverride === 'string') {
+        locParams.city = locationOverride;
+      } else if (locationOverride) {
+        locParams = { ...locationOverride };
+      } else {
+        const stored = await getStoredLocation(false);
+        if (stored) {
+          locParams.city = stored.city || 'Lucknow';
+          locParams.locality = stored.locality;
+          locParams.lat = stored.coordinates?.lat;
+          locParams.lng = stored.coordinates?.lng;
+          locParams.zoneId = (stored as any).zoneId;
+          locParams.mode = (stored as any).mode || 'nearby';
+        }
+      }
+
+      const city = locParams.city || currentLocation.split(',')[0].trim() || 'Lucknow';
+
+      const [catRes, bookRes, vendorRes, notifRes, servicesRes] = await Promise.all([
         api.categories.getAll().catch(() => ({ categories: [] })),
         user ? api.bookings.getMyBookings().catch(() => ({ bookings: [] })) : Promise.resolve({ bookings: [] }),
-        api.vendors.getVendors({ city, limit: 12 }).catch(() => ({ vendors: [] })),
-        user ? api.notifications.getUnreadCount().catch(() => ({ count: 3 })) : Promise.resolve({ count: 3 }),
-        api.reviews.getRecentReviews ? api.reviews.getRecentReviews(4).catch(() => ({ reviews: [] })) : Promise.resolve({ reviews: [] }),
+        api.vendors.getVendors({
+          city,
+          locality: locParams.locality,
+          zoneId: locParams.zoneId,
+          lat: locParams.lat,
+          lng: locParams.lng,
+          mode: locParams.mode,
+          limit: 12
+        }).catch(() => ({ vendors: [] })),
+        user ? api.notifications.getUnreadCount().catch(() => ({ count: 0, unreadCount: 0 })) : Promise.resolve({ count: 0, unreadCount: 0 }),
         api.services.getServices({ limit: 10 }).catch(() => ({ services: [] }))
       ]);
 
@@ -223,26 +346,27 @@ export default function HomeScreen({ navigation }: any) {
       if (bookRes?.bookings) {
         setActiveBookings(bookRes.bookings.filter((b) => b.status !== 'completed' && b.status !== 'cancelled'));
       }
-      if (vendorRes?.vendors && vendorRes.vendors.length > 0) {
-        setNearbyVendors(vendorRes.vendors);
+      let loadedVendors = (vendorRes?.vendors && vendorRes.vendors.length > 0) ? vendorRes.vendors : [];
+      if (loadedVendors.length === 0) {
+        try {
+          const fallbackRes = await api.vendors.getVendors({ limit: 12 });
+          if (fallbackRes?.vendors && fallbackRes.vendors.length > 0) {
+            loadedVendors = fallbackRes.vendors;
+          }
+        } catch {
+          // ignore
+        }
+      }
+      if (loadedVendors.length > 0) {
+        setNearbyVendors(loadedVendors);
       }
       if (servicesRes?.services && servicesRes.services.length > 0) {
         setPublishedServices(servicesRes.services);
       }
-      if (typeof notifRes?.count === 'number') {
-        setUnreadNotifications(notifRes.count);
-      }
-      if (reviewRes?.reviews && reviewRes.reviews.length > 0) {
-        const mapped = reviewRes.reviews.map((r: any, idx: number) => ({
-          id: r._id || `rev-${idx}`,
-          quote: r.comment || r.title || 'Exceptional service and quick resolution.',
-          author: r.customer?.name || 'Verified Customer',
-          location: `${r.booking?.serviceTitle || 'Home Service'}`,
-          avatarLetter: (r.customer?.name || 'V').charAt(0).toUpperCase(),
-          rating: r.rating || 5
-        }));
-        setCustomerReviews(mapped);
-      }
+      const unread = typeof notifRes?.unreadCount === 'number'
+        ? notifRes.unreadCount
+        : (typeof notifRes?.count === 'number' ? notifRes.count : 0);
+      setUnreadNotifications(unread);
     } catch (err) {
       console.warn('Failed to load live home data:', err);
     } finally {
@@ -253,15 +377,32 @@ export default function HomeScreen({ navigation }: any) {
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    const city = await restoreLocation();
-    await loadHomeData(city);
+    api.cache?.clear?.();
+    const activeLoc = await restoreLocation();
+    await loadHomeData({
+      city: activeLoc.city || 'Lucknow',
+      locality: activeLoc.locality,
+      zoneId: activeLoc.zoneId,
+      lat: activeLoc.coordinates?.lat,
+      lng: activeLoc.coordinates?.lng,
+      mode: 'nearby'
+    });
   };
 
-  const handleLocationSelected = async (loc: string, details?: ServiceAddress) => {
+  const handleLocationSelected = async (
+    loc: string,
+    details?: ServiceAddress & { mode?: 'nearby' | 'job'; zoneId?: string; zoneName?: string }
+  ) => {
     setCurrentLocation(loc);
-    await saveLocation(loc, details);
-    const city = details?.city || loc.split(',')[0].trim();
-    loadHomeData(city);
+    await saveLocation(loc, { ...details, isExplicit: true });
+    loadHomeData({
+      city: details?.city || loc.split(',')[0].trim(),
+      locality: details?.locality || details?.street,
+      zoneId: details?.zoneId,
+      lat: details?.coordinates?.lat,
+      lng: details?.coordinates?.lng,
+      mode: details?.mode || 'nearby'
+    });
   };
 
   const handleSearchSubmit = () => {
@@ -283,7 +424,7 @@ export default function HomeScreen({ navigation }: any) {
 
   return (
     <View style={styles.screenWrapper}>
-      <StatusBar barStyle="dark-content" backgroundColor="#F7F6F2" />
+      <StatusBar barStyle="dark-content" />
       <ScrollView
         style={styles.container}
         contentContainerStyle={styles.scrollContent}
@@ -325,7 +466,11 @@ export default function HomeScreen({ navigation }: any) {
               activeOpacity={0.7}
               onPress={() => navigation.navigate('ProfileTab')}
             >
-              <Ionicons name="person-outline" size={18} color="#0F172A" />
+              {user?.avatar && user.avatar.startsWith('http') ? (
+                <Image source={{ uri: user.avatar }} style={styles.headerAvatarImg} />
+              ) : (
+                <Ionicons name="person-outline" size={18} color="#0F172A" />
+              )}
             </TouchableOpacity>
           </View>
         </View>
@@ -394,7 +539,12 @@ export default function HomeScreen({ navigation }: any) {
               <TouchableOpacity
                 key={booking._id}
                 style={styles.activeBookingCard}
-                onPress={() => navigation.navigate('JobDetail', { bookingId: booking._id })}
+                onPress={() => navigation.navigate('JobDetail', {
+                  bookingId: booking._id,
+                  jobId: booking.jobId || booking._id,
+                  id: booking._id,
+                  bookingReference: booking.bookingReference
+                })}
                 activeOpacity={0.88}
               >
                 <View style={styles.activeTopRow}>
@@ -874,8 +1024,7 @@ export default function HomeScreen({ navigation }: any) {
           </View>
 
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalCardList}>
-            {nearbyVendors.length > 0 ? (
-              nearbyVendors.map((pro) => (
+            {(nearbyVendors.length > 0 ? nearbyVendors : VERIFIED_FALLBACK_PROS).map((pro) => (
               <TouchableOpacity
                 key={pro._id}
                 style={styles.proCard}
@@ -889,16 +1038,25 @@ export default function HomeScreen({ navigation }: any) {
                         {(pro.businessName || pro.name || 'P').charAt(0).toUpperCase()}
                       </Text>
                     </View>
-                    <View style={styles.verifiedCheckBadge}>
-                      <Ionicons name="checkmark" size={10} color="#FFFFFF" />
-                    </View>
+                    {(pro.verifiedBadge?.status === 'verified' || pro.verifiedBadge?.status === 'approved' || (pro as any).isVerified) && (
+                      <View style={styles.verifiedCheckBadge}>
+                        <Ionicons name="checkmark" size={10} color="#FFFFFF" />
+                      </View>
+                    )}
                   </View>
 
                   <View style={styles.proHeaderRight}>
-                    <View style={styles.availablePill}>
-                      <View style={styles.availableDot} />
-                      <Text style={styles.availableText}>Available Now</Text>
-                    </View>
+                    {pro.isNearest ? (
+                      <View style={styles.nearestBadge}>
+                        <Ionicons name="sparkles" size={10} color="#065F46" />
+                        <Text style={styles.nearestBadgeText}>Nearest</Text>
+                      </View>
+                    ) : (
+                      <View style={styles.availablePill}>
+                        <View style={styles.availableDot} />
+                        <Text style={styles.availableText}>Available Now</Text>
+                      </View>
+                    )}
                     <TouchableOpacity
                       onPress={(e) => {
                         e.stopPropagation?.();
@@ -926,9 +1084,18 @@ export default function HomeScreen({ navigation }: any) {
                   ★ {pro.rating ? pro.rating.toFixed(1) : '5.0'} ({pro.reviewCount ?? 0}) • {pro.experienceYears || 3} yrs exp
                 </Text>
 
-                <Text style={styles.proLocationText} numberOfLines={1}>
-                  📍 {pro.city || `${currentCity}`}
-                </Text>
+                <View style={styles.proDistanceRow}>
+                  <Ionicons name="navigate-circle" size={13} color="#059669" />
+                  <Text style={styles.proDistanceText} numberOfLines={1}>
+                    {pro.distanceText || (pro.locality ? `${pro.locality} • ${pro.city || currentCity}` : pro.city || currentCity)}
+                  </Text>
+                </View>
+
+                {pro.zoneId ? (
+                  <View style={styles.proZoneBadge}>
+                    <Text style={styles.proZoneBadgeText}>{pro.zoneId} • {pro.locality || pro.zoneName || 'Lucknow'}</Text>
+                  </View>
+                ) : null}
 
                 <View style={styles.proCardDivider} />
 
@@ -943,20 +1110,7 @@ export default function HomeScreen({ navigation }: any) {
                   <Text style={styles.proBookButtonText}>View Services & Book</Text>
                 </TouchableOpacity>
               </TouchableOpacity>
-            ))
-          ) : (
-            <View style={styles.emptyVendorCard}>
-              <Ionicons name="people-outline" size={32} color="#94A3B8" />
-              <Text style={styles.emptyVendorTitle}>No experts found in this area</Text>
-              <Text style={styles.emptyVendorSub}>Verified technicians are available across other Lucknow localities.</Text>
-              <TouchableOpacity
-                style={styles.emptyVendorBtn}
-                onPress={() => navigation.navigate('SearchTab')}
-              >
-                <Text style={styles.emptyVendorBtnText}>View All Professionals</Text>
-              </TouchableOpacity>
-            </View>
-          )}
+            ))}
           </ScrollView>
         </View>
 
@@ -1120,73 +1274,6 @@ export default function HomeScreen({ navigation }: any) {
           </View>
         </View>
 
-        {/* ════════════════════════════════════════════════════════════════════
-            15. WHAT CUSTOMERS SAY (Review Cards - Matching Screenshot 1)
-        ════════════════════════════════════════════════════════════════════ */}
-        <View style={styles.sectionContainer}>
-          <View style={styles.sectionHeader}>
-            <View>
-              <Text style={styles.sectionTitle}>What customers say</Text>
-              <Text style={styles.sectionSubtitle}>Real reviews from verified homeowners near you</Text>
-            </View>
-            <View style={styles.reviewDotsRow}>
-              {customerReviews.map((_, idx) => (
-                <View
-                  key={idx}
-                  style={[
-                    styles.reviewDot,
-                    activeReviewIndex === idx ? styles.reviewDotActive : styles.reviewDotInactive
-                  ]}
-                />
-              ))}
-            </View>
-          </View>
-
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.horizontalCardList}
-            decelerationRate="fast"
-            snapToInterval={280}
-            onMomentumScrollEnd={(e) => {
-              const offsetX = e.nativeEvent.contentOffset.x;
-              const idx = Math.round(offsetX / 280);
-              setActiveReviewIndex(idx);
-            }}
-          >
-            {customerReviews.map((rev) => (
-              <View key={rev.id} style={styles.testimonialCard}>
-                <View style={styles.testTopRow}>
-                  <View style={styles.starsRow}>
-                    {[...Array(rev.rating || 5)].map((_, i) => (
-                      <View key={i} style={{ marginRight: 2 }}>
-                        <Ionicons name="star" size={14} color="#0F172A" />
-                      </View>
-                    ))}
-                  </View>
-                  <View style={styles.quoteIconBadge}>
-                    <MaterialCommunityIcons name="format-quote-close" size={16} color="#94A3B8" />
-                  </View>
-                </View>
-
-                <Text style={styles.testQuoteText}>"{rev.quote}"</Text>
-
-                <View style={styles.testAuthorRow}>
-                  <View style={styles.testAvatar}>
-                    <Text style={styles.testAvatarText}>{rev.avatarLetter || 'C'}</Text>
-                    <View style={styles.testVerifiedCheck}>
-                      <Ionicons name="checkmark" size={8} color="#FFFFFF" />
-                    </View>
-                  </View>
-                  <View style={styles.testAuthorMeta}>
-                    <Text style={styles.testAuthorName}>{rev.author}</Text>
-                    <Text style={styles.testAuthorLoc} numberOfLines={1}>{rev.location}</Text>
-                  </View>
-                </View>
-              </View>
-            ))}
-          </ScrollView>
-        </View>
 
         {/* ════════════════════════════════════════════════════════════════════
             16. FINAL CALL-TO-ACTION CARD (Matching Screenshot 1 Bottom)
@@ -1207,8 +1294,6 @@ export default function HomeScreen({ navigation }: any) {
             </TouchableOpacity>
           </View>
         </View>
-
-        <View style={{ height: 20 }} />
       </ScrollView>
 
       {/* Location Selector Modal */}
@@ -1231,7 +1316,7 @@ const styles = StyleSheet.create({
     flex: 1
   },
   scrollContent: {
-    paddingBottom: 100
+    paddingBottom: 20
   },
 
   // ── 1. Compact Header (Matching Screenshot 5) ──
@@ -1310,7 +1395,13 @@ const styles = StyleSheet.create({
     borderRadius: 19,
     backgroundColor: '#EAE6DF',
     alignItems: 'center',
-    justifyContent: 'center'
+    justifyContent: 'center',
+    overflow: 'hidden'
+  },
+  headerAvatarImg: {
+    width: 38,
+    height: 38,
+    borderRadius: 19
   },
 
   // ── 2. Location Selector ──
@@ -2022,6 +2113,48 @@ const styles = StyleSheet.create({
     color: '#64748B',
     marginBottom: 10
   },
+  nearestBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#DCFCE7',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+    gap: 3
+  },
+  nearestBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#065F46'
+  },
+  proDistanceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 4
+  },
+  proDistanceText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#059669'
+  },
+  proZoneBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#DBEAFE'
+  },
+  proZoneBadgeText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#1D4ED8'
+  },
   proCardDivider: {
     height: 1,
     backgroundColor: '#F1F5F9',
@@ -2107,106 +2240,11 @@ const styles = StyleSheet.create({
     fontWeight: '800'
   },
 
-  // ── 15. What Customers Say (Review Cards - Matching Screenshot 1) ──
-  reviewDotsRow: {
-    flexDirection: 'row',
-    gap: 4,
-    alignItems: 'center'
-  },
-  reviewDot: {
-    height: 4,
-    borderRadius: 2
-  },
-  reviewDotActive: {
-    width: 14,
-    backgroundColor: '#0F172A'
-  },
-  reviewDotInactive: {
-    width: 5,
-    backgroundColor: '#CBD5E1'
-  },
-  testimonialCard: {
-    width: 270,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#EFECE6',
-    elevation: 2,
-    justifyContent: 'space-between'
-  },
-  testTopRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 10
-  },
-  starsRow: {
-    flexDirection: 'row'
-  },
-  quoteIconBadge: {
-    width: 24,
-    height: 24,
-    borderRadius: 6,
-    backgroundColor: '#F8FAFC',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#E2E8F0'
-  },
-  testQuoteText: {
-    fontSize: 12,
-    fontWeight: '500',
-    color: '#334155',
-    lineHeight: 18,
-    marginBottom: 14
-  },
-  testAuthorRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8
-  },
-  testAvatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#E0E7FF',
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  testAvatarText: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#3730A3'
-  },
-  testVerifiedCheck: {
-    position: 'absolute',
-    bottom: -1,
-    right: -1,
-    width: 11,
-    height: 11,
-    borderRadius: 6,
-    backgroundColor: '#0F172A',
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  testAuthorMeta: {
-    flex: 1
-  },
-  testAuthorName: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#0F172A'
-  },
-  testAuthorLoc: {
-    fontSize: 11,
-    color: '#64748B'
-  },
 
   // ── 16. Final CTA Card (Matching Screenshot 1 Bottom) ──
   finalCtaContainer: {
     paddingHorizontal: 16,
-    marginBottom: 12
+    marginBottom: 0
   },
   finalCtaCard: {
     backgroundColor: '#FFFFFF',

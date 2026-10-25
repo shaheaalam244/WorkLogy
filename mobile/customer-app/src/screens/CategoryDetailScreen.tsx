@@ -19,6 +19,7 @@ import { renderCategoryIcon } from '../utils/categoryIcons';
 import { getServiceImage } from '../utils/serviceImages';
 import { secureStorage } from '../storage/secureStorage';
 import { STORAGE_KEYS } from '../constants';
+import { dataSyncService } from '../services/dataSyncService';
 import type { ServiceCategory, ServiceAddress } from '../types';
 
 interface VerifiedVendor {
@@ -240,12 +241,14 @@ export default function CategoryDetailScreen({ route, navigation }: any) {
         const res = await api.customer.getAddresses();
         if (res?.success && Array.isArray(res.addresses) && res.addresses.length > 0) {
           setSavedAddresses(res.addresses);
-          const first = res.addresses[0];
+          const defIdx = res.addresses.findIndex((a) => a.isDefault);
+          const first = defIdx >= 0 ? res.addresses[defIdx] : res.addresses[0];
+          setSelectedAddressIndex(defIdx >= 0 ? defIdx : 0);
           setHouseNumber(first.houseNumber || '');
           setStreet(first.street || '');
-          setLocality(first.landmark || '');
+          setLocality(first.locality || first.landmark || '');
           setCity(first.city || 'Lucknow');
-          setPincode(first.pincode || '226010');
+          setPincode(first.zipCode || first.pincode || '226010');
         } else {
           setIsCustomAddress(true);
         }
@@ -314,6 +317,7 @@ export default function CategoryDetailScreen({ route, navigation }: any) {
       return;
     }
 
+    const selectedSaved = savedAddresses[selectedAddressIndex];
     const targetAddress = isCustomAddress || savedAddresses.length === 0
       ? {
           addressLabel: 'Service Location',
@@ -322,16 +326,20 @@ export default function CategoryDetailScreen({ route, navigation }: any) {
           locality: locality.trim() || 'Area',
           city: city.trim() || 'Lucknow',
           state: 'Uttar Pradesh',
-          zipCode: pincode.trim() || '226010'
+          zipCode: pincode.trim() || '226010',
+          coordinates: { lat: 0, lng: 0 }
         }
       : {
-          addressLabel: savedAddresses[selectedAddressIndex]?.label || 'Saved Address',
-          houseNumber: savedAddresses[selectedAddressIndex]?.houseNumber || '',
-          street: savedAddresses[selectedAddressIndex]?.street || 'Main Road',
-          locality: savedAddresses[selectedAddressIndex]?.landmark || '',
-          city: savedAddresses[selectedAddressIndex]?.city || 'Lucknow',
-          state: savedAddresses[selectedAddressIndex]?.state || 'Uttar Pradesh',
-          zipCode: savedAddresses[selectedAddressIndex]?.pincode || '226010'
+          addressLabel: selectedSaved?.label || 'Saved Address',
+          houseNumber: selectedSaved?.houseNumber || '',
+          street: selectedSaved?.street || 'Main Road',
+          locality: selectedSaved?.locality || selectedSaved?.landmark || '',
+          city: selectedSaved?.city || 'Lucknow',
+          state: selectedSaved?.state || 'Uttar Pradesh',
+          zipCode: selectedSaved?.zipCode || selectedSaved?.pincode || '226010',
+          coordinates: selectedSaved?.coordinates && (Number(selectedSaved.coordinates.lat) !== 0 || Number(selectedSaved.coordinates.lng) !== 0)
+            ? { lat: Number(selectedSaved.coordinates.lat), lng: Number(selectedSaved.coordinates.lng) }
+            : { lat: 0, lng: 0 }
         };
 
     const scheduledDateObj = availableDates[selectedDateIndex] || availableDates[0];
@@ -360,6 +368,7 @@ export default function CategoryDetailScreen({ route, navigation }: any) {
       const res = await api.bookings.createDirectBooking(bookingPayload);
 
       if (res?.success) {
+        dataSyncService.notify('BOOKINGS_CHANGED', res);
         setBookingSuccess(true);
         setCreatedBookingRef(res.booking?.bookingReference || 'DIR-CONFIRMED');
       } else {
@@ -835,9 +844,16 @@ export default function CategoryDetailScreen({ route, navigation }: any) {
                             style={{ marginRight: 8, marginTop: 2 }}
                           />
                           <View style={{ flex: 1 }}>
-                            <Text style={styles.savedAddressLabel}>{addr.label || 'Home Address'}</Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                              <Text style={styles.savedAddressLabel}>{addr.label || 'Home Address'}</Text>
+                              {addr.isDefault && (
+                                <View style={{ backgroundColor: '#D1FAE5', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 3 }}>
+                                  <Text style={{ fontSize: 9, fontWeight: '700', color: '#065F46' }}>Default</Text>
+                                </View>
+                              )}
+                            </View>
                             <Text style={styles.savedAddressLine} numberOfLines={2}>
-                              {[addr.houseNumber, addr.street, addr.landmark, addr.city, addr.pincode]
+                              {[addr.houseNumber, addr.street, addr.locality || addr.landmark, addr.city, addr.zipCode || addr.pincode]
                                 .filter(Boolean)
                                 .join(', ')}
                             </Text>
