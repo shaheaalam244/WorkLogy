@@ -1,0 +1,2162 @@
+[
+  {
+    "localityId": "LOC-LKO-001",
+    "name": "Gomti Nagar",
+    "normalizedName": "gomti nagar",
+    "zoneId": "LKO-Z01",
+    "zoneName": "East Lucknow",
+    "coordinates": {
+      "lat": 26.85,
+      "lng": 80.9984
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.9984,
+        26.85
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226010",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.942Z"
+  },
+  {
+    "localityId": "LOC-LKO-002",
+    "name": "Vibhuti Khand",
+    "normalizedName": "vibhuti khand",
+    "zoneId": "LKO-Z01",
+    "zoneName": "East Lucknow",
+    "coordinates": {
+      "lat": 26.8647,
+      "lng": 81.0062
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        81.0062,
+        26.8647
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226010",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-003",
+    "name": "Viram Khand",
+    "normalizedName": "viram khand",
+    "zoneId": "LKO-Z01",
+    "zoneName": "East Lucknow",
+    "coordinates": {
+      "lat": 26.853,
+      "lng": 81.002
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        81.002,
+        26.853
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226010",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-004",
+    "name": "Vineet Khand",
+    "normalizedName": "vineet khand",
+    "zoneId": "LKO-Z01",
+    "zoneName": "East Lucknow",
+    "coordinates": {
+      "lat": 26.848,
+      "lng": 81.008
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        81.008,
+        26.848
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226010",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-005",
+    "name": "Vinay Khand",
+    "normalizedName": "vinay khand",
+    "zoneId": "LKO-Z01",
+    "zoneName": "East Lucknow",
+    "coordinates": {
+      "lat": 26.842,
+      "lng": 81.005
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        81.005,
+        26.842
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226010",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-006",
+    "name": "Indira Nagar",
+    "normalizedName": "indira nagar",
+    "zoneId": "LKO-Z02",
+    "zoneName": "East-Central Lucknow",
+    "coordinates": {
+      "lat": 26.8833,
+      "lng": 80.9833
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.9833,
+        26.8833
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226016",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-007",
+    "name": "Munshipulia",
+    "normalizedName": "munshipulia",
+    "zoneId": "LKO-Z02",
+    "zoneName": "East-Central Lucknow",
+    "coordinates": {
+      "lat": 26.889,
+      "lng": 80.989
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.989,
+        26.889
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226016",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-008",
+    "name": "Bhootnath",
+    "normalizedName": "bhootnath",
+    "zoneId": "LKO-Z02",
+    "zoneName": "East-Central Lucknow",
+    "coordinates": {
+      "lat": 26.877,
+      "lng": 80.979
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.979,
+        26.877
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226016",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-009",
+    "name": "Ismailganj",
+    "normalizedName": "ismailganj",
+    "zoneId": "LKO-Z02",
+    "zoneName": "East-Central Lucknow",
+    "coordinates": {
+      "lat": 26.892,
+      "lng": 80.995
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.995,
+        26.892
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226016",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-010",
+    "name": "Faizabad Road",
+    "normalizedName": "faizabad road",
+    "zoneId": "LKO-Z02",
+    "zoneName": "East-Central Lucknow",
+    "coordinates": {
+      "lat": 26.879,
+      "lng": 81.01
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        81.01,
+        26.879
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226016",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-011",
+    "name": "Mahanagar",
+    "normalizedName": "mahanagar",
+    "zoneId": "LKO-Z03",
+    "zoneName": "North-Central Lucknow",
+    "coordinates": {
+      "lat": 26.875,
+      "lng": 80.95
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.95,
+        26.875
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226006",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-012",
+    "name": "Nishatganj",
+    "normalizedName": "nishatganj",
+    "zoneId": "LKO-Z03",
+    "zoneName": "North-Central Lucknow",
+    "coordinates": {
+      "lat": 26.862,
+      "lng": 80.956
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.956,
+        26.862
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226006",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-013",
+    "name": "Daliganj",
+    "normalizedName": "daliganj",
+    "zoneId": "LKO-Z03",
+    "zoneName": "North-Central Lucknow",
+    "coordinates": {
+      "lat": 26.868,
+      "lng": 80.938
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.938,
+        26.868
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226020",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-014",
+    "name": "New Hyderabad",
+    "normalizedName": "new hyderabad",
+    "zoneId": "LKO-Z03",
+    "zoneName": "North-Central Lucknow",
+    "coordinates": {
+      "lat": 26.865,
+      "lng": 80.948
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.948,
+        26.865
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226007",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-015",
+    "name": "Niralanagar",
+    "normalizedName": "niralanagar",
+    "zoneId": "LKO-Z03",
+    "zoneName": "North-Central Lucknow",
+    "coordinates": {
+      "lat": 26.879,
+      "lng": 80.942
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.942,
+        26.879
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226020",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-016",
+    "name": "Aliganj",
+    "normalizedName": "aliganj",
+    "zoneId": "LKO-Z04",
+    "zoneName": "North Lucknow",
+    "coordinates": {
+      "lat": 26.8833,
+      "lng": 80.9333
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.9333,
+        26.8833
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226024",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-017",
+    "name": "Kapoorthala",
+    "normalizedName": "kapoorthala",
+    "zoneId": "LKO-Z04",
+    "zoneName": "North Lucknow",
+    "coordinates": {
+      "lat": 26.878,
+      "lng": 80.938
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.938,
+        26.878
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226024",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-018",
+    "name": "Chandganj",
+    "normalizedName": "chandganj",
+    "zoneId": "LKO-Z04",
+    "zoneName": "North Lucknow",
+    "coordinates": {
+      "lat": 26.872,
+      "lng": 80.936
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.936,
+        26.872
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226024",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-019",
+    "name": "Kursi Road",
+    "normalizedName": "kursi road",
+    "zoneId": "LKO-Z04",
+    "zoneName": "North Lucknow",
+    "coordinates": {
+      "lat": 26.905,
+      "lng": 80.942
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.942,
+        26.905
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226026",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-020",
+    "name": "Triveni Nagar",
+    "normalizedName": "triveni nagar",
+    "zoneId": "LKO-Z04",
+    "zoneName": "North Lucknow",
+    "coordinates": {
+      "lat": 26.892,
+      "lng": 80.925
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.925,
+        26.892
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226020",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-021",
+    "name": "Jankipuram",
+    "normalizedName": "jankipuram",
+    "zoneId": "LKO-Z05",
+    "zoneName": "North-West Lucknow",
+    "coordinates": {
+      "lat": 26.9167,
+      "lng": 80.9333
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.9333,
+        26.9167
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226021",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-022",
+    "name": "Gudamba",
+    "normalizedName": "gudamba",
+    "zoneId": "LKO-Z05",
+    "zoneName": "North-West Lucknow",
+    "coordinates": {
+      "lat": 26.925,
+      "lng": 80.95
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.95,
+        26.925
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226026",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-023",
+    "name": "IIM Road",
+    "normalizedName": "iim road",
+    "zoneId": "LKO-Z05",
+    "zoneName": "North-West Lucknow",
+    "coordinates": {
+      "lat": 26.932,
+      "lng": 80.915
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.915,
+        26.932
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226022",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-024",
+    "name": "Kalyanpur",
+    "normalizedName": "kalyanpur",
+    "zoneId": "LKO-Z05",
+    "zoneName": "North-West Lucknow",
+    "coordinates": {
+      "lat": 26.908,
+      "lng": 80.952
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.952,
+        26.908
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226021",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-025",
+    "name": "Madiyaon",
+    "normalizedName": "madiyaon",
+    "zoneId": "LKO-Z05",
+    "zoneName": "North-West Lucknow",
+    "coordinates": {
+      "lat": 26.912,
+      "lng": 80.928
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.928,
+        26.912
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226021",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-026",
+    "name": "Vikas Nagar",
+    "normalizedName": "vikas nagar",
+    "zoneId": "LKO-Z06",
+    "zoneName": "North-East Lucknow",
+    "coordinates": {
+      "lat": 26.89,
+      "lng": 80.96
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.96,
+        26.89
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226022",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-027",
+    "name": "Khurram Nagar",
+    "normalizedName": "khurram nagar",
+    "zoneId": "LKO-Z06",
+    "zoneName": "North-East Lucknow",
+    "coordinates": {
+      "lat": 26.887,
+      "lng": 80.968
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.968,
+        26.887
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226022",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-028",
+    "name": "Tedhi Puliya",
+    "normalizedName": "tedhi puliya",
+    "zoneId": "LKO-Z06",
+    "zoneName": "North-East Lucknow",
+    "coordinates": {
+      "lat": 26.902,
+      "lng": 80.955
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.955,
+        26.902
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226022",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-029",
+    "name": "Engineering College",
+    "normalizedName": "engineering college",
+    "zoneId": "LKO-Z06",
+    "zoneName": "North-East Lucknow",
+    "coordinates": {
+      "lat": 26.915,
+      "lng": 80.942
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.942,
+        26.915
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226021",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-030",
+    "name": "Vikas Nagar Extension",
+    "normalizedName": "vikas nagar extension",
+    "zoneId": "LKO-Z06",
+    "zoneName": "North-East Lucknow",
+    "coordinates": {
+      "lat": 26.895,
+      "lng": 80.965
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.965,
+        26.895
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226022",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-031",
+    "name": "Hazratganj",
+    "normalizedName": "hazratganj",
+    "zoneId": "LKO-Z07",
+    "zoneName": "Central Lucknow",
+    "coordinates": {
+      "lat": 26.8467,
+      "lng": 80.9462
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.9462,
+        26.8467
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226001",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-032",
+    "name": "Lalbagh",
+    "normalizedName": "lalbagh",
+    "zoneId": "LKO-Z07",
+    "zoneName": "Central Lucknow",
+    "coordinates": {
+      "lat": 26.843,
+      "lng": 80.94
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.94,
+        26.843
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226001",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-033",
+    "name": "Narhi",
+    "normalizedName": "narhi",
+    "zoneId": "LKO-Z07",
+    "zoneName": "Central Lucknow",
+    "coordinates": {
+      "lat": 26.849,
+      "lng": 80.952
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.952,
+        26.849
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226001",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-034",
+    "name": "Butler Colony",
+    "normalizedName": "butler colony",
+    "zoneId": "LKO-Z07",
+    "zoneName": "Central Lucknow",
+    "coordinates": {
+      "lat": 26.855,
+      "lng": 80.958
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.958,
+        26.855
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226001",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-035",
+    "name": "Civil Lines",
+    "normalizedName": "civil lines",
+    "zoneId": "LKO-Z07",
+    "zoneName": "Central Lucknow",
+    "coordinates": {
+      "lat": 26.841,
+      "lng": 80.949
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.949,
+        26.841
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226001",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-036",
+    "name": "Chowk",
+    "normalizedName": "chowk",
+    "zoneId": "LKO-Z08",
+    "zoneName": "Old Lucknow",
+    "coordinates": {
+      "lat": 26.8667,
+      "lng": 80.9
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.9,
+        26.8667
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226003",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-037",
+    "name": "Husainabad",
+    "normalizedName": "husainabad",
+    "zoneId": "LKO-Z08",
+    "zoneName": "Old Lucknow",
+    "coordinates": {
+      "lat": 26.872,
+      "lng": 80.912
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.912,
+        26.872
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226003",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-038",
+    "name": "Thakurganj",
+    "normalizedName": "thakurganj",
+    "zoneId": "LKO-Z08",
+    "zoneName": "Old Lucknow",
+    "coordinates": {
+      "lat": 26.86,
+      "lng": 80.892
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.892,
+        26.86
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226003",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-039",
+    "name": "Balaganj",
+    "normalizedName": "balaganj",
+    "zoneId": "LKO-Z08",
+    "zoneName": "Old Lucknow",
+    "coordinates": {
+      "lat": 26.868,
+      "lng": 80.885
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.885,
+        26.868
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226003",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-040",
+    "name": "Saadatganj",
+    "normalizedName": "saadatganj",
+    "zoneId": "LKO-Z08",
+    "zoneName": "Old Lucknow",
+    "coordinates": {
+      "lat": 26.852,
+      "lng": 80.895
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.895,
+        26.852
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226003",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-041",
+    "name": "Rajajipuram",
+    "normalizedName": "rajajipuram",
+    "zoneId": "LKO-Z09",
+    "zoneName": "West Lucknow",
+    "coordinates": {
+      "lat": 26.8333,
+      "lng": 80.8833
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.8833,
+        26.8333
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226017",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-042",
+    "name": "Alamnagar",
+    "normalizedName": "alamnagar",
+    "zoneId": "LKO-Z09",
+    "zoneName": "West Lucknow",
+    "coordinates": {
+      "lat": 26.838,
+      "lng": 80.875
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.875,
+        26.838
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226017",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-043",
+    "name": "Talkatora",
+    "normalizedName": "talkatora",
+    "zoneId": "LKO-Z09",
+    "zoneName": "West Lucknow",
+    "coordinates": {
+      "lat": 26.828,
+      "lng": 80.898
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.898,
+        26.828
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226017",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-044",
+    "name": "Para",
+    "normalizedName": "para",
+    "zoneId": "LKO-Z09",
+    "zoneName": "West Lucknow",
+    "coordinates": {
+      "lat": 26.821,
+      "lng": 80.865
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.865,
+        26.821
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226003",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-045",
+    "name": "Avas Vikas",
+    "normalizedName": "avas vikas",
+    "zoneId": "LKO-Z09",
+    "zoneName": "West Lucknow",
+    "coordinates": {
+      "lat": 26.835,
+      "lng": 80.887
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.887,
+        26.835
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226003",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-046",
+    "name": "Alambagh",
+    "normalizedName": "alambagh",
+    "zoneId": "LKO-Z10",
+    "zoneName": "South-West Lucknow",
+    "coordinates": {
+      "lat": 26.8167,
+      "lng": 80.9
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.9,
+        26.8167
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226005",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-047",
+    "name": "Krishna Nagar",
+    "normalizedName": "krishna nagar",
+    "zoneId": "LKO-Z10",
+    "zoneName": "South-West Lucknow",
+    "coordinates": {
+      "lat": 26.802,
+      "lng": 80.892
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.892,
+        26.802
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226005",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-048",
+    "name": "Manak Nagar",
+    "normalizedName": "manak nagar",
+    "zoneId": "LKO-Z10",
+    "zoneName": "South-West Lucknow",
+    "coordinates": {
+      "lat": 26.812,
+      "lng": 80.885
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.885,
+        26.812
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226023",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-049",
+    "name": "Singar Nagar",
+    "normalizedName": "singar nagar",
+    "zoneId": "LKO-Z10",
+    "zoneName": "South-West Lucknow",
+    "coordinates": {
+      "lat": 26.819,
+      "lng": 80.908
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.908,
+        26.819
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226012",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-050",
+    "name": "Mawaiya",
+    "normalizedName": "mawaiya",
+    "zoneId": "LKO-Z10",
+    "zoneName": "South-West Lucknow",
+    "coordinates": {
+      "lat": 26.826,
+      "lng": 80.912
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.912,
+        26.826
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226005",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-051",
+    "name": "Ashiyana",
+    "normalizedName": "ashiyana",
+    "zoneId": "LKO-Z11",
+    "zoneName": "South Lucknow",
+    "coordinates": {
+      "lat": 26.79,
+      "lng": 80.91
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.91,
+        26.79
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226012",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-052",
+    "name": "LDA Colony",
+    "normalizedName": "lda colony",
+    "zoneId": "LKO-Z11",
+    "zoneName": "South Lucknow",
+    "coordinates": {
+      "lat": 26.796,
+      "lng": 80.905
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.905,
+        26.796
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226025",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-053",
+    "name": "Hind Nagar",
+    "normalizedName": "hind nagar",
+    "zoneId": "LKO-Z11",
+    "zoneName": "South Lucknow",
+    "coordinates": {
+      "lat": 26.808,
+      "lng": 80.902
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.902,
+        26.808
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226012",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-054",
+    "name": "Kanpur Road",
+    "normalizedName": "kanpur road",
+    "zoneId": "LKO-Z11",
+    "zoneName": "South Lucknow",
+    "coordinates": {
+      "lat": 26.785,
+      "lng": 80.895
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.895,
+        26.785
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226012",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-055",
+    "name": "Barauna",
+    "normalizedName": "barauna",
+    "zoneId": "LKO-Z11",
+    "zoneName": "South Lucknow",
+    "coordinates": {
+      "lat": 26.778,
+      "lng": 80.918
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.918,
+        26.778
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226002",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-056",
+    "name": "Telibagh",
+    "normalizedName": "telibagh",
+    "zoneId": "LKO-Z12",
+    "zoneName": "South-East Lucknow",
+    "coordinates": {
+      "lat": 26.792,
+      "lng": 80.94
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.94,
+        26.792
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226008",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-057",
+    "name": "PGI",
+    "normalizedName": "pgi",
+    "zoneId": "LKO-Z12",
+    "zoneName": "South-East Lucknow",
+    "coordinates": {
+      "lat": 26.762,
+      "lng": 80.948
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.948,
+        26.762
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226008",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-058",
+    "name": "Kharika",
+    "normalizedName": "kharika",
+    "zoneId": "LKO-Z12",
+    "zoneName": "South-East Lucknow",
+    "coordinates": {
+      "lat": 26.782,
+      "lng": 80.952
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.952,
+        26.782
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226009",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-059",
+    "name": "Eldeco",
+    "normalizedName": "eldeco",
+    "zoneId": "LKO-Z12",
+    "zoneName": "South-East Lucknow",
+    "coordinates": {
+      "lat": 26.788,
+      "lng": 80.965
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.965,
+        26.788
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226008",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-060",
+    "name": "Raebareli Road",
+    "normalizedName": "raebareli road",
+    "zoneId": "LKO-Z12",
+    "zoneName": "South-East Lucknow",
+    "coordinates": {
+      "lat": 26.755,
+      "lng": 80.942
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.942,
+        26.755
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226008",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-061",
+    "name": "Sushant Golf City",
+    "normalizedName": "sushant golf city",
+    "zoneId": "LKO-Z13",
+    "zoneName": "Far South-East Lucknow",
+    "coordinates": {
+      "lat": 26.78,
+      "lng": 81.01
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        81.01,
+        26.78
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226002",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-062",
+    "name": "Ahmamau",
+    "normalizedName": "ahmamau",
+    "zoneId": "LKO-Z13",
+    "zoneName": "Far South-East Lucknow",
+    "coordinates": {
+      "lat": 26.795,
+      "lng": 81.002
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        81.002,
+        26.795
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226029",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-063",
+    "name": "Arjunganj",
+    "normalizedName": "arjunganj",
+    "zoneId": "LKO-Z13",
+    "zoneName": "Far South-East Lucknow",
+    "coordinates": {
+      "lat": 26.815,
+      "lng": 80.985
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.985,
+        26.815
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226002",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-064",
+    "name": "Shaheed Path",
+    "normalizedName": "shaheed path",
+    "zoneId": "LKO-Z13",
+    "zoneName": "Far South-East Lucknow",
+    "coordinates": {
+      "lat": 26.805,
+      "lng": 81.015
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        81.015,
+        26.805
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226002",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-065",
+    "name": "Sultanpur Road",
+    "normalizedName": "sultanpur road",
+    "zoneId": "LKO-Z13",
+    "zoneName": "Far South-East Lucknow",
+    "coordinates": {
+      "lat": 26.772,
+      "lng": 81.025
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        81.025,
+        26.772
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226025",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-066",
+    "name": "Sarojini Nagar",
+    "normalizedName": "sarojini nagar",
+    "zoneId": "LKO-Z14",
+    "zoneName": "South-East Outer",
+    "coordinates": {
+      "lat": 26.75,
+      "lng": 80.865
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.865,
+        26.75
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226030",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-067",
+    "name": "Amausi",
+    "normalizedName": "amausi",
+    "zoneId": "LKO-Z14",
+    "zoneName": "South-East Outer",
+    "coordinates": {
+      "lat": 26.765,
+      "lng": 80.878
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.878,
+        26.765
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226002",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-068",
+    "name": "Airport",
+    "normalizedName": "airport",
+    "zoneId": "LKO-Z14",
+    "zoneName": "South-East Outer",
+    "coordinates": {
+      "lat": 26.76,
+      "lng": 80.882
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.882,
+        26.76
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226002",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-069",
+    "name": "Bijnaur",
+    "normalizedName": "bijnaur",
+    "zoneId": "LKO-Z14",
+    "zoneName": "South-East Outer",
+    "coordinates": {
+      "lat": 26.732,
+      "lng": 80.892
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.892,
+        26.732
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226002",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-070",
+    "name": "Bijnor Road",
+    "normalizedName": "bijnor road",
+    "zoneId": "LKO-Z14",
+    "zoneName": "South-East Outer",
+    "coordinates": {
+      "lat": 26.745,
+      "lng": 80.885
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.885,
+        26.745
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226002",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-071",
+    "name": "Dubagga",
+    "normalizedName": "dubagga",
+    "zoneId": "LKO-Z15",
+    "zoneName": "West Outer",
+    "coordinates": {
+      "lat": 26.865,
+      "lng": 80.845
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.845,
+        26.865
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226201",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-072",
+    "name": "Hardoi Road",
+    "normalizedName": "hardoi road",
+    "zoneId": "LKO-Z15",
+    "zoneName": "West Outer",
+    "coordinates": {
+      "lat": 26.872,
+      "lng": 80.835
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.835,
+        26.872
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226201",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-073",
+    "name": "Mohan Road",
+    "normalizedName": "mohan road",
+    "zoneId": "LKO-Z15",
+    "zoneName": "West Outer",
+    "coordinates": {
+      "lat": 26.852,
+      "lng": 80.842
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.842,
+        26.852
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226201",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-074",
+    "name": "Kakori Road",
+    "normalizedName": "kakori road",
+    "zoneId": "LKO-Z15",
+    "zoneName": "West Outer",
+    "coordinates": {
+      "lat": 26.882,
+      "lng": 80.825
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.825,
+        26.882
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226201",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-075",
+    "name": "Balaganj Extension",
+    "normalizedName": "balaganj extension",
+    "zoneId": "LKO-Z15",
+    "zoneName": "West Outer",
+    "coordinates": {
+      "lat": 26.868,
+      "lng": 80.865
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.865,
+        26.868
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226201",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-076",
+    "name": "Faizullaganj",
+    "normalizedName": "faizullaganj",
+    "zoneId": "LKO-Z16",
+    "zoneName": "North Outer",
+    "coordinates": {
+      "lat": 26.905,
+      "lng": 80.91
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.91,
+        26.905
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226028",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-077",
+    "name": "Sitapur Road",
+    "normalizedName": "sitapur road",
+    "zoneId": "LKO-Z16",
+    "zoneName": "North Outer",
+    "coordinates": {
+      "lat": 26.918,
+      "lng": 80.918
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.918,
+        26.918
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226028",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-078",
+    "name": "Mohan Road North",
+    "normalizedName": "mohan road north",
+    "zoneId": "LKO-Z16",
+    "zoneName": "North Outer",
+    "coordinates": {
+      "lat": 26.925,
+      "lng": 80.895
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.895,
+        26.925
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226028",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-079",
+    "name": "Kalyanpur North",
+    "normalizedName": "kalyanpur north",
+    "zoneId": "LKO-Z16",
+    "zoneName": "North Outer",
+    "coordinates": {
+      "lat": 26.912,
+      "lng": 80.935
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.935,
+        26.912
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226028",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-080",
+    "name": "Madiyaon Extension",
+    "normalizedName": "madiyaon extension",
+    "zoneId": "LKO-Z16",
+    "zoneName": "North Outer",
+    "coordinates": {
+      "lat": 26.908,
+      "lng": 80.922
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.922,
+        26.908
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226028",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-081",
+    "name": "Chinhat",
+    "normalizedName": "chinhat",
+    "zoneId": "LKO-Z17",
+    "zoneName": "East Outer",
+    "coordinates": {
+      "lat": 26.875,
+      "lng": 81.045
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        81.045,
+        26.875
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226101",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-082",
+    "name": "Matiyari",
+    "normalizedName": "matiyari",
+    "zoneId": "LKO-Z17",
+    "zoneName": "East Outer",
+    "coordinates": {
+      "lat": 26.882,
+      "lng": 81.055
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        81.055,
+        26.882
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226102",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-083",
+    "name": "Kamta",
+    "normalizedName": "kamta",
+    "zoneId": "LKO-Z17",
+    "zoneName": "East Outer",
+    "coordinates": {
+      "lat": 26.868,
+      "lng": 81.032
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        81.032,
+        26.868
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226017",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-084",
+    "name": "Deva Road",
+    "normalizedName": "deva road",
+    "zoneId": "LKO-Z17",
+    "zoneName": "East Outer",
+    "coordinates": {
+      "lat": 26.892,
+      "lng": 81.048
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        81.048,
+        26.892
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226101",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-085",
+    "name": "Anora Kala",
+    "normalizedName": "anora kala",
+    "zoneId": "LKO-Z17",
+    "zoneName": "East Outer",
+    "coordinates": {
+      "lat": 26.879,
+      "lng": 81.062
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        81.062,
+        26.879
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226401",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-086",
+    "name": "Charbagh",
+    "normalizedName": "charbagh",
+    "zoneId": "LKO-Z18",
+    "zoneName": "Central-South",
+    "coordinates": {
+      "lat": 26.83,
+      "lng": 80.923
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.923,
+        26.83
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226004",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-087",
+    "name": "Cantonment",
+    "normalizedName": "cantonment",
+    "zoneId": "LKO-Z18",
+    "zoneName": "Central-South",
+    "coordinates": {
+      "lat": 26.825,
+      "lng": 80.955
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.955,
+        26.825
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226002",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-088",
+    "name": "Hussainganj",
+    "normalizedName": "hussainganj",
+    "zoneId": "LKO-Z18",
+    "zoneName": "Central-South",
+    "coordinates": {
+      "lat": 26.838,
+      "lng": 80.935
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.935,
+        26.838
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226001",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-089",
+    "name": "Naka Hindola",
+    "normalizedName": "naka hindola",
+    "zoneId": "LKO-Z18",
+    "zoneName": "Central-South",
+    "coordinates": {
+      "lat": 26.836,
+      "lng": 80.918
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.918,
+        26.836
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226004",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  },
+  {
+    "localityId": "LOC-LKO-090",
+    "name": "Aishbagh",
+    "normalizedName": "aishbagh",
+    "zoneId": "LKO-Z18",
+    "zoneName": "Central-South",
+    "coordinates": {
+      "lat": 26.841,
+      "lng": 80.908
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.908,
+        26.841
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true,
+    "pinCode": "226004",
+    "district": "Lucknow",
+    "dataSource": "Division_zone_wise.xlsx canonical",
+    "verifiedAt": "2026-10-25T11:08:57.943Z"
+  }
+]

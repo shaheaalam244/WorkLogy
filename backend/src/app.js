@@ -22,11 +22,19 @@ import bookingRoutes from './routes/booking.routes.js';
 import supportRoutes from './routes/support.routes.js';
 import customerRoutes from './routes/customer.routes.js';
 import locationRoutes from './routes/location.routes.js';
+import zoneRoutes from './routes/zone.routes.js';
 
 import { errorHandler, notFoundHandler } from './middleware/error.middleware.js';
 import { apiLimiter } from './middleware/rateLimiter.js';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
+
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(cors({
@@ -79,6 +87,7 @@ app.use('/api/bookings', bookingRoutes);
 app.use('/api/support', supportRoutes);
 app.use('/api/customer', customerRoutes);
 app.use('/api/location', locationRoutes);
+app.use('/api/zones', zoneRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

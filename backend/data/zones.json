@@ -1,0 +1,344 @@
+[
+  {
+    "zoneId": "LKO-Z01",
+    "zoneName": "East Lucknow",
+    "centerArea": "Gomti Nagar",
+    "radiusKm": 7.0,
+    "coordinates": {
+      "lat": 26.85,
+      "lng": 80.9984
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.9984,
+        26.85
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true
+  },
+  {
+    "zoneId": "LKO-Z02",
+    "zoneName": "East-Central Lucknow",
+    "centerArea": "Indira Nagar",
+    "radiusKm": 5.0,
+    "coordinates": {
+      "lat": 26.8833,
+      "lng": 80.9833
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.9833,
+        26.8833
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true
+  },
+  {
+    "zoneId": "LKO-Z03",
+    "zoneName": "North-Central Lucknow",
+    "centerArea": "Mahanagar",
+    "radiusKm": 5.0,
+    "coordinates": {
+      "lat": 26.875,
+      "lng": 80.95
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.95,
+        26.875
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true
+  },
+  {
+    "zoneId": "LKO-Z04",
+    "zoneName": "North Lucknow",
+    "centerArea": "Aliganj",
+    "radiusKm": 5.0,
+    "coordinates": {
+      "lat": 26.8833,
+      "lng": 80.9333
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.9333,
+        26.8833
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true
+  },
+  {
+    "zoneId": "LKO-Z05",
+    "zoneName": "North-West Lucknow",
+    "centerArea": "Jankipuram",
+    "radiusKm": 6.0,
+    "coordinates": {
+      "lat": 26.9167,
+      "lng": 80.9333
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.9333,
+        26.9167
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true
+  },
+  {
+    "zoneId": "LKO-Z06",
+    "zoneName": "North-East Lucknow",
+    "centerArea": "Vikas Nagar",
+    "radiusKm": 5.0,
+    "coordinates": {
+      "lat": 26.89,
+      "lng": 80.96
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.96,
+        26.89
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true
+  },
+  {
+    "zoneId": "LKO-Z07",
+    "zoneName": "Central Lucknow",
+    "centerArea": "Hazratganj",
+    "radiusKm": 5.0,
+    "coordinates": {
+      "lat": 26.8467,
+      "lng": 80.9462
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.9462,
+        26.8467
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true
+  },
+  {
+    "zoneId": "LKO-Z08",
+    "zoneName": "Old Lucknow",
+    "centerArea": "Chowk",
+    "radiusKm": 5.0,
+    "coordinates": {
+      "lat": 26.8667,
+      "lng": 80.9
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.9,
+        26.8667
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true
+  },
+  {
+    "zoneId": "LKO-Z09",
+    "zoneName": "West Lucknow",
+    "centerArea": "Rajajipuram",
+    "radiusKm": 6.0,
+    "coordinates": {
+      "lat": 26.8333,
+      "lng": 80.8833
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.8833,
+        26.8333
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true
+  },
+  {
+    "zoneId": "LKO-Z10",
+    "zoneName": "South-West Lucknow",
+    "centerArea": "Alambagh",
+    "radiusKm": 5.0,
+    "coordinates": {
+      "lat": 26.8167,
+      "lng": 80.9
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.9,
+        26.8167
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true
+  },
+  {
+    "zoneId": "LKO-Z11",
+    "zoneName": "South Lucknow",
+    "centerArea": "Ashiyana",
+    "radiusKm": 5.0,
+    "coordinates": {
+      "lat": 26.79,
+      "lng": 80.91
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.91,
+        26.79
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true
+  },
+  {
+    "zoneId": "LKO-Z12",
+    "zoneName": "South-East Lucknow",
+    "centerArea": "PGI / Telibagh",
+    "radiusKm": 6.0,
+    "coordinates": {
+      "lat": 26.775,
+      "lng": 80.945
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.945,
+        26.775
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true
+  },
+  {
+    "zoneId": "LKO-Z13",
+    "zoneName": "Far South-East Lucknow",
+    "centerArea": "Sushant Golf City",
+    "radiusKm": 7.0,
+    "coordinates": {
+      "lat": 26.78,
+      "lng": 81.01
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        81.01,
+        26.78
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true
+  },
+  {
+    "zoneId": "LKO-Z14",
+    "zoneName": "South-East Outer",
+    "centerArea": "Sarojini Nagar",
+    "radiusKm": 7.0,
+    "coordinates": {
+      "lat": 26.75,
+      "lng": 80.865
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.865,
+        26.75
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true
+  },
+  {
+    "zoneId": "LKO-Z15",
+    "zoneName": "West Outer",
+    "centerArea": "Dubagga",
+    "radiusKm": 6.0,
+    "coordinates": {
+      "lat": 26.865,
+      "lng": 80.845
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.845,
+        26.865
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true
+  },
+  {
+    "zoneId": "LKO-Z16",
+    "zoneName": "North Outer",
+    "centerArea": "Faizullaganj",
+    "radiusKm": 6.0,
+    "coordinates": {
+      "lat": 26.905,
+      "lng": 80.91
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.91,
+        26.905
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true
+  },
+  {
+    "zoneId": "LKO-Z17",
+    "zoneName": "East Outer",
+    "centerArea": "Chinhat",
+    "radiusKm": 6.0,
+    "coordinates": {
+      "lat": 26.875,
+      "lng": 81.045
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        81.045,
+        26.875
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true
+  },
+  {
+    "zoneId": "LKO-Z18",
+    "zoneName": "Central-South",
+    "centerArea": "Charbagh / Cantt",
+    "radiusKm": 5.0,
+    "coordinates": {
+      "lat": 26.832,
+      "lng": 80.925
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        80.925,
+        26.832
+      ]
+    },
+    "city": "Lucknow",
+    "isActive": true
+  }
+]
