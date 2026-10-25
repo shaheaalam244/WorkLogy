@@ -97,7 +97,11 @@ export default function VendorEditProfileScreen({ navigation }: any) {
           setEmail((v.user as any).email);
         }
       }
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.message?.includes('token missing') || err?.status === 401) {
+        navigation.navigate('VendorLogin');
+        return;
+      }
       console.warn('Failed to load profile for edit:', err);
     } finally {
       setLoading(false);
