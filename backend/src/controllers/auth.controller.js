@@ -158,9 +158,20 @@ export const getMe = async (req, res, next) => {
 export const updateDetails = async (req, res, next) => {
   try {
     const { name, phone, avatar } = req.body;
+    const updates = {};
+    if (name !== undefined && name !== null && String(name).trim().length > 0) {
+      updates.name = String(name).trim();
+    }
+    if (phone !== undefined && phone !== null) {
+      updates.phone = String(phone).trim();
+    }
+    if (avatar !== undefined && avatar !== null) {
+      updates.avatar = String(avatar).trim();
+    }
+
     const user = await User.findByIdAndUpdate(
       req.user.id,
-      { name, phone, avatar },
+      { $set: updates },
       { new: true, runValidators: true }
     );
     res.status(200).json({ success: true, user });

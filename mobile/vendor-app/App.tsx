@@ -1,3 +1,4 @@
+import './src/utils/ignoreWarnings';
 import React from 'react';
 import { View, StatusBar, StyleSheet, Platform } from 'react-native';
 import { registerRootComponent } from 'expo';

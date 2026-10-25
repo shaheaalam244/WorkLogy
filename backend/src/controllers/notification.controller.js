@@ -1,6 +1,11 @@
 import Notification from '../models/Notification.js';
 import User from '../models/User.js';
 import { getIO } from '../config/socket.js';
+import {
+  registerPushTokenForUser,
+  deregisterPushTokenForUser,
+  sendPushNotification
+} from '../services/pushNotification.service.js';
 
 export const getMyNotifications = async (req, res, next) => {
   try {
@@ -45,7 +50,7 @@ export const getUnreadCount = async (req, res, next) => {
       isRead: false
     });
 
-    res.status(200).json({ success: true, unreadCount });
+    res.status(200).json({ success: true, count: unreadCount, unreadCount });
   } catch (error) {
     next(error);
   }
@@ -183,7 +188,18 @@ export const getNotificationPreferences = async (req, res, next) => {
  */
 export const updateNotificationPreferences = async (req, res, next) => {
   try {
-    const { emailQuotations, emailBookings, emailStatusUpdates, emailCancellations, emailMarketing } = req.body;
+    const {
+      emailQuotations,
+      emailBookings,
+      emailStatusUpdates,
+      emailCancellations,
+      emailMarketing,
+      pushMessages,
+      pushJobLeads,
+      pushBookings,
+      pushStatusUpdates,
+      pushCancellations
+    } = req.body;
 
     const updates = {};
     if (typeof emailQuotations === 'boolean') updates['notificationPreferences.emailQuotations'] = emailQuotations;
@@ -191,6 +207,12 @@ export const updateNotificationPreferences = async (req, res, next) => {
     if (typeof emailStatusUpdates === 'boolean') updates['notificationPreferences.emailStatusUpdates'] = emailStatusUpdates;
     if (typeof emailCancellations === 'boolean') updates['notificationPreferences.emailCancellations'] = emailCancellations;
     if (typeof emailMarketing === 'boolean') updates['notificationPreferences.emailMarketing'] = emailMarketing;
+
+    if (typeof pushMessages === 'boolean') updates['notificationPreferences.pushMessages'] = pushMessages;
+    if (typeof pushJobLeads === 'boolean') updates['notificationPreferences.pushJobLeads'] = pushJobLeads;
+    if (typeof pushBookings === 'boolean') updates['notificationPreferences.pushBookings'] = pushBookings;
+    if (typeof pushStatusUpdates === 'boolean') updates['notificationPreferences.pushStatusUpdates'] = pushStatusUpdates;
+    if (typeof pushCancellations === 'boolean') updates['notificationPreferences.pushCancellations'] = pushCancellations;
 
     const user = await User.findByIdAndUpdate(
       req.user.id,
@@ -207,3 +229,80 @@ export const updateNotificationPreferences = async (req, res, next) => {
     next(error);
   }
 };
+
+/**
+ * Register or update push token for authenticated device
+ * POST /api/notifications/push-token
+ */
+export const registerPushToken = async (req, res, next) => {
+  try {
+    const { token, platform, deviceId, deviceModel, appVersion } = req.body;
+    if (!token) {
+      return res.status(400).json({ success: false, message: 'Push token is required' });
+    }
+
+    const result = await registerPushTokenForUser({
+      userId: req.user.id,
+      token,
+      platform,
+      deviceId,
+      deviceModel,
+      appVersion
+    });
+
+    res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Deregister push token on logout
+ * DELETE /api/notifications/push-token
+ */
+export const deregisterPushToken = async (req, res, next) => {
+  try {
+    const { token, deviceId } = req.body;
+    const result = await deregisterPushTokenForUser({
+      userId: req.user.id,
+      token,
+      deviceId
+    });
+
+    res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Send test push notification to authenticated user
+ * POST /api/notifications/test-push
+ */
+export const sendTestPush = async (req, res, next) => {
+  try {
+    const { title, body } = req.body || {};
+    const result = await sendPushNotification({
+      recipientUserIds: [req.user.id],
+      title: title || 'WorkLogy Pro Alert 🔔',
+      body: body || 'Real-time push notifications are active on this device!',
+      data: {
+        type: 'general',
+        test: true
+      },
+      channelId: 'general',
+      priority: 'high'
+    });
+
+    res.status(200).json({
+      success: true,
+      sentCount: result.sentCount || 0,
+      totalAttempted: result.totalAttempted || 0,
+      message: result.sentCount > 0 ? 'Test push notification dispatched!' : 'No active push tokens registered for this user.',
+      tickets: result.tickets || []
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+

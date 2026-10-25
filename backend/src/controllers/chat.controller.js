@@ -2,6 +2,7 @@ import Conversation from '../models/Conversation.js';
 import Message from '../models/Message.js';
 import User from '../models/User.js';
 import { getIO } from '../config/socket.js';
+import { createNotification } from '../services/notification.service.js';
 
 /**
  * Get all conversations for the authenticated user
@@ -29,7 +30,10 @@ export const getConversations = async (req, res, next) => {
       conversations.map(async (conv) => {
         const unreadCount = await Message.countDocuments({
           conversation: conv._id,
-          recipient: userId,
+          $or: [
+            { recipient: userId },
+            { recipient: { $exists: false }, sender: { $ne: userId } }
+          ],
           isRead: false
         });
         return {
@@ -85,7 +89,14 @@ export const getMessages = async (req, res, next) => {
 
     // Automatically mark eligible unread messages for current user as read
     const unreadResult = await Message.updateMany(
-      { conversation: conversationId, recipient: userId, isRead: false },
+      {
+        conversation: conversationId,
+        $or: [
+          { recipient: userId },
+          { recipient: { $exists: false }, sender: { $ne: userId } }
+        ],
+        isRead: false
+      },
       { isRead: true, readAt: new Date() }
     );
 
@@ -94,6 +105,13 @@ export const getMessages = async (req, res, next) => {
       if (io) {
         const readAt = new Date();
         io.to(`conversation_${conversationId}`).emit('messages_read', {
+          conversationId,
+          readerId: userId,
+          readAt
+        });
+
+        // Notify reader's personal room so global tab badge updates immediately
+        io.to(`user_${userId}`).emit('messages_read', {
           conversationId,
           readerId: userId,
           readAt
@@ -113,11 +131,25 @@ export const getMessages = async (req, res, next) => {
       }
     }
 
+    // Map read status and reflect updated read state
+    const normalizedMessages = messages.map((m) => {
+      const isRecipient =
+        (m.recipient && m.recipient.toString() === userId.toString()) ||
+        (!m.recipient && m.sender?._id?.toString() !== userId.toString());
+      const isNowRead = m.isRead || (unreadResult.modifiedCount > 0 && isRecipient);
+      return {
+        ...m,
+        isRead: isNowRead,
+        read: isNowRead,
+        readAt: isNowRead ? (m.readAt || new Date()) : null
+      };
+    });
+
     res.status(200).json({
       success: true,
-      messages,
+      messages: normalizedMessages,
       hasMore,
-      oldestCursor: messages.length > 0 ? messages[0].createdAt : null
+      oldestCursor: normalizedMessages.length > 0 ? normalizedMessages[0].createdAt : null
     });
   } catch (error) {
     next(error);
@@ -130,7 +162,8 @@ export const getMessages = async (req, res, next) => {
  */
 export const sendMessage = async (req, res, next) => {
   try {
-    const { conversationId, recipientId, text, attachments, messageType, clientTempId } = req.body;
+    const { recipientId, text, attachments, messageType, clientTempId } = req.body;
+    const conversationId = req.body.conversationId || req.params.conversationId;
     const senderId = req.user.id;
 
     if (!text?.trim() && (!attachments || attachments.length === 0)) {
@@ -263,6 +296,35 @@ export const sendMessage = async (req, res, next) => {
       });
     }
 
+    // Send persistent in-app notification & remote push notification to target recipient
+    if (targetRecipientId && targetRecipientId.toString() !== req.user.id.toString()) {
+      try {
+        const senderName = req.user.name || 'User';
+        const previewText = message.text
+          ? (message.text.length > 80 ? message.text.slice(0, 77) + '...' : message.text)
+          : (message.attachments?.length ? 'Sent an attachment' : 'New message');
+
+        createNotification({
+          recipientId: targetRecipientId,
+          senderId: req.user.id,
+          type: 'message',
+          title: 'New message',
+          message: `${senderName}: ${previewText}`,
+          link: `/vendor/chat/${conversation._id}`,
+          relatedResource: {
+            resourceType: 'conversation',
+            resourceId: conversation._id
+          },
+          sendEmailNotification: false,
+          sendPush: true
+        }).catch((notifErr) => {
+          console.warn('Non-fatal: Chat message notification error:', notifErr.message);
+        });
+      } catch (err) {
+        console.warn('Non-fatal: Chat message notification setup error:', err.message);
+      }
+    }
+
     res.status(201).json({
       success: true,
       message: populatedMessage,
@@ -295,7 +357,14 @@ export const markConversationRead = async (req, res, next) => {
 
     const readAt = new Date();
     const result = await Message.updateMany(
-      { conversation: conversationId, recipient: userId, isRead: false },
+      {
+        conversation: conversationId,
+        $or: [
+          { recipient: userId },
+          { recipient: { $exists: false }, sender: { $ne: userId } }
+        ],
+        isRead: false
+      },
       { isRead: true, readAt }
     );
 
@@ -303,6 +372,13 @@ export const markConversationRead = async (req, res, next) => {
       const io = getIO();
       if (io) {
         io.to(`conversation_${conversationId}`).emit('messages_read', {
+          conversationId,
+          readerId: userId,
+          readAt
+        });
+
+        // Notify reader's personal room so their own global badge updates immediately
+        io.to(`user_${userId}`).emit('messages_read', {
           conversationId,
           readerId: userId,
           readAt
@@ -396,13 +472,16 @@ export const startConversation = async (req, res, next) => {
  */
 export const getUnreadCount = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user.id || req.user._id;
     const unreadCount = await Message.countDocuments({
-      recipient: userId,
+      $or: [
+        { recipient: userId },
+        { recipient: { $exists: false }, sender: { $ne: userId } }
+      ],
       isRead: false
     });
 
-    res.status(200).json({ success: true, unreadCount });
+    res.status(200).json({ success: true, count: unreadCount, unreadCount });
   } catch (error) {
     next(error);
   }

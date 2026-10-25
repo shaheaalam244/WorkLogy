@@ -53,7 +53,7 @@ const NotificationSchema = new mongoose.Schema(
     relatedResource: {
       resourceType: {
         type: String,
-        enum: ['job', 'booking', 'application', 'quotation', 'user']
+        enum: ['job', 'booking', 'application', 'quotation', 'user', 'conversation', 'chat']
       },
       resourceId: {
         type: mongoose.Schema.Types.ObjectId

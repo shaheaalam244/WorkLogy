@@ -16,10 +16,11 @@ export const getOnlineUsersList = () => {
 };
 
 export const registerChatSocket = (io, socket) => {
-  // Handle user identification and online presence
-  socket.on('join_user', (userId) => {
-    if (!userId) return;
-    const uid = userId.toString();
+  // Handle user identification and online presence (supports join_user and join_user_room)
+  const handleJoinUser = (data) => {
+    const rawId = typeof data === 'object' && data !== null ? (data.userId || data.id) : data;
+    if (!rawId) return;
+    const uid = rawId.toString();
     socket.join(`user_${uid}`);
     socketToUser.set(socket.id, uid);
 
@@ -30,7 +31,10 @@ export const registerChatSocket = (io, socket) => {
 
     // Broadcast online status to all clients
     io.emit('user_presence', { userId: uid, isOnline: true });
-  });
+  };
+
+  socket.on('join_user', handleJoinUser);
+  socket.on('join_user_room', handleJoinUser);
 
   // Query online status for a list of user IDs
   socket.on('check_presence', (userIds, callback) => {
@@ -179,13 +183,22 @@ export const registerChatSocket = (io, socket) => {
     }
   });
 
-  // Socket-based read receipt trigger
-  socket.on('mark_read', async ({ conversationId, userId }) => {
+  // Socket-based read receipt trigger (supports mark_read and mark_conversation_read)
+  const handleMarkRead = async (data) => {
     try {
+      const conversationId = data?.conversationId;
+      const userId = data?.userId || data?.readerId;
       if (!conversationId || !userId) return;
       const readAt = new Date();
       const result = await Message.updateMany(
-        { conversation: conversationId, recipient: userId, isRead: false },
+        {
+          conversation: conversationId,
+          $or: [
+            { recipient: userId },
+            { recipient: { $exists: false }, sender: { $ne: userId } }
+          ],
+          isRead: false
+        },
         { isRead: true, readAt }
       );
 
@@ -195,11 +208,34 @@ export const registerChatSocket = (io, socket) => {
           readerId: userId,
           readAt
         });
+
+        io.to(`user_${userId}`).emit('messages_read', {
+          conversationId,
+          readerId: userId,
+          readAt
+        });
+
+        const conv = await Conversation.findById(conversationId);
+        if (conv?.participants) {
+          const otherParticipant = conv.participants.find(
+            (p) => p.toString() !== userId.toString()
+          );
+          if (otherParticipant) {
+            io.to(`user_${otherParticipant}`).emit('messages_read', {
+              conversationId,
+              readerId: userId,
+              readAt
+            });
+          }
+        }
       }
     } catch (err) {
       console.error('Socket mark_read error:', err.message);
     }
-  });
+  };
+
+  socket.on('mark_read', handleMarkRead);
+  socket.on('mark_conversation_read', handleMarkRead);
 
   // Handle disconnect and cleanup presence
   socket.on('disconnect', () => {

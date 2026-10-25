@@ -67,8 +67,25 @@ const UserSchema = new mongoose.Schema(
       emailBookings: { type: Boolean, default: true },
       emailStatusUpdates: { type: Boolean, default: true },
       emailCancellations: { type: Boolean, default: true },
-      emailMarketing: { type: Boolean, default: false }
+      emailMarketing: { type: Boolean, default: false },
+      pushMessages: { type: Boolean, default: true },
+      pushJobLeads: { type: Boolean, default: true },
+      pushBookings: { type: Boolean, default: true },
+      pushStatusUpdates: { type: Boolean, default: true },
+      pushCancellations: { type: Boolean, default: true }
     },
+    pushTokens: [
+      {
+        token: { type: String, required: true },
+        platform: { type: String, enum: ['android', 'ios', 'web'], default: 'android' },
+        deviceId: { type: String, default: '' },
+        deviceModel: { type: String, default: '' },
+        appVersion: { type: String, default: '1.0.0' },
+        isActive: { type: Boolean, default: true },
+        createdAt: { type: Date, default: Date.now },
+        lastUsedAt: { type: Date, default: Date.now }
+      }
+    ],
     resetPasswordToken: {
       type: String
     },
@@ -79,6 +96,8 @@ const UserSchema = new mongoose.Schema(
 
   { timestamps: true }
 );
+
+UserSchema.index({ 'pushTokens.token': 1 });
 
 UserSchema.pre('save', async function (next) {
   if (!this.isModified('password')) return next();

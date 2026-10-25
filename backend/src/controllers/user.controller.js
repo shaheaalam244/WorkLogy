@@ -56,7 +56,81 @@ export const addAddress = async (req, res, next) => {
     const profile = await CustomerProfile.findOne({ user: req.user.id });
     if (!profile) return res.status(404).json({ success: false, message: 'Profile not found' });
 
-    profile.addresses.push(req.body);
+    const addrData = { ...req.body };
+    if (addrData.pincode && !addrData.zipCode) {
+      addrData.zipCode = addrData.pincode;
+    }
+    if (addrData.coordinates) {
+      const lat = Number(addrData.coordinates.lat);
+      const lng = Number(addrData.coordinates.lng);
+      addrData.coordinates = {
+        lat: !isNaN(lat) ? lat : 0,
+        lng: !isNaN(lng) ? lng : 0
+      };
+    }
+
+    profile.addresses.push(addrData);
+    await profile.save();
+    res.status(200).json({ success: true, addresses: profile.addresses });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const updateAddress = async (req, res, next) => {
+  try {
+    const profile = await CustomerProfile.findOne({ user: req.user.id });
+    if (!profile) return res.status(404).json({ success: false, message: 'Profile not found' });
+
+    const addr = profile.addresses.id(req.params.addressId) ||
+      profile.addresses.find(a => a._id.toString() === req.params.addressId);
+
+    if (!addr) {
+      return res.status(404).json({ success: false, message: 'Address not found' });
+    }
+
+    const {
+      label,
+      houseNumber,
+      street,
+      locality,
+      landmark,
+      city,
+      state,
+      zipCode,
+      pincode,
+      coordinates,
+      isDefault
+    } = req.body;
+
+    if (label !== undefined) addr.label = label;
+    if (houseNumber !== undefined) addr.houseNumber = houseNumber;
+    if (street !== undefined) addr.street = street;
+    if (locality !== undefined) addr.locality = locality;
+    if (landmark !== undefined) addr.landmark = landmark;
+    if (city !== undefined) addr.city = city;
+    if (state !== undefined) addr.state = state;
+    if (zipCode !== undefined || pincode !== undefined) addr.zipCode = zipCode || pincode;
+
+    if (coordinates) {
+      const lat = Number(coordinates.lat);
+      const lng = Number(coordinates.lng);
+      addr.coordinates = {
+        lat: !isNaN(lat) ? lat : (addr.coordinates?.lat || 0),
+        lng: !isNaN(lng) ? lng : (addr.coordinates?.lng || 0)
+      };
+    }
+
+    if (isDefault !== undefined) {
+      if (isDefault) {
+        profile.addresses.forEach(a => {
+          a.isDefault = a._id.toString() === addr._id.toString();
+        });
+      } else {
+        addr.isDefault = false;
+      }
+    }
+
     await profile.save();
     res.status(200).json({ success: true, addresses: profile.addresses });
   } catch (error) {

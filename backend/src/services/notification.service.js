@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import Notification from '../models/Notification.js';
 import User from '../models/User.js';
 import { sendEmail } from './email.service.js';
+import { sendPushNotification } from './pushNotification.service.js';
 
 /**
  * Core In-App & Email Notification Dispatcher
@@ -20,6 +21,7 @@ export async function createNotification({
   relatedResource = null,
   idempotencyKey = null,
   sendEmailNotification = true,
+  sendPush = true,
   emailSubject = null,
   emailDetails = []
 }) {
@@ -59,7 +61,74 @@ export async function createNotification({
 
     const notification = await Notification.create(notifData);
 
-    // 3. Process Email Notification if enabled
+    // 3. Process Remote Push Notification if enabled
+    if (sendPush) {
+      try {
+        let channelId = 'general';
+        const pushData = {
+          notificationId: notification._id.toString(),
+          type,
+          link: link || ''
+        };
+
+        if (type === 'message') {
+          channelId = 'messages';
+          pushData.type = 'message';
+          if (relatedResource?.resourceId) {
+            pushData.conversationId = relatedResource.resourceId.toString();
+          }
+        } else if (type === 'job_alert') {
+          channelId = 'job-requests';
+          pushData.type = 'job';
+          if (relatedResource?.resourceId) {
+            pushData.jobId = relatedResource.resourceId.toString();
+          }
+        } else if (
+          type === 'booking_confirmed' ||
+          type === 'job_assigned' ||
+          type === 'status_change' ||
+          type === 'cancellation'
+        ) {
+          channelId = 'bookings';
+          pushData.type = 'booking';
+          if (relatedResource?.resourceId) {
+            pushData.bookingId = relatedResource.resourceId.toString();
+          }
+        } else if (
+          type === 'quotation_received' ||
+          type === 'application_received' ||
+          type === 'proposal_accepted'
+        ) {
+          channelId = 'job-requests';
+          pushData.type = 'job';
+          if (relatedResource?.resourceId) {
+            pushData.jobId = relatedResource.resourceId.toString();
+          }
+        }
+
+        const unreadCount = await Notification.countDocuments({
+          recipient: targetRecipient,
+          isRead: false
+        }).catch(() => 1);
+
+        sendPushNotification({
+          recipientUserIds: [targetRecipient],
+          title,
+          body: message,
+          data: pushData,
+          channelId,
+          priority: 'high',
+          sound: 'default',
+          badge: unreadCount
+        }).catch((err) => {
+          console.warn('Non-fatal: Push delivery error in notification service:', err.message);
+        });
+      } catch (pushErr) {
+        console.warn('Push notification dispatch setup warning:', pushErr.message);
+      }
+    }
+
+    // 4. Process Email Notification if enabled
     if (sendEmailNotification) {
       try {
         const recipientUser = await User.findById(targetRecipient).select('name email notificationPreferences');
