@@ -16,8 +16,10 @@ import {
   KeyboardAvoidingView
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api } from '../api/client';
+import { useNavigation } from '../context/NavigationContext';
 import { secureStorage } from '../storage/secureStorage';
 import { STORAGE_KEYS } from '../constants';
 import { COLORS } from '../theme/colors';
@@ -42,6 +44,7 @@ const COMMON_LOCALITIES = [
 
 export default function VendorNewServiceScreen({ navigation, route }: any) {
   const insets = useSafeAreaInsets();
+  const appNav = useNavigation();
   const topInset = Math.max(
     insets.top,
     Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 0
@@ -66,6 +69,7 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
     existingService?.experienceYears?.toString() || '4'
   );
   const [imageUrl, setImageUrl] = useState(existingService?.images?.[0] || '');
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
   // Form Fields - Step 2: Pricing
   const [pricingType, setPricingType] = useState<'fixed' | 'starting' | 'quote'>(
@@ -109,6 +113,32 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
     loadCategories();
   }, []);
 
+  useEffect(() => {
+    const unregister = appNav.registerBackHandler(() => {
+      if (step > 1) {
+        setStep((prev) => prev - 1);
+        return true;
+      }
+      if (title.trim()) {
+        Alert.alert(
+          'Discard Listing?',
+          'Are you sure you want to discard this service listing? Any unsaved edits will be lost.',
+          [
+            { text: 'Keep Editing', style: 'cancel' },
+            {
+              text: 'Discard',
+              style: 'destructive',
+              onPress: () => navigation.goBack()
+            }
+          ]
+        );
+        return true;
+      }
+      return false;
+    });
+    return unregister;
+  }, [step, title, appNav, navigation]);
+
   const loadCategories = async () => {
     try {
       setLoadingCategories(true);
@@ -140,6 +170,38 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
     if (cat.subcategories && cat.subcategories.length > 0) {
       const firstSub = typeof cat.subcategories[0] === 'string' ? cat.subcategories[0] : cat.subcategories[0].name;
       setSubcategory(firstSub);
+    }
+  };
+
+  const handlePickServicePhoto = async () => {
+    if (uploadingPhoto) return;
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Denied', 'WorkLogy needs gallery permissions to upload service photos.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.85
+      });
+
+      if (result.canceled || !result.assets || result.assets.length === 0) return;
+
+      const asset = result.assets[0];
+      setUploadingPhoto(true);
+
+      const uploadRes = await api.media.uploadImage(asset.uri, asset.mimeType || 'image/jpeg');
+      if (uploadRes?.url) {
+        setImageUrl(uploadRes.url);
+      }
+    } catch (err: any) {
+      Alert.alert('Upload Failed', err?.message || 'Could not upload service photo.');
+    } finally {
+      setUploadingPhoto(false);
     }
   };
 
@@ -343,29 +405,65 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
           </TouchableOpacity>
           <View style={styles.headerTitleWrap}>
             <Text style={styles.headerTitle}>
-              {isEditing ? 'Edit Service' : 'List a New Skill & Service'}
-            </Text>
-            <Text style={styles.headerSubtitle}>
-              Step {step} of 5: {
-                step === 1 ? 'Service Info' :
-                step === 2 ? 'Pricing & Model' :
-                step === 3 ? 'Coverage & Area' :
-                step === 4 ? 'Availability' : 'Review & Publish'
-              }
+              {isEditing ? 'Edit Service' : 'Add Service'}
             </Text>
           </View>
+          <View style={{ width: 36 }} />
         </View>
 
-        {/* Progress Bar Indicator */}
-        <View style={styles.progressTrack}>
-          {[1, 2, 3, 4, 5].map((s) => (
-            <View
-              key={s}
-              style={[
-                styles.progressBarSegment,
-                step >= s ? styles.progressSegmentFilled : styles.progressSegmentEmpty
-              ]}
-            />
+        {/* 5-Step Stepper matching reference Screen 4 */}
+        <View style={styles.stepperContainer}>
+          {[
+            { num: 1, label: 'Basic Info' },
+            { num: 2, label: 'Pricing' },
+            { num: 3, label: 'Service Area' },
+            { num: 4, label: 'Availability' },
+            { num: 5, label: 'Review' }
+          ].map((s, idx) => (
+            <React.Fragment key={s.num}>
+              {idx > 0 && (
+                <View
+                  style={[
+                    styles.stepperLine,
+                    step >= s.num ? styles.stepperLineActive : styles.stepperLineInactive
+                  ]}
+                />
+              )}
+              <View style={styles.stepItem}>
+                <View
+                  style={[
+                    styles.stepCircle,
+                    step === s.num
+                      ? styles.stepCircleActive
+                      : step > s.num
+                      ? styles.stepCircleCompleted
+                      : styles.stepCircleInactive
+                  ]}
+                >
+                  {step > s.num ? (
+                    <Ionicons name="checkmark" size={12} color="#FFFFFF" />
+                  ) : (
+                    <Text
+                      style={[
+                        styles.stepCircleText,
+                        step === s.num && styles.stepCircleTextActive
+                      ]}
+                    >
+                      {s.num}
+                    </Text>
+                  )}
+                </View>
+                <Text
+                  style={[
+                    styles.stepLabel,
+                    step === s.num ? styles.stepLabelActive : styles.stepLabelInactive
+                  ]}
+                  numberOfLines={1}
+                >
+                  {s.label}
+                </Text>
+              </View>
+            </React.Fragment>
           ))}
         </View>
       </View>
@@ -498,16 +596,37 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
               keyboardType="number-pad"
             />
 
-            {/* Optional Cover Image URL */}
-            <Text style={styles.label}>Custom Cover Image URL (Optional)</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="https://images.unsplash.com/..."
-              placeholderTextColor="#94A3B8"
-              value={imageUrl}
-              onChangeText={setImageUrl}
-              autoCapitalize="none"
-            />
+            {/* Service Cover Photo */}
+            <Text style={styles.label}>Service Cover Photo (Optional)</Text>
+            {imageUrl ? (
+              <View style={styles.servicePhotoCard}>
+                <Image source={{ uri: imageUrl }} style={styles.servicePhotoImg} resizeMode="cover" />
+                <TouchableOpacity
+                  style={styles.removeServicePhotoBtn}
+                  onPress={() => setImageUrl('')}
+                >
+                  <Ionicons name="trash-outline" size={16} color="#FFFFFF" />
+                </TouchableOpacity>
+              </View>
+            ) : null}
+
+            <TouchableOpacity
+              style={styles.uploadServicePhotoBtn}
+              onPress={handlePickServicePhoto}
+              disabled={uploadingPhoto}
+              activeOpacity={0.8}
+            >
+              {uploadingPhoto ? (
+                <ActivityIndicator size="small" color="#059669" />
+              ) : (
+                <>
+                  <Ionicons name="camera-outline" size={20} color="#059669" />
+                  <Text style={styles.uploadServicePhotoText}>
+                    {imageUrl ? 'Change Service Photo' : 'Upload Photo from Gallery'}
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
           </View>
         )}
 
@@ -899,8 +1018,15 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
             onPress={handleNext}
             activeOpacity={0.85}
           >
-            <Text style={styles.nextBtnText}>Continue to Step {step + 1}</Text>
-            <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
+            <Text style={styles.nextBtnText}>
+              {step === 1
+                ? 'Next: Pricing →'
+                : step === 2
+                ? 'Next: Service Area →'
+                : step === 3
+                ? 'Next: Availability →'
+                : 'Next: Review →'}
+            </Text>
           </TouchableOpacity>
         ) : (
           <View style={styles.footerTwoBtn}>
@@ -979,21 +1105,67 @@ const styles = StyleSheet.create({
     color: '#059669',
     marginTop: 1
   },
-  progressTrack: {
+  stepperContainer: {
     flexDirection: 'row',
-    gap: 6,
-    marginTop: 4
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    paddingHorizontal: 4
   },
-  progressBarSegment: {
+  stepItem: {
+    alignItems: 'center',
+    width: 62
+  },
+  stepperLine: {
     flex: 1,
-    height: 4,
-    borderRadius: 2
+    height: 1.5,
+    marginBottom: 16,
+    marginHorizontal: -6
   },
-  progressSegmentFilled: {
+  stepperLineActive: {
+    backgroundColor: '#06684F'
+  },
+  stepperLineInactive: {
+    backgroundColor: '#E2E8F0'
+  },
+  stepCircle: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4
+  },
+  stepCircleActive: {
+    backgroundColor: '#06684F'
+  },
+  stepCircleCompleted: {
     backgroundColor: '#059669'
   },
-  progressSegmentEmpty: {
-    backgroundColor: '#E2E8F0'
+  stepCircleInactive: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: '#CBD5E1'
+  },
+  stepCircleText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748B'
+  },
+  stepCircleTextActive: {
+    color: '#FFFFFF'
+  },
+  stepLabel: {
+    fontSize: 9.5,
+    textAlign: 'center'
+  },
+  stepLabelActive: {
+    fontWeight: '800',
+    color: '#06684F'
+  },
+  stepLabelInactive: {
+    fontWeight: '500',
+    color: '#94A3B8'
   },
   scrollBody: {
     flex: 1
@@ -1397,5 +1569,53 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '700'
+  },
+  servicePhotoCard: {
+    position: 'relative',
+    height: 180,
+    borderRadius: 14,
+    overflow: 'hidden',
+    marginBottom: 10,
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#E2E8F0'
+  },
+  servicePhotoImg: {
+    width: '100%',
+    height: '100%'
+  },
+  removeServicePhotoBtn: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(239, 68, 68, 0.9)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    elevation: 3
+  },
+  uploadServicePhotoBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: '#059669',
+    borderRadius: 14,
+    paddingVertical: 14,
+    backgroundColor: '#F0FDF4',
+    marginBottom: 8
+  },
+  uploadServicePhotoText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#059669'
   }
 });

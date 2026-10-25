@@ -10,7 +10,8 @@ import {
   TextInput,
   Modal,
   Alert,
-  Linking
+  Linking,
+  Platform
 } from 'react-native';
 import { api } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
@@ -155,8 +156,39 @@ export default function ConfirmedJobsScreen({ navigation }: any) {
 
   const handleOpenMaps = (address?: any) => {
     if (!address) return;
-    const query = encodeURIComponent(`${address.houseNumber || ''} ${address.street || ''}, ${address.city || ''}`);
-    Linking.openURL(`https://maps.google.com/?q=${query}`);
+    const lat = address.coordinates?.lat != null ? Number(address.coordinates.lat) : 0;
+    const lng = address.coordinates?.lng != null ? Number(address.coordinates.lng) : 0;
+
+    if (lat !== 0 || lng !== 0) {
+      const navUrl = Platform.OS === 'android'
+        ? `google.navigation:q=${lat},${lng}`
+        : `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
+
+      Linking.canOpenURL(navUrl)
+        .then((supported) => {
+          if (supported) {
+            Linking.openURL(navUrl);
+          } else {
+            Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`);
+          }
+        })
+        .catch(() => {
+          Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`);
+        });
+    } else {
+      const query = encodeURIComponent(
+        [
+          address.houseNumber,
+          address.street,
+          address.landmark ? 'Near ' + address.landmark : '',
+          address.locality,
+          address.city
+        ]
+          .filter(Boolean)
+          .join(', ') || 'Lucknow'
+      );
+      Linking.openURL(`https://maps.google.com/?q=${query}`);
+    }
   };
 
   const renderBookingCard = ({ item }: { item: Booking }) => {
@@ -167,7 +199,7 @@ export default function ConfirmedJobsScreen({ navigation }: any) {
 
     const customerName = item.customer?.name || 'Customer';
     const customerPhone = item.customer?.phone || '';
-    const fullAddress = `${item.address?.houseNumber ? item.address.houseNumber + ', ' : ''}${item.address?.street || ''}, ${item.address?.city || ''} ${item.address?.pincode ? '- ' + item.address.pincode : ''}`;
+    const fullAddress = `${item.address?.houseNumber ? item.address.houseNumber + ', ' : ''}${item.address?.street || ''}${item.address?.landmark ? ' (Near ' + item.address.landmark + ')' : ''}, ${item.address?.locality ? item.address.locality + ', ' : ''}${item.address?.city || ''} ${item.address?.pincode || item.address?.zipCode ? '- ' + (item.address.pincode || item.address.zipCode) : ''}`;
 
     return (
       <View style={styles.card}>

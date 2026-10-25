@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -7,77 +7,81 @@ import {
   TouchableOpacity,
   Switch,
   Alert,
-  Modal,
-  TextInput,
   Image,
-  ActivityIndicator
+  ActivityIndicator,
+  RefreshControl,
+  Platform,
+  StatusBar
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../hooks/useAuth';
 import { api } from '../api/client';
+import { useNavigation } from '../context/NavigationContext';
 import { COLORS } from '../theme/colors';
-import Header from '../components/Header';
 import type { VendorProfile } from '../types';
 
 export default function VendorProfileScreen({ navigation }: any) {
-  const { user, logout, switchRole } = useAuth();
+  const insets = useSafeAreaInsets();
+  const topInset = Math.max(
+    insets.top,
+    Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 0
+  );
+
+  const { user, logout } = useAuth();
+  const appNav = useNavigation();
+
   const [profile, setProfile] = useState<VendorProfile | null>(null);
+  const [dashboardStats, setDashboardStats] = useState<any | null>(null);
   const [isAvailable, setIsAvailable] = useState(true);
   const [loading, setLoading] = useState(true);
-  const [updating, setUpdating] = useState(false);
-  const [unreadCount, setUnreadCount] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [updatingAvailability, setUpdatingAvailability] = useState(false);
+  const [imageError, setImageError] = useState(false);
 
-  // Verification Modal State
-  const [verifyModalOpen, setVerifyModalOpen] = useState(false);
-  const [idType, setIdType] = useState('Aadhaar Card');
-  const [idNumber, setIdNumber] = useState('');
-  const [consent, setConsent] = useState(true);
-  const [submittingDocs, setSubmittingDocs] = useState(false);
-
-  // Edit Profile Modal State
-  const [editModalOpen, setEditModalOpen] = useState(false);
-  const [businessName, setBusinessName] = useState('');
-  const [bio, setBio] = useState('');
-  const [serviceAreas, setServiceAreas] = useState('');
-  const [experienceYears, setExperienceYears] = useState('5');
-  const [savingProfile, setSavingProfile] = useState(false);
+  useEffect(() => {
+    setImageError(false);
+  }, [user?.avatar]);
 
   useEffect(() => {
     loadProfileData();
   }, [user]);
 
-  const loadProfileData = async () => {
+  const loadProfileData = useCallback(async (isSilent = false) => {
     try {
-      setLoading(true);
-      const [profRes, notifRes] = await Promise.all([
+      if (!isSilent) setLoading(true);
+      const [profRes, statsRes] = await Promise.all([
         api.vendors.getProfile().catch(() => null),
-        api.notifications.getUnreadCount().catch(() => ({ count: 0 }))
+        api.vendors.getDashboardStats().catch(() => null)
       ]);
 
       if (profRes?.vendor) {
         setProfile(profRes.vendor);
         const avail = profRes.vendor.availability?.isAvailableNow ?? profRes.vendor.isAvailable ?? true;
         setIsAvailable(avail);
-        setBusinessName(profRes.vendor.businessName || '');
-        setBio(profRes.vendor.bio || '');
-        setServiceAreas(profRes.vendor.serviceAreas?.join(', ') || 'Gomti Nagar, Aliganj, Lucknow');
-        setExperienceYears(profRes.vendor.experienceYears?.toString() || '5');
       }
-      if (notifRes?.count) {
-        setUnreadCount(notifRes.count);
+
+      if (statsRes?.stats) {
+        setDashboardStats(statsRes.stats);
       }
     } catch (err) {
-      console.warn('Failed to load vendor profile:', err);
+      console.warn('Failed to load profile data:', err);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
+  }, []);
+
+  const handleRefresh = () => {
+    setRefreshing(true);
+    loadProfileData(true);
   };
 
   const handleToggleAvailability = async (val: boolean) => {
-    if (updating) return;
+    if (updatingAvailability) return;
     const prev = isAvailable;
     try {
-      setUpdating(true);
+      setUpdatingAvailability(true);
       setIsAvailable(val);
       const res = await api.vendors.toggleAvailability(val);
       if (res?.success && res.availability) {
@@ -90,55 +94,7 @@ export default function VendorProfileScreen({ navigation }: any) {
         err.message || 'Could not update your availability status. Please try again.'
       );
     } finally {
-      setUpdating(false);
-    }
-  };
-
-  const handleSubmitVerification = async () => {
-    if (!idNumber.trim()) {
-      Alert.alert('Document Number Required', 'Please enter your government document identification number.');
-      return;
-    }
-
-    try {
-      setSubmittingDocs(true);
-      await api.vendors.requestVerification({
-        idType,
-        documentUrl: `https://worklogy.in/docs/${idNumber.trim()}`,
-        statutoryConsent: consent
-      });
-
-      Alert.alert(
-        'Documents Submitted 📄',
-        'Your identity documents have been submitted to the WorkLogy Compliance Team for administrative verification.'
-      );
-      setVerifyModalOpen(false);
-      loadProfileData();
-    } catch (err: any) {
-      Alert.alert('Submission Error', err.message || 'Could not submit verification.');
-    } finally {
-      setSubmittingDocs(false);
-    }
-  };
-
-  const handleSaveProfile = async () => {
-    try {
-      setSavingProfile(true);
-      const areas = serviceAreas.split(',').map((s) => s.trim()).filter(Boolean);
-      await api.vendors.updateProfile({
-        businessName,
-        bio,
-        serviceAreas: areas,
-        experienceYears: parseInt(experienceYears, 10) || 5
-      });
-
-      Alert.alert('Success', 'Your professional profile has been updated.');
-      setEditModalOpen(false);
-      loadProfileData();
-    } catch (err: any) {
-      Alert.alert('Update Failed', err.message || 'Could not update profile.');
-    } finally {
-      setSavingProfile(false);
+      setUpdatingAvailability(false);
     }
   };
 
@@ -150,348 +106,315 @@ export default function VendorProfileScreen({ navigation }: any) {
         style: 'destructive',
         onPress: async () => {
           await logout();
-          navigation.navigate('VendorLogin');
+          navigation.resetTo ? navigation.resetTo('VendorLogin') : navigation.navigate('VendorLogin');
         }
       }
     ]);
   };
 
-  // Verification status mapping
-  const getVerificationState = () => {
-    if (profile?.isVerified) return { label: 'Verified', bg: '#ECFDF5', color: '#047857', icon: 'shield-checkmark' };
-    if (profile?.verificationStatus === 'submitted' || profile?.verificationStatus === 'in_review') {
-      return { label: 'Under Review', bg: '#FEF3C7', color: '#B45309', icon: 'time' };
-    }
-    if (profile?.verificationStatus === 'rejected') {
-      return { label: 'Action Required', bg: '#FEE2E2', color: '#B91C1C', icon: 'alert-circle' };
-    }
-    return { label: 'Not Submitted', bg: '#F3F4F6', color: '#4B5563', icon: 'document-text-outline' };
-  };
+  // Derive display values from live data
+  const displayName = profile?.businessName || user?.name || 'Mohammad Aalam';
+  const rating = profile?.rating ?? dashboardStats?.rating ?? 4.9;
+  const reviewCount = profile?.reviewCount ?? profile?.reviewsCount ?? dashboardStats?.reviewCount ?? 128;
+  const expYears = profile?.experienceYears || 2;
+  const completedJobs = profile?.completedJobsCount ?? dashboardStats?.completedJobsCount ?? 150;
+  const satisfactionRate = dashboardStats?.satisfactionRate ?? 98;
 
-  const vState = getVerificationState();
+  const isVerified =
+    profile?.isVerified === true ||
+    profile?.verifiedBadge?.status === 'approved' ||
+    profile?.verifiedBadge?.status === 'verified' ||
+    profile?.verificationStatus === 'verified';
+
+  const avatarUri =
+    user?.avatar ||
+    (profile as any)?.avatar ||
+    (typeof profile?.user === 'object' && (profile?.user as any)?.avatar);
 
   return (
     <View style={styles.container}>
-      <Header
-        unreadCount={unreadCount}
-        userName={profile?.businessName || user?.name || 'Pro'}
-        onPressNotifications={() => navigation.navigate('Notifications')}
-        onPressProfile={() => {}}
-      />
+      {/* ── TOP HEADER (TITLE + SETTINGS GEAR) ── */}
+      <View style={[styles.headerBar, { paddingTop: topInset + 6 }]}>
+        <Text style={styles.headerTitle}>Profile</Text>
+        <TouchableOpacity
+          style={styles.settingsIconBtn}
+          onPress={() => navigation.navigate('VendorSettings')}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="settings-outline" size={22} color="#111827" />
+        </TouchableOpacity>
+      </View>
 
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} colors={[COLORS.primary]} />
+        }
         showsVerticalScrollIndicator={false}
       >
-        {/* ── 1. VENDOR PROFILE CARD ── */}
-        <View style={styles.profileCard}>
-          <View style={styles.avatarRow}>
-            <View style={styles.avatarWrapper}>
-              <View style={styles.avatarCircle}>
-                <Text style={styles.avatarLetter}>
-                  {(profile?.businessName || user?.name || 'P').charAt(0).toUpperCase()}
-                </Text>
-              </View>
-              {profile?.isVerified && (
-                <View style={styles.verifiedPin}>
-                  <Ionicons name="checkmark" size={12} color="#FFFFFF" />
+        {/* ── A. DEEP-GREEN PROFILE HERO CARD ── */}
+        <View style={styles.profileHeroCard}>
+          {/* Top Row: Avatar + Name / Rating / Badge */}
+          <View style={styles.profileHeroTopRow}>
+            <TouchableOpacity
+              style={styles.avatarWrap}
+              onPress={() => navigation.navigate('VendorEditProfile')}
+              activeOpacity={0.85}
+            >
+              {avatarUri && !imageError ? (
+                <Image
+                  source={{ uri: avatarUri }}
+                  key={avatarUri}
+                  style={styles.avatarImg}
+                  resizeMode="cover"
+                  onError={() => setImageError(true)}
+                  onLoad={() => setImageError(false)}
+                />
+              ) : (
+                <View style={styles.avatarFallback}>
+                  <Text style={styles.avatarLetter}>
+                    {displayName.charAt(0).toUpperCase()}
+                  </Text>
                 </View>
               )}
-            </View>
+              {/* Edit Pencil Badge */}
+              <View style={styles.pencilBadge}>
+                <Ionicons name="pencil" size={11} color="#065F46" />
+              </View>
+            </TouchableOpacity>
 
-            <View style={styles.infoCol}>
-              <Text style={styles.businessName}>
-                {profile?.businessName || user?.name || 'Aalam Electrical Services'}
-              </Text>
-              <Text style={styles.tradeTitle}>
-                {profile?.categories?.length
-                  ? (profile.categories as any).map((c: any) => c.name || c).join(', ')
-                  : 'Multi-Skilled Contractor'}
-              </Text>
-              <View style={styles.ratingRow}>
-                <Ionicons name="star" size={14} color="#F59E0B" />
-                <Text style={styles.ratingText}>
-                  {profile?.rating ? profile.rating.toFixed(1) : '4.9'} ({profile?.reviewsCount || 42} reviews)
+            <View style={styles.profileHeroInfoCol}>
+              <Text style={styles.profileHeroName} numberOfLines={1}>{displayName}</Text>
+              <View style={styles.profileHeroRatingRow}>
+                <Ionicons name="star" size={13} color="#F59E0B" />
+                <Text style={styles.profileHeroRatingText}>
+                  {Number(rating).toFixed(1)} ({reviewCount} reviews)
                 </Text>
-                <Text style={styles.bullet}>•</Text>
-                <Text style={styles.expText}>{profile?.experienceYears || 6} yrs exp</Text>
+              </View>
+              {/* Verified Badge Pill */}
+              <View style={styles.verifiedVendorPill}>
+                <Ionicons name="checkmark-circle" size={13} color="#065F46" />
+                <Text style={styles.verifiedVendorPillText}>
+                  {isVerified ? 'Verified Vendor' : 'Pending Verification'}
+                </Text>
               </View>
             </View>
           </View>
 
-          {/* Territory & Verification Status Bar */}
-          <View style={styles.territoryRow}>
-            <Ionicons name="location-outline" size={14} color={COLORS.textMuted} />
-            <Text style={styles.territoryText} numberOfLines={1}>
-              {profile?.serviceAreas?.join(', ') || 'Gomti Nagar, Aliganj, Lucknow'}
+          {/* Bottom Row: 3 Business Statistics */}
+          <View style={styles.statsRow}>
+            {/* Stat 1: Experience */}
+            <View style={styles.statCol}>
+              <Text style={styles.statNumber}>{expYears}+</Text>
+              <Text style={styles.statLabel}>Years Experience</Text>
+            </View>
+
+            <View style={styles.statDivider} />
+
+            {/* Stat 2: Jobs Completed */}
+            <View style={styles.statCol}>
+              <Text style={styles.statNumber}>{completedJobs}+</Text>
+              <Text style={styles.statLabel}>Jobs Completed</Text>
+            </View>
+
+            <View style={styles.statDivider} />
+
+            {/* Stat 3: Satisfaction */}
+            <View style={styles.statCol}>
+              <Text style={styles.statNumber}>{satisfactionRate}%</Text>
+              <Text style={styles.statLabel}>Customer Satisfaction</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* ── B. ONLINE FOR JOBS CARD ── */}
+        <View style={styles.onlineJobsCard}>
+          <View style={styles.onlineIconBox}>
+            <Ionicons name="shield-checkmark" size={18} color="#059669" />
+          </View>
+          <View style={{ flex: 1, marginLeft: 12 }}>
+            <Text style={styles.onlineTitle}>Online for Jobs</Text>
+            <Text style={styles.onlineSubtitle}>
+              {isAvailable
+                ? 'You will receive new job requests'
+                : 'Turn on to receive new job requests'}
             </Text>
           </View>
-
-          <View style={styles.statusDivider} />
-
-          <View style={styles.cardFooter}>
-            <View style={[styles.verificationPill, { backgroundColor: vState.bg }]}>
-              <Ionicons name={vState.icon as any} size={13} color={vState.color} />
-              <Text style={[styles.verificationText, { color: vState.color }]}>
-                {vState.label}
-              </Text>
-            </View>
-
-            <TouchableOpacity style={styles.editBtn} onPress={() => setEditModalOpen(true)}>
-              <Ionicons name="pencil" size={12} color={COLORS.textDark} />
-              <Text style={styles.editBtnText}>Edit Profile</Text>
-            </TouchableOpacity>
-          </View>
+          <Switch
+            value={isAvailable}
+            onValueChange={handleToggleAvailability}
+            disabled={updatingAvailability}
+            trackColor={{ false: '#CBD5E1', true: '#A7F3D0' }}
+            thumbColor={isAvailable ? '#06684F' : '#94A3B8'}
+          />
         </View>
 
-        {/* ── 2. AVAILABILITY & DISPATCH TOGGLE ── */}
-        <View style={styles.sectionCard}>
-          <View style={styles.toggleRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.toggleTitle}>Availability for Service Dispatch</Text>
-              <Text style={styles.toggleSubtitle}>
-                {isAvailable
-                  ? 'ONLINE: Receiving job opportunities and emergency calls'
-                  : 'OFFLINE: Hidden from instant customer booking radars'}
-              </Text>
-            </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              {updating && <ActivityIndicator size="small" color={COLORS.primary} />}
-              <Switch
-                value={isAvailable}
-                onValueChange={handleToggleAvailability}
-                disabled={updating}
-                trackColor={{ false: '#CBD5E1', true: '#A7F3D0' }}
-                thumbColor={isAvailable ? COLORS.primary : '#94A3B8'}
-              />
-            </View>
-          </View>
-        </View>
-
-        {/* ── 3. MENU ITEMS ── */}
-        <View style={styles.sectionCard}>
-          <Text style={styles.menuGroupHeading}>Service Management</Text>
-
-          <TouchableOpacity style={styles.menuItem} onPress={() => setEditModalOpen(true)}>
-            <View style={[styles.menuIconBox, { backgroundColor: '#EFF6FF' }]}>
-              <Ionicons name="person-outline" size={18} color="#2563EB" />
-            </View>
-            <Text style={styles.menuLabel}>Edit Business Profile</Text>
-            <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
-          </TouchableOpacity>
-
+        {/* ── C. PROFILE MENU LIST ── */}
+        <View style={styles.menuCard}>
+          {/* 1. My Services */}
           <TouchableOpacity
             style={styles.menuItem}
             onPress={() => navigation.navigate('VendorServices')}
+            activeOpacity={0.75}
+          >
+            <View style={[styles.menuIconBox, { backgroundColor: '#EFF6FF' }]}>
+              <Ionicons name="briefcase-outline" size={18} color="#2563EB" />
+            </View>
+            <View style={styles.menuContentCol}>
+              <Text style={styles.menuTitle}>My Services</Text>
+              <Text style={styles.menuSubtitle}>Manage your service listings</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+          </TouchableOpacity>
+
+          <View style={styles.menuDivider} />
+
+          {/* 2. Earnings & Payments */}
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => navigation.navigate('Earnings')}
+            activeOpacity={0.75}
+          >
+            <View style={[styles.menuIconBox, { backgroundColor: '#FFF7ED' }]}>
+              <Ionicons name="wallet-outline" size={18} color="#D97706" />
+            </View>
+            <View style={styles.menuContentCol}>
+              <Text style={styles.menuTitle}>Earnings & Payments</Text>
+              <Text style={styles.menuSubtitle}>Check your earnings and transactions</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+          </TouchableOpacity>
+
+          <View style={styles.menuDivider} />
+
+          {/* 3. KYC Verification */}
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => navigation.navigate('VendorKyc')}
+            activeOpacity={0.75}
           >
             <View style={[styles.menuIconBox, { backgroundColor: '#ECFDF5' }]}>
-              <Ionicons name="construct-outline" size={18} color="#059669" />
+              <Ionicons name="shield-checkmark-outline" size={18} color="#059669" />
             </View>
-            <Text style={styles.menuLabel}>My Services & Catalog</Text>
-            <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+            <View style={styles.menuContentCol}>
+              <Text style={styles.menuTitle}>KYC Verification</Text>
+              <Text style={styles.menuSubtitle}>Upload and manage documents</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
           </TouchableOpacity>
 
+          <View style={styles.menuDivider} />
+
+          {/* 4. Reviews & Ratings */}
           <TouchableOpacity
             style={styles.menuItem}
-            onPress={() => setVerifyModalOpen(true)}
+            onPress={() => navigation.navigate('VendorReviews')}
+            activeOpacity={0.75}
           >
             <View style={[styles.menuIconBox, { backgroundColor: '#FEF3C7' }]}>
-              <Ionicons name="shield-checkmark-outline" size={18} color="#D97706" />
+              <Ionicons name="star-outline" size={18} color="#D97706" />
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.menuLabel}>Verification Documents (KYC)</Text>
-              <Text style={styles.menuSub}>{vState.label}</Text>
+            <View style={styles.menuContentCol}>
+              <Text style={styles.menuTitle}>Reviews & Ratings</Text>
+              <Text style={styles.menuSubtitle}>See what customers say about you</Text>
             </View>
-            <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+            <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
           </TouchableOpacity>
 
+          <View style={styles.menuDivider} />
+
+          {/* 5. Availability & Schedule */}
           <TouchableOpacity
             style={styles.menuItem}
-            onPress={() => navigation.navigate('EarningsTab')}
+            onPress={() => navigation.navigate('VendorSchedule')}
+            activeOpacity={0.75}
           >
             <View style={[styles.menuIconBox, { backgroundColor: '#F3E8FF' }]}>
-              <Ionicons name="card-outline" size={18} color="#7C3AED" />
+              <Ionicons name="calendar-outline" size={18} color="#7C3AED" />
             </View>
-            <Text style={styles.menuLabel}>Bank & Payout Details</Text>
-            <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+            <View style={styles.menuContentCol}>
+              <Text style={styles.menuTitle}>Availability & Schedule</Text>
+              <Text style={styles.menuSubtitle}>Set your working hours</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
           </TouchableOpacity>
-        </View>
 
-        <View style={styles.sectionCard}>
-          <Text style={styles.menuGroupHeading}>Support & Security</Text>
+          <View style={styles.menuDivider} />
 
+          {/* 6. Service Area */}
           <TouchableOpacity
             style={styles.menuItem}
-            onPress={() =>
-              Alert.alert('WorkLogy Pro Support', 'Need help with a job or payout? Call +91 800-WORKLOGY or email support@worklogy.in')
-            }
+            onPress={() => navigation.navigate('VendorServiceArea')}
+            activeOpacity={0.75}
           >
-            <View style={[styles.menuIconBox, { backgroundColor: '#F1F5F9' }]}>
-              <Ionicons name="help-buoy-outline" size={18} color="#334155" />
+            <View style={[styles.menuIconBox, { backgroundColor: '#EFF6FF' }]}>
+              <Ionicons name="location-outline" size={18} color="#2563EB" />
             </View>
-            <Text style={styles.menuLabel}>Help & Support</Text>
-            <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+            <View style={styles.menuContentCol}>
+              <Text style={styles.menuTitle}>Service Area</Text>
+              <Text style={styles.menuSubtitle}>Manage your coverage area</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
           </TouchableOpacity>
 
+          <View style={styles.menuDivider} />
+
+          {/* 7. Help & Support */}
           <TouchableOpacity
             style={styles.menuItem}
-            onPress={() =>
-              Alert.alert('App Preferences', 'WorkLogy Pro v1.0.0 (Production Build). Location services: High Accuracy.')
-            }
+            onPress={() => navigation.navigate('VendorHelpSupport')}
+            activeOpacity={0.75}
           >
-            <View style={[styles.menuIconBox, { backgroundColor: '#F1F5F9' }]}>
-              <Ionicons name="settings-outline" size={18} color="#334155" />
+            <View style={[styles.menuIconBox, { backgroundColor: '#ECFDF5' }]}>
+              <Ionicons name="help-buoy-outline" size={18} color="#059669" />
             </View>
-            <Text style={styles.menuLabel}>Settings & Preferences</Text>
-            <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+            <View style={styles.menuContentCol}>
+              <Text style={styles.menuTitle}>Help & Support</Text>
+              <Text style={styles.menuSubtitle}>Get help from our support team</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
           </TouchableOpacity>
 
-          <TouchableOpacity style={[styles.menuItem, { borderBottomWidth: 0 }]} onPress={handleLogout}>
+          <View style={styles.menuDivider} />
+
+          {/* 8. Settings & Account Security */}
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => navigation.navigate('VendorSettings')}
+            activeOpacity={0.75}
+          >
+            <View style={[styles.menuIconBox, { backgroundColor: '#F1F5F9' }]}>
+              <Ionicons name="settings-outline" size={18} color="#475569" />
+            </View>
+            <View style={styles.menuContentCol}>
+              <Text style={styles.menuTitle}>Settings and Account Security</Text>
+              <Text style={styles.menuSubtitle}>Security, notifications & preferences</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+          </TouchableOpacity>
+
+          <View style={styles.menuDivider} />
+
+          {/* 9. Sign Out */}
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={handleLogout}
+            activeOpacity={0.75}
+          >
             <View style={[styles.menuIconBox, { backgroundColor: '#FEE2E2' }]}>
               <Ionicons name="log-out-outline" size={18} color="#DC2626" />
             </View>
-            <Text style={[styles.menuLabel, { color: '#DC2626' }]}>Sign Out</Text>
+            <View style={styles.menuContentCol}>
+              <Text style={[styles.menuTitle, { color: '#DC2626' }]}>Sign Out</Text>
+              <Text style={styles.menuSubtitle}>Sign out from this device</Text>
+            </View>
             <Ionicons name="chevron-forward" size={18} color="#DC2626" />
           </TouchableOpacity>
         </View>
+
+        <View style={{ height: 40 }} />
       </ScrollView>
-
-      {/* ── 4. KYC VERIFICATION MODAL ── */}
-      <Modal visible={verifyModalOpen} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Statutory KYC Verification</Text>
-              <TouchableOpacity onPress={() => setVerifyModalOpen(false)}>
-                <Ionicons name="close" size={24} color={COLORS.textDark} />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView style={{ marginBottom: 16 }}>
-              <Text style={styles.modalDesc}>
-                In compliance with Indian hyperlocal service safety mandates, submit your government-issued identity proof to unlock the verified badge.
-              </Text>
-
-              <Text style={styles.fieldLabel}>Select ID Proof</Text>
-              <View style={styles.idTypeRow}>
-                {['Aadhaar Card', 'PAN Card', 'Voter ID', 'Trade License'].map((type) => (
-                  <TouchableOpacity
-                    key={type}
-                    style={[styles.idTypePill, idType === type && styles.idTypePillActive]}
-                    onPress={() => setIdType(type)}
-                  >
-                    <Text
-                      style={[styles.idTypePillText, idType === type && styles.idTypePillTextActive]}
-                    >
-                      {type}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              <Text style={styles.fieldLabel}>Document / ID Number</Text>
-              <TextInput
-                style={styles.textInput}
-                placeholder="e.g. 5432 1098 7654"
-                value={idNumber}
-                onChangeText={setIdNumber}
-                autoCapitalize="characters"
-              />
-
-              <TouchableOpacity
-                style={styles.consentRow}
-                onPress={() => setConsent(!consent)}
-                activeOpacity={0.8}
-              >
-                <Ionicons
-                  name={consent ? 'checkbox' : 'square-outline'}
-                  size={20}
-                  color={consent ? COLORS.primary : COLORS.textMuted}
-                />
-                <Text style={styles.consentText}>
-                  I consent to WorkLogy conducting administrative identity checks for trust and customer safety.
-                </Text>
-              </TouchableOpacity>
-            </ScrollView>
-
-            <TouchableOpacity
-              style={styles.submitModalBtn}
-              onPress={handleSubmitVerification}
-              disabled={submittingDocs}
-            >
-              {submittingDocs ? (
-                <ActivityIndicator color="#FFFFFF" size="small" />
-              ) : (
-                <Text style={styles.submitModalBtnText}>Submit Documents for Review</Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      {/* ── 5. EDIT PROFILE MODAL ── */}
-      <Modal visible={editModalOpen} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Edit Business Profile</Text>
-              <TouchableOpacity onPress={() => setEditModalOpen(false)}>
-                <Ionicons name="close" size={24} color={COLORS.textDark} />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView style={{ marginBottom: 16 }}>
-              <Text style={styles.fieldLabel}>Business / Contractor Name</Text>
-              <TextInput
-                style={styles.textInput}
-                value={businessName}
-                onChangeText={setBusinessName}
-                placeholder="e.g. Aalam Electrical Services"
-              />
-
-              <Text style={styles.fieldLabel}>Experience (Years)</Text>
-              <TextInput
-                style={styles.textInput}
-                keyboardType="numeric"
-                value={experienceYears}
-                onChangeText={setExperienceYears}
-                placeholder="6"
-              />
-
-              <Text style={styles.fieldLabel}>Service Territories (Comma Separated)</Text>
-              <TextInput
-                style={styles.textInput}
-                value={serviceAreas}
-                onChangeText={setServiceAreas}
-                placeholder="Gomti Nagar, Aliganj, Hazratganj"
-              />
-
-              <Text style={styles.fieldLabel}>Bio & Specializations</Text>
-              <TextInput
-                style={[styles.textInput, { height: 70, textAlignVertical: 'top' }]}
-                multiline
-                numberOfLines={3}
-                value={bio}
-                onChangeText={setBio}
-                placeholder="Licensed electrician offering residential and commercial installations..."
-              />
-            </ScrollView>
-
-            <TouchableOpacity
-              style={styles.submitModalBtn}
-              onPress={handleSaveProfile}
-              disabled={savingProfile}
-            >
-              {savingProfile ? (
-                <ActivityIndicator color="#FFFFFF" size="small" />
-              ) : (
-                <Text style={styles.submitModalBtnText}>Save Changes</Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 }
@@ -499,301 +422,245 @@ export default function VendorProfileScreen({ navigation }: any) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.background
+    backgroundColor: '#F8FAFC'
+  },
+  headerBar: {
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9'
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#0F172A',
+    letterSpacing: -0.3
+  },
+  settingsIconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F1F5F9'
   },
   scroll: {
     flex: 1
   },
   scrollContent: {
-    paddingBottom: 100
+    padding: 16
   },
-  profileCard: {
-    backgroundColor: '#FFFFFF',
-    marginHorizontal: 16,
-    marginTop: 14,
+
+  // ── Hero Profile Card ──
+  profileHeroCard: {
+    backgroundColor: '#065F46', // Deep forest green
     borderRadius: 18,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
-    shadowRadius: 3,
-    elevation: 2
+    padding: 18,
+    marginBottom: 14,
+    shadowColor: '#065F46',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.16,
+    shadowRadius: 10,
+    elevation: 4
   },
-  avatarRow: {
+  profileHeroTopRow: {
     flexDirection: 'row',
-    alignItems: 'center'
+    alignItems: 'center',
+    marginBottom: 16
   },
-  avatarWrapper: {
+  avatarWrap: {
     position: 'relative'
   },
-  avatarCircle: {
+  avatarImg: {
     width: 60,
     height: 60,
     borderRadius: 30,
-    backgroundColor: '#E0E7FF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: '#C7D2FE'
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    backgroundColor: '#047857'
   },
-  avatarLetter: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#3730A3'
-  },
-  verifiedPin: {
-    position: 'absolute',
-    bottom: -2,
-    right: -2,
+  avatarFallback: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     backgroundColor: '#10B981',
-    width: 20,
-    height: 20,
-    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
     borderColor: '#FFFFFF'
   },
-  infoCol: {
+  avatarLetter: {
+    fontSize: 24,
+    fontWeight: '900',
+    color: '#FFFFFF'
+  },
+  pencilBadge: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    elevation: 2
+  },
+  profileHeroInfoCol: {
     flex: 1,
     marginLeft: 14
   },
-  businessName: {
-    fontSize: 16,
+  profileHeroName: {
+    fontSize: 18,
     fontWeight: '800',
-    color: COLORS.textDark
+    color: '#FFFFFF',
+    marginBottom: 3
   },
-  tradeTitle: {
-    fontSize: 12,
-    color: COLORS.textMuted,
-    marginTop: 2
-  },
-  ratingRow: {
+  profileHeroRatingRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 4,
-    gap: 4
+    marginBottom: 6
   },
-  ratingText: {
+  profileHeroRatingText: {
     fontSize: 12,
-    fontWeight: '800',
-    color: '#92400E'
+    fontWeight: '600',
+    color: '#E2E8F0',
+    marginLeft: 4
   },
-  bullet: {
-    fontSize: 12,
-    color: COLORS.textMuted
-  },
-  expText: {
-    fontSize: 12,
-    color: COLORS.textSecondary,
-    fontWeight: '600'
-  },
-  territoryRow: {
+  verifiedVendorPill: {
+    alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 12,
-    gap: 4
-  },
-  territoryText: {
-    fontSize: 12,
-    color: COLORS.textMuted,
-    flex: 1
-  },
-  statusDivider: {
-    height: 1,
-    backgroundColor: COLORS.borderLight,
-    marginVertical: 12
-  },
-  cardFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center'
-  },
-  verificationPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    gap: 4
-  },
-  verificationText: {
-    fontSize: 11,
-    fontWeight: '800'
-  },
-  editBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F3F4F6',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 6,
-    gap: 4
-  },
-  editBtnText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: COLORS.textDark
-  },
-  sectionCard: {
     backgroundColor: '#FFFFFF',
-    marginHorizontal: 16,
-    marginTop: 14,
-    borderRadius: 18,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: COLORS.border
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+    gap: 4
   },
-  toggleRow: {
+  verifiedVendorPillText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#065F46'
+  },
+
+  // ── 3 Statistics Under Hero ──
+  statsRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 8
+  },
+  statCol: {
+    flex: 1,
     alignItems: 'center'
   },
-  toggleTitle: {
+  statNumber: {
+    fontSize: 15,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    marginBottom: 2
+  },
+  statLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#D1FAE5',
+    textAlign: 'center'
+  },
+  statDivider: {
+    width: 1,
+    height: 24,
+    backgroundColor: 'rgba(255, 255, 255, 0.25)'
+  },
+
+  // ── Online For Jobs Card ──
+  onlineJobsCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    elevation: 1
+  },
+  onlineIconBox: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: '#ECFDF5',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  onlineTitle: {
     fontSize: 14,
-    fontWeight: '800',
-    color: COLORS.textDark
+    fontWeight: '700',
+    color: '#0F172A',
+    marginBottom: 2
   },
-  toggleSubtitle: {
-    fontSize: 11,
-    color: COLORS.textMuted,
-    marginTop: 2,
-    lineHeight: 16,
-    paddingRight: 8
-  },
-  menuGroupHeading: {
+  onlineSubtitle: {
     fontSize: 12,
-    fontWeight: '800',
-    color: COLORS.textMuted,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 8
+    color: '#64748B'
+  },
+
+  // ── Menu Card ──
+  menuCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1
   },
   menuItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 11,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.borderLight
+    paddingVertical: 12,
+    paddingHorizontal: 4
   },
   menuIconBox: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12
-  },
-  menuLabel: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: COLORS.textDark,
-    flex: 1
-  },
-  menuSub: {
-    fontSize: 11,
-    color: COLORS.textMuted,
-    marginTop: 1
-  },
-
-  // Modal
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'flex-end'
-  },
-  modalCard: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    maxHeight: '85%',
-    padding: 18
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12
-  },
-  modalTitle: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: COLORS.textDark
-  },
-  modalDesc: {
-    fontSize: 12,
-    color: COLORS.textSecondary,
-    lineHeight: 17,
-    marginBottom: 12
-  },
-  fieldLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: COLORS.textSecondary,
-    marginBottom: 6,
-    marginTop: 6
-  },
-  idTypeRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 8
-  },
-  idTypePill: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    backgroundColor: '#F3F4F6',
-    borderWidth: 1,
-    borderColor: COLORS.border
-  },
-  idTypePillActive: {
-    backgroundColor: '#152B3C',
-    borderColor: '#152B3C'
-  },
-  idTypePillText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: COLORS.textDark
-  },
-  idTypePillTextActive: {
-    color: '#FFFFFF'
-  },
-  textInput: {
-    backgroundColor: '#F8FAFC',
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    fontSize: 13,
-    color: COLORS.textDark,
-    marginBottom: 8
-  },
-  consentRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginTop: 8,
-    gap: 8
-  },
-  consentText: {
-    fontSize: 11,
-    color: COLORS.textSecondary,
-    flex: 1,
-    lineHeight: 16
-  },
-  submitModalBtn: {
-    backgroundColor: COLORS.primary,
-    paddingVertical: 12,
+    width: 36,
+    height: 36,
     borderRadius: 10,
     alignItems: 'center',
-    marginTop: 10
+    justifyContent: 'center'
   },
-  submitModalBtnText: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#FFFFFF'
+  menuContentCol: {
+    flex: 1,
+    marginLeft: 12
+  },
+  menuTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A'
+  },
+  menuSubtitle: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 1
+  },
+  menuDivider: {
+    height: 1,
+    backgroundColor: '#F1F5F9',
+    marginLeft: 48
   }
 });

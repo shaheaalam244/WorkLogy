@@ -25,12 +25,21 @@ export interface ServiceCategory {
 }
 
 export interface ServiceAddress {
+  addressLabel?: string;
+  address?: string;
   houseNumber?: string;
   street: string;
+  locality?: string;
   city: string;
   state?: string;
-  pincode: string;
+  pincode?: string;
+  zipCode?: string;
   landmark?: string;
+  locationAccuracyMeters?: number | null;
+  coordinates?: {
+    lat?: number;
+    lng?: number;
+  };
 }
 
 export interface Job {
@@ -53,11 +62,15 @@ export interface Job {
     city: string;
     state?: string;
     zipCode?: string;
+    isMaskedForPrivacy?: boolean;
+    locationSource?: string;
+    locationAccuracyMeters?: number | null;
     coordinates?: {
       lat?: number;
       lng?: number;
     };
   };
+  accessInstructions?: string;
   contactPhone?: string;
   photos?: string[];
   preferredDate?: string;
@@ -84,22 +97,40 @@ export interface Job {
 export interface Booking {
   _id: string;
   bookingReference?: string;
-  jobId: Job;
+  jobId?: Job | any;
+  job?: Job | any;
+  category?: string;
   customer: User;
   vendor: any;
   serviceTitle: string;
   status: 'pending' | 'pending_acceptance' | 'awaiting_confirmation' | 'scheduled' | 'assigned' | 'confirmed' | 'on_the_way' | 'arrived' | 'in_progress' | 'completion_pending' | 'completed' | 'cancelled' | 'disputed' | 'declined' | 'payment_pending';
-  totalAmount: number;
+  totalAmount?: number;
   scheduledDate?: string;
   scheduledTime?: string;
-  pricing: {
-    totalAmount: number;
-    paymentStatus: 'pending' | 'held_in_escrow' | 'released' | 'refunded';
+  pricing?: {
+    amount?: number;
+    totalAmount?: number;
+    vendorNet?: number;
+    paymentStatus?: 'pending' | 'held_in_escrow' | 'released' | 'refunded' | 'escrow_locked';
     diagnosticFee?: number;
     platformFee?: number;
+    isPaid?: boolean;
+    paymentMethod?: string;
   };
   address: ServiceAddress;
   arrivalOtp?: string;
+  startOtp?: {
+    otp?: string;
+    attempts?: number;
+    maxAttempts?: number;
+    isConsumed?: boolean;
+    consumedAt?: string;
+    expiresAt?: string;
+  };
+  arrivalEvidence?: {
+    verified?: boolean;
+    verifiedAt?: string;
+  };
   isOtpVerified?: boolean;
   arrivedAt?: string;
   startedAt?: string;
@@ -114,26 +145,90 @@ export interface VendorProfile {
   businessName: string;
   bio?: string;
   categories: string[] | ServiceCategory[];
+  locality?: string;
+  city?: string;
+  zoneId?: string;
+  zoneName?: string;
   servicesOffered?: string[];
   serviceAreas?: string[];
   experienceYears?: number;
   isVerified?: boolean;
   verificationStatus?: 'unverified' | 'submitted' | 'in_review' | 'verified' | 'rejected';
+  skills?: string[];
+  vendorServiceRadiusKm?: number;
+  coordinates?: { lat: number; lng: number };
+  serviceAreaCoverage?: {
+    baseAddress?: string;
+    pincode?: string;
+    coordinates?: { lat: number; lng: number };
+    radiusKm?: number;
+    selectedLocalityIds?: string[];
+    selectedZoneIds?: string[];
+    excludedLocalityIds?: string[];
+    version?: number;
+    updatedAt?: string;
+  };
+  emergencyAvailability?: {
+    isAvailable?: boolean;
+    maxDailyJobs?: number;
+    hours?: { start?: string; end?: string; is24x7?: boolean };
+  };
+  verifiedBadge?: {
+    status?: string;
+    verificationType?: string;
+    maskedIdNumber?: string;
+    documents?: Array<{ name: string; url: string; docType?: string; uploadedAt?: string }>;
+    rejectionReason?: string;
+  };
   isAvailable?: boolean;
   rating?: number;
   reviewsCount?: number;
+  reviewCount?: number;
   completedJobsCount?: number;
   earningsTotal?: number;
+  avatar?: string;
+  availability?: {
+    isAvailableNow?: boolean;
+    serviceDays?: string[];
+    days?: string[];
+    hours?: { start?: string; end?: string };
+  };
 }
 
 export interface ChatMessage {
   _id: string;
-  conversationId: string;
+  conversationId?: string;
+  conversation?: any;
   sender: string | User;
-  receiver: string | User;
+  recipient?: string | User;
+  receiver?: string | User;
   text: string;
-  read: boolean;
+  read?: boolean;
+  isRead?: boolean;
+  readAt?: string;
+  clientTempId?: string;
+  attachments?: any[];
   createdAt: string;
+}
+
+export interface NotificationItem {
+  _id: string;
+  recipient?: string;
+  sender?: string | User;
+  type: string;
+  title: string;
+  message: string;
+  link?: string;
+  isRead?: boolean;
+  read?: boolean;
+  readAt?: string;
+  relatedResource?: {
+    resourceType?: 'job' | 'booking' | 'application' | 'quotation' | 'user' | 'conversation' | 'chat';
+    resourceId?: string;
+  };
+  data?: any;
+  createdAt: string;
+  updatedAt?: string;
 }
 
 export interface ServiceListing {
@@ -194,4 +289,20 @@ export interface ServiceListing {
   reviewCount?: number;
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface RouteEntry {
+  name: string;
+  params?: any;
+}
+
+export interface AppNavigation {
+  navigate: (screen: string, params?: any) => void;
+  goBack: (force?: boolean) => void;
+  canGoBack: () => boolean;
+  replace: (screen: string, params?: any) => void;
+  resetTo: (screen: string, params?: any) => void;
+  registerBackHandler: (handler: () => boolean) => () => void;
+  currentRoute: string;
+  routeParams: any;
 }

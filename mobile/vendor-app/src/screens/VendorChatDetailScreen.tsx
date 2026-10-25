@@ -103,6 +103,41 @@ export default function VendorChatDetailScreen({ route, navigation }: any) {
   const customerAvatar = otherUser?.avatar;
   const recipientId = otherUser?._id || otherUser?.id;
 
+  // Helper to merge and deduplicate messages preserving clientTempId
+  const mergeMessages = (prev: MessageState[], incoming: any[]): MessageState[] => {
+    const map = new Map<string, MessageState>();
+    prev.forEach((m) => {
+      const key = m.clientTempId || m._id;
+      if (key) map.set(key, m);
+    });
+
+    incoming.forEach((m) => {
+      const key = m.clientTempId || m._id;
+      const isRead = Boolean(m.isRead || m.read);
+      if (key && map.has(key)) {
+        const existing = map.get(key)!;
+        map.set(key, {
+          ...existing,
+          ...m,
+          isRead,
+          read: isRead,
+          status: 'sent' as const
+        });
+      } else {
+        map.set(m._id || key, {
+          ...m,
+          isRead,
+          read: isRead,
+          status: 'sent' as const
+        });
+      }
+    });
+
+    return Array.from(map.values()).sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
+  };
+
   // 1. Fetch Real Messages from Backend
   const loadMessages = useCallback(async (isPolling: boolean = false) => {
     if (!conversationId) {
@@ -118,13 +153,15 @@ export default function VendorChatDetailScreen({ route, navigation }: any) {
       if (!isMountedRef.current) return;
 
       if (res?.success && Array.isArray(res.messages)) {
-        const formatted = res.messages.map((m: any) => ({
-          ...m,
-          status: 'sent' as const
-        }));
-        setMessages(formatted);
+        setMessages((prev) => mergeMessages(prev, res.messages));
 
-        // Mark read
+        if (!isPolling) {
+          setTimeout(() => {
+            flatListRef.current?.scrollToEnd({ animated: false });
+          }, 80);
+        }
+
+        // Mark read on backend
         api.chat.markConversationRead(conversationId).catch(() => {});
       }
     } catch (err: any) {
@@ -143,12 +180,18 @@ export default function VendorChatDetailScreen({ route, navigation }: any) {
     isMountedRef.current = true;
     loadMessages();
 
-    // Setup socket connection
+    // Setup socket connection and room subscription
     let socket: any = null;
     const initSocket = async () => {
       try {
         if (user?._id) {
           socket = await socketService.connect(user._id);
+
+          // Join conversation socket room
+          if (conversationId) {
+            socket.emit('join_conversation', conversationId);
+            socket.emit('mark_read', { conversationId, userId: user._id });
+          }
 
           // Check recipient presence
           if (recipientId) {
@@ -159,20 +202,35 @@ export default function VendorChatDetailScreen({ route, navigation }: any) {
             });
           }
 
-          // Listen for new messages
+          // Listen for new incoming messages
           socket.on(SOCKET_EVENTS.RECEIVE_MESSAGE, (incoming: any) => {
             if (!isMountedRef.current) return;
             const incConvId = incoming.conversationId || incoming.conversation?._id || incoming.conversation;
             if (incConvId && String(incConvId) === String(conversationId)) {
-              setMessages((prev) => {
-                if (prev.some((m) => m._id === incoming._id)) return prev;
-                return [...prev, { ...incoming, status: 'sent' }];
-              });
+              setMessages((prev) => mergeMessages(prev, [incoming]));
+
+              // Mark read since vendor is currently on screen
               api.chat.markConversationRead(conversationId).catch(() => {});
+              socket.emit('mark_read', { conversationId, userId: user._id });
+
               if (isNearBottomRef.current) {
                 setTimeout(() => {
                   flatListRef.current?.scrollToEnd({ animated: true });
                 }, 100);
+              }
+            }
+          });
+
+          // Listen for read receipts in this conversation
+          socket.on(SOCKET_EVENTS.MESSAGES_READ, (data: any) => {
+            if (!isMountedRef.current) return;
+            const incConvId = data?.conversationId;
+            if (incConvId && String(incConvId) === String(conversationId)) {
+              // Other participant read our messages
+              if (String(data?.readerId) !== String(user?._id)) {
+                setMessages((prev) =>
+                  prev.map((m) => ({ ...m, isRead: true, read: true }))
+                );
               }
             }
           });
@@ -184,7 +242,7 @@ export default function VendorChatDetailScreen({ route, navigation }: any) {
 
     initSocket();
 
-    // Auto-poll messages every 6 seconds
+    // Auto-poll messages every 6 seconds as resilient fallback
     const interval = setInterval(() => {
       loadMessages(true);
     }, 6000);
@@ -193,7 +251,11 @@ export default function VendorChatDetailScreen({ route, navigation }: any) {
       isMountedRef.current = false;
       clearInterval(interval);
       if (socket) {
+        if (conversationId) {
+          socket.emit('leave_conversation', conversationId);
+        }
         socket.off(SOCKET_EVENTS.RECEIVE_MESSAGE);
+        socket.off(SOCKET_EVENTS.MESSAGES_READ);
       }
     };
   }, [conversationId, loadMessages, user?._id, recipientId]);
@@ -297,9 +359,9 @@ export default function VendorChatDetailScreen({ route, navigation }: any) {
                   </TouchableOpacity>
                 ) : (
                   <Ionicons
-                    name={item.read ? 'checkmark-done' : 'checkmark'}
-                    size={12}
-                    color="rgba(255,255,255,0.7)"
+                    name={item.isRead || item.read ? 'checkmark-done' : 'checkmark'}
+                    size={13}
+                    color={item.isRead || item.read ? '#93C5FD' : 'rgba(255,255,255,0.7)'}
                   />
                 )}
               </View>

@@ -3,6 +3,7 @@ import { api, getStoredAuthToken } from '../api/client';
 import { secureStorage } from '../storage/secureStorage';
 import { STORAGE_KEYS } from '../constants';
 import type { User } from '../types';
+import { pushNotificationService } from '../services/pushNotificationService';
 
 interface AuthContextType {
   user: User | null;
@@ -12,6 +13,7 @@ interface AuthContextType {
   logout: () => Promise<void>;
   switchRole: (role: 'customer' | 'vendor') => Promise<void>;
   refreshProfile: () => Promise<void>;
+  updateLocalUser: (updated: Partial<User>) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -64,6 +66,11 @@ export const AuthProvider = ({ children }: { children?: React.ReactNode }) => {
   };
 
   const logout = async () => {
+    try {
+      await pushNotificationService.deregister();
+    } catch (err) {
+      console.warn('Push deregistration warning during logout:', err);
+    }
     await api.auth.logout();
     setUser(null);
   };
@@ -82,8 +89,12 @@ export const AuthProvider = ({ children }: { children?: React.ReactNode }) => {
     }
   };
 
+  const updateLocalUser = (updated: Partial<User>) => {
+    setUser((prev) => (prev ? { ...prev, ...updated } : prev));
+  };
+
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, register, logout, switchRole, refreshProfile }}>
+    <AuthContext.Provider value={{ user, isLoading, login, register, logout, switchRole, refreshProfile, updateLocalUser }}>
       {children}
     </AuthContext.Provider>
   );

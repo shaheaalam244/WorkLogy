@@ -128,14 +128,72 @@ export default function VendorMessagesScreen({ navigation }: any) {
     isMountedRef.current = true;
     loadConversations();
 
-    // Socket subscription for real-time messages
+    // Socket subscription for real-time messages & read receipts
     let socket: any = null;
     const connectRealtime = async () => {
       try {
         if (user?._id) {
           socket = await socketService.connect(user._id);
-          socket.on(SOCKET_EVENTS.RECEIVE_MESSAGE, () => {
-            loadConversations(true);
+
+          const handleIncomingMessage = (incoming: any) => {
+            if (!isMountedRef.current) return;
+            const incConvId = incoming.conversationId || incoming.conversation?._id || incoming.conversation;
+            if (!incConvId) {
+              loadConversations(true);
+              return;
+            }
+
+            setConversations((prev) => {
+              const exists = prev.some((c) => String(c._id) === String(incConvId));
+              if (!exists) {
+                loadConversations(true);
+                return prev;
+              }
+
+              const isFromOther = String(incoming.sender?._id || incoming.sender) !== String(user?._id);
+
+              return prev
+                .map((c) => {
+                  if (String(c._id) === String(incConvId)) {
+                    return {
+                      ...c,
+                      lastMessage: {
+                        _id: incoming._id,
+                        text: incoming.text,
+                        sender: incoming.sender,
+                        createdAt: incoming.createdAt
+                      },
+                      lastMessageAt: incoming.createdAt,
+                      unreadCount: isFromOther ? (c.unreadCount || 0) + 1 : c.unreadCount
+                    };
+                  }
+                  return c;
+                })
+                .sort((a, b) => {
+                  const timeA = new Date(a.lastMessage?.createdAt || a.lastMessageAt || a.updatedAt || 0).getTime();
+                  const timeB = new Date(b.lastMessage?.createdAt || b.lastMessageAt || b.updatedAt || 0).getTime();
+                  return timeB - timeA;
+                });
+            });
+          };
+
+          socket.on(SOCKET_EVENTS.RECEIVE_MESSAGE, handleIncomingMessage);
+          socket.on(SOCKET_EVENTS.NEW_MESSAGE_NOTIFICATION, (data: any) => {
+            if (data?.message) {
+              handleIncomingMessage(data.message);
+            } else {
+              loadConversations(true);
+            }
+          });
+
+          socket.on(SOCKET_EVENTS.MESSAGES_READ, (data: any) => {
+            if (!isMountedRef.current) return;
+            const convId = data?.conversationId;
+            if (convId && String(data?.readerId) === String(user?._id)) {
+              setConversations((prev) =>
+                prev.map((c) => (String(c._id) === String(convId) ? { ...c, unreadCount: 0 } : c))
+              );
+            }
           });
         }
       } catch (e) {
@@ -145,16 +203,18 @@ export default function VendorMessagesScreen({ navigation }: any) {
 
     connectRealtime();
 
-    // Periodic sync every 20 seconds
+    // Periodic sync every 25 seconds
     const interval = setInterval(() => {
       loadConversations(true);
-    }, 20000);
+    }, 25000);
 
     return () => {
       isMountedRef.current = false;
       clearInterval(interval);
       if (socket) {
         socket.off(SOCKET_EVENTS.RECEIVE_MESSAGE);
+        socket.off(SOCKET_EVENTS.NEW_MESSAGE_NOTIFICATION);
+        socket.off(SOCKET_EVENTS.MESSAGES_READ);
       }
     };
   }, [user?._id, loadConversations]);
@@ -201,6 +261,10 @@ export default function VendorMessagesScreen({ navigation }: any) {
         style={[styles.convCard, unread > 0 && styles.convCardUnread]}
         activeOpacity={0.78}
         onPress={() => {
+          // Optimistically reset unread count for this conversation
+          setConversations((prev) =>
+            prev.map((c) => (c._id === item._id ? { ...c, unreadCount: 0 } : c))
+          );
           navigation.navigate('ChatDetail', {
             conversationId: item._id,
             otherUser: other,

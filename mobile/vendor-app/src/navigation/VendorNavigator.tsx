@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, useCallback, createContext, useContext } from 'react';
 import {
   View,
   Text,
@@ -6,7 +6,9 @@ import {
   TouchableOpacity,
   Platform,
   StatusBar,
-  Modal
+  Modal,
+  BackHandler,
+  ToastAndroid
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -22,7 +24,41 @@ import VendorLoginScreen from '../screens/VendorLoginScreen';
 import VendorRegisterScreen from '../screens/VendorRegisterScreen';
 import VendorServicesScreen from '../screens/VendorServicesScreen';
 import VendorNewServiceScreen from '../screens/VendorNewServiceScreen';
+import VendorEditProfileScreen from '../screens/VendorEditProfileScreen';
+import VendorKycScreen from '../screens/VendorKycScreen';
+import VendorReviewsScreen from '../screens/VendorReviewsScreen';
+import VendorScheduleScreen from '../screens/VendorScheduleScreen';
+import VendorServiceAreaScreen from '../screens/VendorServiceAreaScreen';
+import VendorHelpSupportScreen from '../screens/VendorHelpSupportScreen';
+import VendorSettingsScreen from '../screens/VendorSettingsScreen';
 import { COLORS } from '../theme/colors';
+import { api } from '../api/client';
+import { useAuth } from '../hooks/useAuth';
+import { socketService } from '../services/socketService';
+import { SOCKET_EVENTS } from '../constants';
+import type { RouteEntry, AppNavigation } from '../types';
+import { NavigationContext, useNavigation } from '../context/NavigationContext';
+import { pushNotificationService } from '../services/pushNotificationService';
+
+export { NavigationContext, useNavigation };
+
+const TAB_ROUTES = ['VendorHomeTab', 'JobsTab', 'MessagesTab', 'ProfileTab'];
+const SCREENS_WITH_CUSTOM_HEADER = [
+  'ChatDetail',
+  'VendorServices',
+  'VendorNewService',
+  'MessagesTab',
+  'VendorMessages',
+  'VendorEditProfile',
+  'VendorKyc',
+  'VendorReviews',
+  'VendorSchedule',
+  'VendorServiceArea',
+  'VendorHelpSupport',
+  'VendorSettings',
+  'Earnings',
+  'EarningsTab'
+];
 
 export function VendorAppContainer() {
   const insets = useSafeAreaInsets();
@@ -32,37 +68,272 @@ export function VendorAppContainer() {
   );
   const bottomInset = insets.bottom;
 
-  const [currentRoute, setCurrentRoute] = useState<string>('VendorHomeTab');
-  const [routeParams, setRouteParams] = useState<any>({});
-  const [history, setHistory] = useState<string[]>(['VendorHomeTab']);
+  const { user } = useAuth();
+  const [history, setHistory] = useState<RouteEntry[]>([{ name: 'VendorHomeTab', params: {} }]);
+  const [unreadMessagesCount, setUnreadMessagesCount] = useState<number>(0);
   const [showActionModal, setShowActionModal] = useState<boolean>(false);
 
-  const navigate = (screen: string, params: any = {}) => {
-    setRouteParams(params);
-    setHistory((prev: string[]) => [...prev, screen]);
-    setCurrentRoute(screen);
-  };
+  const historyRef = useRef<RouteEntry[]>(history);
+  historyRef.current = history;
 
-  const goBack = () => {
-    if (history.length > 1) {
-      const newHistory = [...history];
-      newHistory.pop();
-      const prevScreen = newHistory[newHistory.length - 1];
-      setHistory(newHistory);
-      setCurrentRoute(prevScreen);
-    } else {
-      setCurrentRoute('VendorHomeTab');
+  const backHandlersRef = useRef<Array<() => boolean>>([]);
+  const lastBackPressRef = useRef<number>(0);
+
+  const currentEntry = history[history.length - 1] || { name: 'VendorHomeTab', params: {} };
+  const currentRoute = currentEntry.name;
+  const routeParams = currentEntry.params || {};
+
+  const fetchUnread = useCallback(async () => {
+    try {
+      const res = await api.chat.getUnreadCount();
+      const count =
+        typeof res?.unreadCount === 'number'
+          ? res.unreadCount
+          : typeof (res as any)?.count === 'number'
+          ? (res as any).count
+          : 0;
+      setUnreadMessagesCount(count);
+    } catch {
+      // background poll silently ignored
     }
-  };
+  }, []);
 
-  const navigation = {
+  useEffect(() => {
+    fetchUnread();
+    const interval = setInterval(fetchUnread, 20000);
+
+    let socket: any = null;
+    const connectSocket = async () => {
+      try {
+        if (user?._id) {
+          socket = await socketService.connect(user._id);
+          socket.on(SOCKET_EVENTS.RECEIVE_MESSAGE, fetchUnread);
+          socket.on(SOCKET_EVENTS.MESSAGES_READ, fetchUnread);
+
+          // Real-time Chat message notification: show Android phone banner & play sound
+          socket.on(SOCKET_EVENTS.NEW_MESSAGE_NOTIFICATION, (data: any) => {
+            fetchUnread();
+            if (data?.senderName) {
+              pushNotificationService.presentLocalNotification({
+                title: 'New message',
+                body: `${data.senderName}: ${data.message?.text || 'Sent you a message'}`,
+                data: {
+                  type: 'message',
+                  conversationId: data.conversationId
+                },
+                channelId: 'messages'
+              });
+            }
+          });
+
+          // Real-time Emergency / Instant Lead broadcast: show Android phone banner & sound
+          socket.on(SOCKET_EVENTS.EMERGENCY_BROADCAST, (lead: any) => {
+            if (lead?.title) {
+              pushNotificationService.presentLocalNotification({
+                title: '🚨 Emergency Job Available',
+                body: `${lead.title} in ${lead.location?.locality || 'your area'}`,
+                data: {
+                  type: 'job',
+                  jobId: lead.jobId || lead._id
+                },
+                channelId: 'job-requests'
+              });
+            }
+          });
+
+          // Real-time In-App Notification: show Android phone banner & sound
+          socket.on(SOCKET_EVENTS.NEW_NOTIFICATION, (payload: any) => {
+            fetchUnread();
+            const notif = payload?.notification;
+            if (notif?.title && notif?.type !== 'message') {
+              let channelId: 'messages' | 'job-requests' | 'bookings' | 'general' = 'general';
+              if (notif.type === 'job_alert') channelId = 'job-requests';
+              else if (['booking_confirmed', 'status_change', 'cancellation'].includes(notif.type)) channelId = 'bookings';
+
+              pushNotificationService.presentLocalNotification({
+                title: notif.title,
+                body: notif.message || '',
+                data: {
+                  type: notif.type,
+                  notificationId: notif._id,
+                  ...(notif.relatedResource ? { resourceId: notif.relatedResource.resourceId } : {})
+                },
+                channelId
+              });
+            }
+          });
+        }
+      } catch (e) {}
+    };
+    connectSocket();
+
+    return () => {
+      clearInterval(interval);
+      if (socket) {
+        socket.off(SOCKET_EVENTS.RECEIVE_MESSAGE, fetchUnread);
+        socket.off(SOCKET_EVENTS.NEW_MESSAGE_NOTIFICATION);
+        socket.off(SOCKET_EVENTS.MESSAGES_READ, fetchUnread);
+        socket.off(SOCKET_EVENTS.EMERGENCY_BROADCAST);
+        socket.off(SOCKET_EVENTS.NEW_NOTIFICATION);
+      }
+    };
+  }, [user?._id, fetchUnread]);
+
+  useEffect(() => {
+    fetchUnread();
+  }, [currentRoute, fetchUnread]);
+
+  const registerBackHandler = useCallback((handler: () => boolean) => {
+    backHandlersRef.current.push(handler);
+    return () => {
+      backHandlersRef.current = backHandlersRef.current.filter((h) => h !== handler);
+    };
+  }, []);
+
+  const handleBack = useCallback((force: boolean = false): boolean => {
+    // 0. If Action Modal is open, dismiss it
+    if (showActionModal) {
+      setShowActionModal(false);
+      return true;
+    }
+
+    // 1. Check screen/modal registered handlers (topmost first)
+    if (!force && backHandlersRef.current.length > 0) {
+      for (let i = backHandlersRef.current.length - 1; i >= 0; i--) {
+        const handler = backHandlersRef.current[i];
+        if (handler && handler()) {
+          return true; // Handled by custom handler (e.g. discard form dialog or dismiss modal)
+        }
+      }
+    }
+
+    // 2. If stack has more than 1 entry, pop to previous screen with its params
+    if (historyRef.current.length > 1) {
+      lastBackPressRef.current = 0;
+      setHistory((prev) => {
+        if (prev.length <= 1) return prev;
+        const copy = [...prev];
+        copy.pop();
+        historyRef.current = copy;
+        return copy;
+      });
+      return true;
+    }
+
+    // 3. Fallback for single-entry non-Home routes (e.g. secondary tab)
+    const activeRouteName = historyRef.current[0]?.name;
+    if (activeRouteName && activeRouteName !== 'VendorHomeTab') {
+      lastBackPressRef.current = 0;
+      const reset = [{ name: 'VendorHomeTab', params: {} }];
+      historyRef.current = reset;
+      setHistory(reset);
+      return true;
+    }
+
+    // 4. On root Home screen: double-press within 2s to exit on Android
+    const now = Date.now();
+    if (now - lastBackPressRef.current < 2000) {
+      BackHandler.exitApp();
+      return true;
+    }
+
+    lastBackPressRef.current = now;
+    if (Platform.OS === 'android') {
+      ToastAndroid.show('Press back again to exit', ToastAndroid.SHORT);
+    }
+    return true;
+  }, [showActionModal]);
+
+  // Hardware Back Button listener
+  useEffect(() => {
+    const onHardwareBack = () => {
+      return handleBack();
+    };
+
+    const backHandlerSubscription = BackHandler.addEventListener(
+      'hardwareBackPress',
+      onHardwareBack
+    );
+
+    return () => {
+      backHandlerSubscription?.remove();
+    };
+  }, [handleBack]);
+
+  const navigate = useCallback((screen: string, params: any = {}) => {
+    lastBackPressRef.current = 0;
+    if (TAB_ROUTES.includes(screen)) {
+      if (screen === 'VendorHomeTab') {
+        const reset = [{ name: 'VendorHomeTab', params }];
+        historyRef.current = reset;
+        setHistory(reset);
+      } else {
+        const next = [
+          { name: 'VendorHomeTab', params: {} },
+          { name: screen, params }
+        ];
+        historyRef.current = next;
+        setHistory(next);
+      }
+    } else {
+      setHistory((prev) => {
+        const next = [...prev, { name: screen, params }];
+        historyRef.current = next;
+        return next;
+      });
+    }
+  }, []);
+
+  const goBack = useCallback((force: boolean = false) => {
+    handleBack(force);
+  }, [handleBack]);
+
+  const canGoBack = useCallback(() => {
+    return historyRef.current.length > 1 || historyRef.current[0]?.name !== 'VendorHomeTab';
+  }, []);
+
+  const replace = useCallback((screen: string, params: any = {}) => {
+    lastBackPressRef.current = 0;
+    setHistory((prev) => {
+      const copy = [...prev];
+      if (copy.length > 0) {
+        copy[copy.length - 1] = { name: screen, params };
+        historyRef.current = copy;
+        return copy;
+      }
+      const next = [{ name: screen, params }];
+      historyRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const resetTo = useCallback((screen: string, params: any = {}) => {
+    lastBackPressRef.current = 0;
+    const reset = [{ name: screen, params }];
+    historyRef.current = reset;
+    setHistory(reset);
+  }, []);
+
+  const navigation: AppNavigation = {
     navigate,
-    goBack
+    goBack,
+    canGoBack,
+    replace,
+    resetTo,
+    registerBackHandler,
+    currentRoute,
+    routeParams
   };
 
-  const isTabScreen = ['VendorHomeTab', 'JobsTab', 'MessagesTab', 'ProfileTab'].includes(
-    currentRoute
-  );
+  useEffect(() => {
+    pushNotificationService.initialize(navigation);
+    if (user?._id) {
+      pushNotificationService.registerForPushNotifications();
+    }
+  }, [user?._id, navigation]);
+
+  const isTabScreen = TAB_ROUTES.includes(currentRoute);
+  const showNavHeader = !isTabScreen && !SCREENS_WITH_CUSTOM_HEADER.includes(currentRoute);
 
   const renderScreen = () => {
     const route = { params: routeParams };
@@ -89,6 +360,20 @@ export function VendorAppContainer() {
         return <VendorServicesScreen navigation={navigation} route={route} />;
       case 'VendorNewService':
         return <VendorNewServiceScreen navigation={navigation} route={route} />;
+      case 'VendorEditProfile':
+        return <VendorEditProfileScreen navigation={navigation} route={route} />;
+      case 'VendorKyc':
+        return <VendorKycScreen navigation={navigation} route={route} />;
+      case 'VendorReviews':
+        return <VendorReviewsScreen navigation={navigation} route={route} />;
+      case 'VendorSchedule':
+        return <VendorScheduleScreen navigation={navigation} route={route} />;
+      case 'VendorServiceArea':
+        return <VendorServiceAreaScreen navigation={navigation} route={route} />;
+      case 'VendorHelpSupport':
+        return <VendorHelpSupportScreen navigation={navigation} route={route} />;
+      case 'VendorSettings':
+        return <VendorSettingsScreen navigation={navigation} route={route} />;
       case 'VendorLogin':
         return <VendorLoginScreen navigation={navigation} route={route} />;
       case 'VendorRegister':
@@ -109,7 +394,7 @@ export function VendorAppContainer() {
       case 'VendorServices':
         return 'My Services';
       case 'VendorNewService':
-        return 'Create Service';
+        return 'Create Service Offering';
       case 'EarningsTab':
       case 'Earnings':
         return 'Earnings & Payments';
@@ -122,252 +407,254 @@ export function VendorAppContainer() {
     }
   };
 
-  const SCREENS_WITH_CUSTOM_HEADER = [
-    'ChatDetail',
-    'VendorServices',
-    'VendorNewService',
-    'MessagesTab',
-    'VendorMessages'
-  ];
-  const showNavHeader = !isTabScreen && !SCREENS_WITH_CUSTOM_HEADER.includes(currentRoute);
-
   return (
-    <View style={styles.container}>
-      {/* Top Stack Navigation Header (only on non-tab screens without custom header) */}
-      {showNavHeader && (
-        <View style={[styles.navHeader, { paddingTop: topInset, minHeight: 52 + topInset }]}>
-          <TouchableOpacity onPress={goBack} style={styles.backBtn} activeOpacity={0.7}>
-            <Ionicons name="arrow-back" size={20} color={COLORS.textDark} />
-          </TouchableOpacity>
-          <Text style={styles.navHeaderTitle}>{getHeaderTitle()}</Text>
-          <View style={{ width: 36 }} />
-        </View>
-      )}
-
-      {/* Main Screen Body */}
-      <View style={styles.screenBody}>{renderScreen()}</View>
-
-      {/* ── FIXED BOTTOM NAVIGATION BAR (5 ITEMS: Home, Jobs, [Center +], Messages, Profile) ── */}
-      {isTabScreen && (
-        <View
-          style={[
-            styles.bottomBarContainer,
-            { paddingBottom: Math.max(bottomInset, Platform.OS === 'ios' ? 12 : 6) }
-          ]}
-        >
-          <View style={styles.bottomBar}>
-            {/* 1. Home */}
-            <TouchableOpacity
-              style={styles.tabBtn}
-              onPress={() => navigate('VendorHomeTab')}
-              activeOpacity={0.7}
-            >
-              <Ionicons
-                name={currentRoute === 'VendorHomeTab' ? 'home' : 'home-outline'}
-                size={22}
-                color={currentRoute === 'VendorHomeTab' ? '#06684F' : '#9CA3AF'}
-              />
-              <Text
-                style={[
-                  styles.tabLabel,
-                  currentRoute === 'VendorHomeTab' && styles.tabActiveLabel
-                ]}
-              >
-                Home
-              </Text>
+    <NavigationContext.Provider value={navigation}>
+      <View style={styles.container}>
+        {/* Top Stack Navigation Header (only on non-tab screens without custom header) */}
+        {showNavHeader && (
+          <View style={[styles.navHeader, { paddingTop: topInset, minHeight: 52 + topInset }]}>
+            <TouchableOpacity onPress={() => handleBack()} style={styles.backBtn} activeOpacity={0.7}>
+              <Ionicons name="arrow-back" size={20} color={COLORS.textDark} />
             </TouchableOpacity>
-
-            {/* 2. Jobs */}
-            <TouchableOpacity
-              style={styles.tabBtn}
-              onPress={() => navigate('JobsTab')}
-              activeOpacity={0.7}
-            >
-              <Ionicons
-                name={currentRoute === 'JobsTab' ? 'briefcase' : 'briefcase-outline'}
-                size={22}
-                color={currentRoute === 'JobsTab' ? '#06684F' : '#9CA3AF'}
-              />
-              <Text
-                style={[
-                  styles.tabLabel,
-                  currentRoute === 'JobsTab' && styles.tabActiveLabel
-                ]}
-              >
-                Jobs
-              </Text>
-            </TouchableOpacity>
-
-            {/* 3. CENTER PROMINENT CIRCULAR + BUTTON (Post Job / Add Service) */}
-            <View style={styles.centerFabContainer}>
-              <TouchableOpacity
-                style={styles.centerFabBtn}
-                onPress={() => setShowActionModal(true)}
-                activeOpacity={0.85}
-              >
-                <Ionicons name="add" size={28} color="#FFFFFF" />
-              </TouchableOpacity>
-              <Text style={styles.centerFabLabel}>Post Job</Text>
-            </View>
-
-            {/* 4. Messages (Replacing Earnings) */}
-            <TouchableOpacity
-              style={styles.tabBtn}
-              onPress={() => navigate('MessagesTab')}
-              activeOpacity={0.7}
-            >
-              <Ionicons
-                name={
-                  currentRoute === 'MessagesTab' || currentRoute === 'VendorMessages'
-                    ? 'chatbubbles'
-                    : 'chatbubbles-outline'
-                }
-                size={22}
-                color={
-                  currentRoute === 'MessagesTab' || currentRoute === 'VendorMessages'
-                    ? '#06684F'
-                    : '#9CA3AF'
-                }
-              />
-              <Text
-                style={[
-                  styles.tabLabel,
-                  (currentRoute === 'MessagesTab' || currentRoute === 'VendorMessages') &&
-                    styles.tabActiveLabel
-                ]}
-              >
-                Messages
-              </Text>
-            </TouchableOpacity>
-
-            {/* 5. Profile */}
-            <TouchableOpacity
-              style={styles.tabBtn}
-              onPress={() => navigate('ProfileTab')}
-              activeOpacity={0.7}
-            >
-              <Ionicons
-                name={currentRoute === 'ProfileTab' ? 'person' : 'person-outline'}
-                size={22}
-                color={currentRoute === 'ProfileTab' ? '#06684F' : '#9CA3AF'}
-              />
-              <Text
-                style={[
-                  styles.tabLabel,
-                  currentRoute === 'ProfileTab' && styles.tabActiveLabel
-                ]}
-              >
-                Profile
-              </Text>
-            </TouchableOpacity>
+            <Text style={styles.navHeaderTitle}>{getHeaderTitle()}</Text>
+            <View style={{ width: 36 }} />
           </View>
-        </View>
-      )}
+        )}
 
-      {/* ── CENTER + BUTTON ACTION MODAL ── */}
-      <Modal
-        visible={showActionModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowActionModal(false)}
-      >
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowActionModal(false)}
+        {/* Main Screen Body */}
+        <View style={styles.screenBody}>{renderScreen()}</View>
+
+        {/* ── FIXED BOTTOM NAVIGATION BAR (5 ITEMS: Home, Jobs, [Post Service], Messages, Profile) ── */}
+        {isTabScreen && (
+          <View
+            style={[
+              styles.bottomBarContainer,
+              { paddingBottom: Math.max(bottomInset, Platform.OS === 'ios' ? 12 : 6) }
+            ]}
+          >
+            <View style={styles.bottomBar}>
+              {/* 1. Home */}
+              <TouchableOpacity
+                style={styles.tabBtn}
+                onPress={() => navigate('VendorHomeTab')}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name={currentRoute === 'VendorHomeTab' ? 'home' : 'home-outline'}
+                  size={22}
+                  color={currentRoute === 'VendorHomeTab' ? '#06684F' : '#9CA3AF'}
+                />
+                <Text
+                  style={[
+                    styles.tabLabel,
+                    currentRoute === 'VendorHomeTab' && styles.tabActiveLabel
+                  ]}
+                >
+                  Home
+                </Text>
+              </TouchableOpacity>
+
+              {/* 2. Jobs */}
+              <TouchableOpacity
+                style={styles.tabBtn}
+                onPress={() => navigate('JobsTab')}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name={currentRoute === 'JobsTab' ? 'briefcase' : 'briefcase-outline'}
+                  size={22}
+                  color={currentRoute === 'JobsTab' ? '#06684F' : '#9CA3AF'}
+                />
+                <Text
+                  style={[
+                    styles.tabLabel,
+                    currentRoute === 'JobsTab' && styles.tabActiveLabel
+                  ]}
+                >
+                  Jobs
+                </Text>
+              </TouchableOpacity>
+
+              {/* 3. CENTER PROMINENT CIRCULAR + BUTTON (Post Service) */}
+              <View style={styles.centerFabContainer}>
+                <TouchableOpacity
+                  style={styles.centerFabBtn}
+                  onPress={() => setShowActionModal(true)}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="add" size={28} color="#FFFFFF" />
+                </TouchableOpacity>
+                <Text style={styles.centerFabLabel}>Post Service</Text>
+              </View>
+
+              {/* 4. Messages */}
+              <TouchableOpacity
+                style={styles.tabBtn}
+                onPress={() => navigate('MessagesTab')}
+                activeOpacity={0.7}
+              >
+                <View>
+                  <Ionicons
+                    name={
+                      currentRoute === 'MessagesTab' || currentRoute === 'VendorMessages'
+                        ? 'chatbubbles'
+                        : 'chatbubbles-outline'
+                    }
+                    size={22}
+                    color={
+                      currentRoute === 'MessagesTab' || currentRoute === 'VendorMessages'
+                        ? '#06684F'
+                        : '#9CA3AF'
+                    }
+                  />
+                  {unreadMessagesCount > 0 && (
+                    <View style={styles.tabBadge}>
+                      <Text style={styles.tabBadgeText}>
+                        {unreadMessagesCount > 9 ? '9+' : unreadMessagesCount}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+                <Text
+                  style={[
+                    styles.tabLabel,
+                    (currentRoute === 'MessagesTab' || currentRoute === 'VendorMessages') &&
+                      styles.tabActiveLabel
+                  ]}
+                >
+                  Messages
+                </Text>
+              </TouchableOpacity>
+
+              {/* 5. Profile */}
+              <TouchableOpacity
+                style={styles.tabBtn}
+                onPress={() => navigate('ProfileTab')}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name={currentRoute === 'ProfileTab' ? 'person' : 'person-outline'}
+                  size={22}
+                  color={currentRoute === 'ProfileTab' ? '#06684F' : '#9CA3AF'}
+                />
+                <Text
+                  style={[
+                    styles.tabLabel,
+                    currentRoute === 'ProfileTab' && styles.tabActiveLabel
+                  ]}
+                >
+                  Profile
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {/* ── CENTER + BUTTON ACTION MODAL ── */}
+        <Modal
+          visible={showActionModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowActionModal(false)}
         >
           <TouchableOpacity
-            style={styles.actionSheet}
+            style={styles.modalOverlay}
             activeOpacity={1}
-            onPress={(e) => e.stopPropagation()}
+            onPress={() => setShowActionModal(false)}
           >
-            {/* Sheet Handle */}
-            <View style={styles.sheetHandle} />
+            <TouchableOpacity
+              style={styles.actionSheet}
+              activeOpacity={1}
+              onPress={(e) => e.stopPropagation()}
+            >
+              {/* Sheet Handle */}
+              <View style={styles.sheetHandle} />
 
-            <View style={styles.sheetHeader}>
-              <Text style={styles.sheetTitle}>Create & Publish</Text>
+              <View style={styles.sheetHeader}>
+                <Text style={styles.sheetTitle}>Publish Service & Offerings</Text>
+                <TouchableOpacity
+                  onPress={() => setShowActionModal(false)}
+                  style={styles.sheetCloseBtn}
+                >
+                  <Ionicons name="close" size={20} color="#6B7280" />
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.sheetSub}>
+                Publish a new service listing to advertise your skills to local customers, or manage your active offerings.
+              </Text>
+
+              {/* Action 1: Add a Service */}
               <TouchableOpacity
-                onPress={() => setShowActionModal(false)}
-                style={styles.sheetCloseBtn}
+                style={styles.actionItem}
+                activeOpacity={0.78}
+                onPress={() => {
+                  setShowActionModal(false);
+                  navigate('VendorNewService');
+                }}
               >
-                <Ionicons name="close" size={20} color="#6B7280" />
-              </TouchableOpacity>
-            </View>
-            <Text style={styles.sheetSub}>
-              Publish a service offering for customer bookings, or browse available job tenders.
-            </Text>
-
-            {/* Action 1: Add a Service */}
-            <TouchableOpacity
-              style={styles.actionItem}
-              activeOpacity={0.78}
-              onPress={() => {
-                setShowActionModal(false);
-                navigate('VendorNewService');
-              }}
-            >
-              <View style={[styles.actionIconBox, { backgroundColor: '#ECFDF5' }]}>
-                <Ionicons name="construct" size={24} color="#06684F" />
-              </View>
-              <View style={{ flex: 1, marginLeft: 14 }}>
-                <View style={styles.actionTitleRow}>
-                  <Text style={styles.actionItemTitle}>Add a Service Offering</Text>
-                  <View style={styles.recommendedBadge}>
-                    <Text style={styles.recommendedBadgeText}>Recommended</Text>
-                  </View>
+                <View style={[styles.actionIconBox, { backgroundColor: '#ECFDF5' }]}>
+                  <Ionicons name="add-circle" size={24} color="#06684F" />
                 </View>
-                <Text style={styles.actionItemSub}>
-                  Publish your trade (AC, Plumbing, Electrical, Carpentry) with custom pricing for customer bookings
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
-            </TouchableOpacity>
+                <View style={{ flex: 1, marginLeft: 14 }}>
+                  <View style={styles.actionTitleRow}>
+                    <Text style={styles.actionItemTitle}>Create New Service Listing</Text>
+                    <View style={styles.recommendedBadge}>
+                      <Text style={styles.recommendedBadgeText}>Primary</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.actionItemSub}>
+                    List your trade (AC, Plumbing, Electrical, Cleaning) with custom pricing & coverage
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
+              </TouchableOpacity>
 
-            {/* Action 2: Post Job / Subcontract Request */}
-            <TouchableOpacity
-              style={styles.actionItem}
-              activeOpacity={0.78}
-              onPress={() => {
-                setShowActionModal(false);
-                navigate('JobsTab');
-              }}
-            >
-              <View style={[styles.actionIconBox, { backgroundColor: '#EFF6FF' }]}>
-                <Ionicons name="briefcase" size={24} color="#2563EB" />
-              </View>
-              <View style={{ flex: 1, marginLeft: 14 }}>
-                <Text style={styles.actionItemTitle}>Browse & Claim Available Jobs</Text>
-                <Text style={styles.actionItemSub}>
-                  Review customer job postings in your service areas and submit competitive quotes
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
-            </TouchableOpacity>
+              {/* Action 2: Manage Existing Services */}
+              <TouchableOpacity
+                style={styles.actionItem}
+                activeOpacity={0.78}
+                onPress={() => {
+                  setShowActionModal(false);
+                  navigate('VendorServices');
+                }}
+              >
+                <View style={[styles.actionIconBox, { backgroundColor: '#FEF3C7' }]}>
+                  <Ionicons name="list" size={24} color="#D97706" />
+                </View>
+                <View style={{ flex: 1, marginLeft: 14 }}>
+                  <Text style={styles.actionItemTitle}>Manage My Services & Pricing</Text>
+                  <Text style={styles.actionItemSub}>
+                    Edit existing listings, update prices, pause, or resume live service offerings
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
+              </TouchableOpacity>
 
-            {/* Action 3: Manage Existing Services */}
-            <TouchableOpacity
-              style={styles.actionItem}
-              activeOpacity={0.78}
-              onPress={() => {
-                setShowActionModal(false);
-                navigate('VendorServices');
-              }}
-            >
-              <View style={[styles.actionIconBox, { backgroundColor: '#FEF3C7' }]}>
-                <Ionicons name="list" size={24} color="#D97706" />
-              </View>
-              <View style={{ flex: 1, marginLeft: 14 }}>
-                <Text style={styles.actionItemTitle}>Manage My Services</Text>
-                <Text style={styles.actionItemSub}>
-                  Edit pricing, pause services, or update coverage areas for active offerings
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
+              {/* Action 3: Browse Available Jobs */}
+              <TouchableOpacity
+                style={styles.actionItem}
+                activeOpacity={0.78}
+                onPress={() => {
+                  setShowActionModal(false);
+                  navigate('JobsTab');
+                }}
+              >
+                <View style={[styles.actionIconBox, { backgroundColor: '#EFF6FF' }]}>
+                  <Ionicons name="briefcase" size={24} color="#2563EB" />
+                </View>
+                <View style={{ flex: 1, marginLeft: 14 }}>
+                  <Text style={styles.actionItemTitle}>Browse Available Job Opportunities</Text>
+                  <Text style={styles.actionItemSub}>
+                    View customer job posts and submit competitive quotations in your city
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
+              </TouchableOpacity>
             </TouchableOpacity>
           </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
-    </View>
+        </Modal>
+      </View>
+    </NavigationContext.Provider>
   );
 }
 
@@ -433,6 +720,23 @@ const styles = StyleSheet.create({
   },
   tabActiveLabel: {
     color: '#06684F',
+    fontWeight: '800'
+  },
+  tabBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -8,
+    backgroundColor: '#EF4444',
+    borderRadius: 9,
+    minWidth: 16,
+    height: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3
+  },
+  tabBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 9,
     fontWeight: '800'
   },
   centerFabContainer: {

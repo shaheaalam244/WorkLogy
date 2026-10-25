@@ -11,10 +11,12 @@ import {
   TextInput,
   Modal,
   Image,
-  Dimensions
+  Dimensions,
+  Platform
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../api/client';
+import { useNavigation } from '../context/NavigationContext';
 import { COLORS } from '../theme/colors';
 import { formatCurrency, getStatusColor, formatStatusText, formatDate } from '../utils/formatters';
 import { getServiceImage } from '../utils/serviceImages';
@@ -23,6 +25,7 @@ import type { Booking, Job } from '../types';
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 export default function VendorJobDetailScreen({ route, navigation }: any) {
+  const appNav = useNavigation();
   const initialBooking: Booking | undefined = route.params?.booking;
   const bookingId: string | undefined = route.params?.bookingId;
   const jobId: string | undefined = route.params?.jobId;
@@ -45,6 +48,35 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
     submitting: false
   });
 
+  // Cancellation modal
+  const [cancelModal, setCancelModal] = useState({
+    open: false,
+    reason: 'Emergency schedule conflict',
+    customNote: '',
+    submitting: false
+  });
+
+  // Register Android back handler for open modals
+  useEffect(() => {
+    if (!otpModal.open && !completeModal.open && !cancelModal.open) return;
+    const unregister = appNav.registerBackHandler(() => {
+      if (otpModal.open) {
+        setOtpModal((prev) => ({ ...prev, open: false }));
+        return true;
+      }
+      if (completeModal.open) {
+        setCompleteModal((prev) => ({ ...prev, open: false }));
+        return true;
+      }
+      if (cancelModal.open) {
+        setCancelModal((prev) => ({ ...prev, open: false }));
+        return true;
+      }
+      return false;
+    });
+    return unregister;
+  }, [otpModal.open, completeModal.open, cancelModal.open, appNav]);
+
   useEffect(() => {
     loadDossier();
   }, [bookingId, jobId]);
@@ -59,6 +91,15 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
         }
       } else if (jobId) {
         setLoading(true);
+        try {
+          const bRes = await api.bookings.getByJobId(jobId);
+          if (bRes?.booking) {
+            setBooking(bRes.booking);
+            return;
+          }
+        } catch {
+          // fallback to job details
+        }
         const res = await api.jobs.getJobDetails(jobId);
         if (res?.job) {
           setJob(res.job);
@@ -88,20 +129,31 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
 
   const handleVerifyOtp = async () => {
     if (!booking) return;
-    if (!otpModal.code || otpModal.code.trim().length !== 6) {
-      Alert.alert('Invalid OTP', 'Please enter the 6-digit Arrival OTP from customer.');
+    const cleanCode = otpModal.code.trim();
+    if (!cleanCode || cleanCode.length !== 6 || !/^\d{6}$/.test(cleanCode)) {
+      Alert.alert('Invalid OTP', 'Please enter a valid 6-digit numeric Arrival OTP from customer.');
       return;
     }
 
     try {
       setOtpModal((prev) => ({ ...prev, submitting: true }));
-      const res = await api.bookings.verifyArrivalOtp(booking._id, otpModal.code.trim());
+      const res = await api.bookings.verifyArrivalOtp(booking._id, cleanCode);
       Alert.alert('Arrival Verified! 🎉', 'Arrival OTP verified. Service is now in progress.');
       setOtpModal({ open: false, code: '', submitting: false });
       if (res?.booking) {
-        setBooking(res.booking);
+        setBooking({
+          ...res.booking,
+          status: 'in_progress',
+          isOtpVerified: true,
+          arrivalEvidence: { ...(res.booking.arrivalEvidence || {}), verified: true }
+        });
       } else {
-        setBooking((prev: any) => ({ ...prev, status: 'in_progress', isOtpVerified: true }));
+        setBooking((prev: any) => ({
+          ...prev,
+          status: 'in_progress',
+          isOtpVerified: true,
+          arrivalEvidence: { ...(prev?.arrivalEvidence || {}), verified: true }
+        }));
       }
     } catch (err: any) {
       Alert.alert('Verification Failed', err.message || 'Invalid Arrival OTP.');
@@ -129,6 +181,27 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
     }
   };
 
+  const handleCancelBooking = async () => {
+    if (!booking) return;
+    try {
+      setCancelModal((prev) => ({ ...prev, submitting: true }));
+      const fullNote = cancelModal.customNote.trim()
+        ? `${cancelModal.reason}: ${cancelModal.customNote.trim()}`
+        : cancelModal.reason;
+      const res = await api.bookings.updateStatus(booking._id, 'cancelled', fullNote);
+      Alert.alert('Booking Cancelled', 'The booking has been cancelled and customer notified.');
+      setCancelModal({ open: false, reason: 'Emergency schedule conflict', customNote: '', submitting: false });
+      if (res?.booking) {
+        setBooking(res.booking);
+      } else {
+        setBooking((prev: any) => ({ ...prev, status: 'cancelled' }));
+      }
+    } catch (err: any) {
+      Alert.alert('Cancellation Error', err.message || 'Failed to cancel booking.');
+      setCancelModal((prev) => ({ ...prev, submitting: false }));
+    }
+  };
+
   if (loading) {
     return (
       <View style={styles.centerLoading}>
@@ -142,12 +215,25 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
   if (!booking && !job) {
     return (
       <View style={styles.centerLoading}>
-        <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
-        <Text style={styles.errorTitle}>Job Dossier Not Found</Text>
-        <Text style={styles.errorSubtitle}>Could not load details for the requested reference.</Text>
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-          <Text style={styles.backBtnText}>Return to Jobs</Text>
-        </TouchableOpacity>
+        <Ionicons name="document-text-outline" size={54} color="#94A3B8" />
+        <Text style={styles.errorTitle}>Booking or Job Unavailable</Text>
+        <Text style={[styles.errorSubtitle, { textAlign: 'center', paddingHorizontal: 24 }]}>
+          This service record may have been completed, cancelled, or is no longer accessible for your vendor account.
+        </Text>
+        <View style={{ flexDirection: 'row', marginTop: 16 }}>
+          <TouchableOpacity
+            style={[styles.backBtn, { marginRight: 8, backgroundColor: COLORS.primary }]}
+            onPress={() => navigation.navigate('JobsTab')}
+          >
+            <Text style={styles.backBtnText}>View Available Jobs</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.backBtn, { backgroundColor: '#64748B' }]}
+            onPress={() => navigation.goBack()}
+          >
+            <Text style={styles.backBtnText}>Go Back</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     );
   }
@@ -166,11 +252,83 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
     : `${job?.location?.locality ? job.location.locality + ', ' : ''}${job?.location?.city || job?.address?.city || 'Lucknow'}`;
 
   const isEmergency = isBooking ? (booking.jobId?.isEmergency || booking.serviceTitle?.toLowerCase().includes('emergency')) : (job?.urgency === 'emergency');
-  const isOtpNeeded = isBooking && ['confirmed', 'on_the_way', 'arrived'].includes(booking.status) && !booking.isOtpVerified;
 
-  const grossAmount = isBooking ? (booking.totalAmount || 0) : (job?.budget?.amount || job?.pricing?.amount || 0);
-  const platformFee = Math.round(grossAmount * 0.1);
-  const netTakeHome = grossAmount - platformFee;
+  const isOtpVerified = Boolean(
+    booking?.isOtpVerified ||
+    booking?.startOtp?.isConsumed ||
+    booking?.arrivalEvidence?.verified ||
+    ['in_progress', 'completion_pending', 'completed'].includes(booking?.status || '')
+  );
+
+  // Arrival OTP prompt is strictly shown when vendor has arrived and OTP is pending verification
+  const isOtpNeeded = isBooking && booking.status === 'arrived' && !isOtpVerified;
+
+  const grossAmount = isBooking
+    ? (booking.pricing?.amount ?? (booking as any).totalAmount ?? 0)
+    : (job?.budget?.amount ?? (job as any).pricing?.amount ?? 0);
+  const platformFee = isBooking
+    ? (booking.pricing?.platformFee ?? Math.round(grossAmount * 0.05))
+    : Math.round(grossAmount * 0.1);
+  const netTakeHome = isBooking
+    ? (booking.pricing?.vendorNet ?? (grossAmount - platformFee))
+    : (grossAmount - platformFee);
+  const feePercent = isBooking && booking.pricing?.platformFee && grossAmount > 0
+    ? Math.round((booking.pricing.platformFee / grossAmount) * 100)
+    : (isBooking ? 5 : 10);
+
+  // Active Location & Turn-by-Turn Navigation Details
+  const activeAddress = isBooking ? booking.address : job?.location;
+  const isMaskedForPrivacy = !isBooking && (job?.location?.isMaskedForPrivacy === true);
+  const houseNumber = activeAddress?.houseNumber || '';
+  const street = activeAddress?.street || '';
+  const landmark = activeAddress?.landmark || '';
+  const localityName = activeAddress?.locality || '';
+  const cityName = activeAddress?.city || 'Lucknow';
+  const zipCode = (activeAddress as any)?.pincode || (activeAddress as any)?.zipCode || '';
+  const accessNotes = job?.accessInstructions || (booking?.jobId as any)?.accessInstructions || '';
+  const coords = activeAddress?.coordinates;
+  const hasValidCoords = Boolean(
+    coords &&
+    coords.lat != null &&
+    coords.lng != null &&
+    (Number(coords.lat) !== 0 || Number(coords.lng) !== 0)
+  );
+  const accuracyMeters = (activeAddress as any)?.locationAccuracyMeters;
+
+  const handleNavigateToCustomer = () => {
+    if (hasValidCoords && coords) {
+      const lat = Number(coords.lat);
+      const lng = Number(coords.lng);
+
+      const navUrl = Platform.OS === 'android'
+        ? `google.navigation:q=${lat},${lng}`
+        : `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
+
+      Linking.canOpenURL(navUrl)
+        .then((supported) => {
+          if (supported) {
+            Linking.openURL(navUrl);
+          } else {
+            Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`);
+          }
+        })
+        .catch(() => {
+          Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`);
+        });
+    } else {
+      const fullQuery = [
+        houseNumber,
+        street,
+        landmark ? 'Near ' + landmark : '',
+        localityName,
+        cityName,
+        zipCode
+      ]
+        .filter(Boolean)
+        .join(', ');
+      Linking.openURL(`https://maps.google.com/?q=${encodeURIComponent(fullQuery || cityName || 'Lucknow')}`);
+    }
+  };
 
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
@@ -246,23 +404,100 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
             </TouchableOpacity>
           </View>
         )}
+      </View>
 
-        {isBooking && (
-          <TouchableOpacity
-            style={styles.mapsBtn}
-            onPress={() => {
-              const q = encodeURIComponent(`${booking.address?.houseNumber || ''} ${booking.address?.street || ''}, ${booking.address?.city || ''}`);
-              Linking.openURL(`https://maps.google.com/?q=${q}`);
-            }}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="navigate" size={15} color="#2563EB" />
-            <Text style={styles.mapsBtnText}>Navigate via Google Maps</Text>
-          </TouchableOpacity>
+      {/* ── 3.5. SERVICE LOCATION & DIRECT GPS NAVIGATION ── */}
+      <View style={styles.card}>
+        <View style={styles.cardHeaderRow}>
+          <Text style={styles.cardHeading}>Service Location</Text>
+          {hasValidCoords && !isMaskedForPrivacy && (
+            <View style={styles.gpsVerifiedBadge}>
+              <Ionicons name="radio" size={11} color="#059669" />
+              <Text style={styles.gpsVerifiedBadgeText}>100% GPS PIN</Text>
+            </View>
+          )}
+        </View>
+
+        {isMaskedForPrivacy ? (
+          <View style={styles.maskedLocationBox}>
+            <View style={styles.locationRow}>
+              <Ionicons name="location" size={18} color="#D97706" style={{ marginTop: 2 }} />
+              <View style={{ flex: 1, marginLeft: 8 }}>
+                <Text style={styles.generalLocalityText}>
+                  {localityName ? `${localityName}, ${cityName}` : cityName}
+                </Text>
+                <Text style={styles.maskedPrivacyNotice}>
+                  🔒 Doorstep house number, landmark, and exact GPS coordinates are masked on open tender and will be revealed immediately once this job is accepted.
+                </Text>
+              </View>
+            </View>
+          </View>
+        ) : (
+          <View style={styles.fullLocationContainer}>
+            {/* Doorstep Address Breakdown */}
+            <View style={styles.addressLineRow}>
+              <Ionicons name="business" size={16} color="#475569" style={{ marginTop: 2 }} />
+              <View style={{ flex: 1, marginLeft: 8 }}>
+                <Text style={styles.addressPrimaryText}>
+                  {[houseNumber, street].filter(Boolean).join(', ') || 'Doorstep Service Address'}
+                </Text>
+                <Text style={styles.addressSecondaryText}>
+                  {[localityName, cityName, zipCode].filter(Boolean).join(', ')}
+                </Text>
+              </View>
+            </View>
+
+            {/* Landmark Badge if provided */}
+            {landmark ? (
+              <View style={styles.landmarkBox}>
+                <Ionicons name="flag" size={13} color="#D97706" />
+                <Text style={styles.landmarkText}>
+                  <Text style={{ fontWeight: '700' }}>Landmark: </Text>
+                  {landmark}
+                </Text>
+              </View>
+            ) : null}
+
+            {/* Access / Gate Instructions */}
+            {accessNotes ? (
+              <View style={styles.accessNotesBox}>
+                <Ionicons name="information-circle" size={14} color="#0284C7" />
+                <Text style={styles.accessNotesText}>
+                  <Text style={{ fontWeight: '700' }}>Gate / Entry Note: </Text>
+                  {accessNotes}
+                </Text>
+              </View>
+            ) : null}
+
+            {/* GPS Satellite Pin Coordinates */}
+            {hasValidCoords && coords && (
+              <View style={styles.gpsCoordsBox}>
+                <Ionicons name="locate" size={13} color="#059669" />
+                <Text style={styles.gpsCoordsText}>
+                  Pin: {Number(coords.lat).toFixed(6)}, {Number(coords.lng).toFixed(6)}
+                  {accuracyMeters ? ` • GPS Accuracy ±${accuracyMeters}m` : ''}
+                </Text>
+              </View>
+            )}
+
+            {/* Direct Google Maps 1-Tap Navigation Button */}
+            <TouchableOpacity
+              style={styles.directNavBtn}
+              onPress={handleNavigateToCustomer}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="navigate" size={16} color="#FFFFFF" />
+              <Text style={styles.directNavBtnText}>
+                {hasValidCoords
+                  ? 'Start Google Maps Navigation (Exact GPS Pin)'
+                  : 'Navigate via Google Maps'}
+              </Text>
+            </TouchableOpacity>
+          </View>
         )}
       </View>
 
-      {/* ── 4. PHYSICAL ARRIVAL OTP VERIFICATION ── */}
+      {/* ── 4. PHYSICAL ARRIVAL OTP VERIFICATION (Shown only when arrived & unverified) ── */}
       {isOtpNeeded && (
         <View style={[styles.card, styles.otpCard]}>
           <View style={styles.otpHeader}>
@@ -277,8 +512,24 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
             onPress={() => setOtpModal({ open: true, code: '', submitting: false })}
             activeOpacity={0.85}
           >
+            <Ionicons name="key-outline" size={16} color="#FFFFFF" style={{ marginRight: 6 }} />
             <Text style={styles.otpActionBtnText}>Enter 6-Digit Arrival OTP</Text>
           </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Arrival Verified confirmation banner (when in_progress or already verified) */}
+      {isBooking && (booking.status === 'in_progress' || isOtpVerified) && !['completed', 'cancelled'].includes(booking.status) && (
+        <View style={[styles.card, { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0', borderWidth: 1 }]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Ionicons name="checkmark-circle" size={20} color="#16A34A" />
+            <Text style={{ fontSize: 15, fontWeight: '700', color: '#15803D', marginLeft: 8 }}>
+              Arrival Verified — In Progress
+            </Text>
+          </View>
+          <Text style={{ fontSize: 13, color: '#166534', marginTop: 4, lineHeight: 18 }}>
+            Customer physical presence confirmed. Perform the scheduled service and tap "Complete Work" below when finished.
+          </Text>
         </View>
       )}
 
@@ -287,16 +538,22 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
         <Text style={styles.cardHeading}>Financial Breakdown (₹ INR)</Text>
         <View style={styles.feeRow}>
           <Text style={styles.feeLabel}>Gross Job Quotation</Text>
-          <Text style={styles.feeVal}>{formatCurrency(grossAmount)}</Text>
+          <Text style={styles.feeVal}>
+            {grossAmount > 0 ? formatCurrency(grossAmount) : 'Quotation pending'}
+          </Text>
         </View>
         <View style={styles.feeRow}>
-          <Text style={styles.feeLabel}>WorkLogy Platform Fee (10%)</Text>
-          <Text style={[styles.feeVal, { color: '#DC2626' }]}>-{formatCurrency(platformFee)}</Text>
+          <Text style={styles.feeLabel}>WorkLogy Platform Fee ({feePercent}%)</Text>
+          <Text style={[styles.feeVal, { color: '#DC2626' }]}>
+            {grossAmount > 0 ? `-${formatCurrency(platformFee)}` : '—'}
+          </Text>
         </View>
         <View style={styles.divider} />
         <View style={styles.feeRow}>
           <Text style={styles.netLabel}>Net Contractor Payout</Text>
-          <Text style={styles.netVal}>{formatCurrency(netTakeHome)}</Text>
+          <Text style={styles.netVal}>
+            {grossAmount > 0 ? formatCurrency(netTakeHome) : 'Pending agreement'}
+          </Text>
         </View>
         <Text style={styles.escrowNotice}>
           🔒 Escrow Protected: Funds are released automatically to your verified bank account upon customer sign-off.
@@ -308,7 +565,7 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
         <View style={styles.card}>
           <Text style={styles.cardHeading}>Workflow Controls</Text>
 
-          {booking.status === 'confirmed' && (
+          {['confirmed', 'scheduled', 'assigned'].includes(booking.status) && (
             <TouchableOpacity
               style={[styles.workflowBtn, { backgroundColor: '#2563EB' }]}
               onPress={() => handleUpdateStatus('on_the_way')}
@@ -328,6 +585,16 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
               <Ionicons name="location" size={16} color="#FFFFFF" />
               <Text style={styles.workflowBtnText}>Mark as "Arrived at Customer Site"</Text>
             </TouchableOpacity>
+          )}
+
+          {/* When status is 'arrived', the OTP card in Section 4 provides the single verification action. We do NOT duplicate it here! */}
+          {booking.status === 'arrived' && !isOtpVerified && (
+            <View style={{ backgroundColor: '#FEF3C7', padding: 12, borderRadius: 8, flexDirection: 'row', alignItems: 'center' }}>
+              <Ionicons name="information-circle" size={18} color="#D97706" />
+              <Text style={{ marginLeft: 8, color: '#92400E', fontSize: 13, flex: 1, fontWeight: '500' }}>
+                Please enter the 6-digit Arrival OTP in the verification box above to start work.
+              </Text>
+            </View>
           )}
 
           {booking.status === 'in_progress' && (
@@ -357,6 +624,27 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
                 Job completed and verified! Earnings credited to your WorkLogy weekly payout ledger.
               </Text>
             </View>
+          )}
+
+          {booking.status === 'cancelled' && (
+            <View style={[styles.waitingSignoff, { backgroundColor: '#FEE2E2', borderColor: '#FCA5A5' }]}>
+              <Ionicons name="close-circle" size={20} color="#DC2626" />
+              <Text style={[styles.waitingSignoffText, { color: '#B91C1C' }]}>
+                This booking has been cancelled and cannot be reopened.
+              </Text>
+            </View>
+          )}
+
+          {/* Cancel button only if not already terminal */}
+          {!['completed', 'cancelled', 'completion_pending'].includes(booking.status) && (
+            <TouchableOpacity
+              style={styles.cancelBtnOutline}
+              onPress={() => setCancelModal((prev) => ({ ...prev, open: true }))}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="close-circle-outline" size={16} color="#DC2626" />
+              <Text style={styles.cancelBtnOutlineText}>Cancel Booking</Text>
+            </TouchableOpacity>
           )}
         </View>
       )}
@@ -485,6 +773,74 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
                 <ActivityIndicator color="#FFFFFF" />
               ) : (
                 <Text style={styles.submitOtpBtnText}>Submit Sign-Off & Close Work</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── CANCELLATION MODAL ── */}
+      <Modal visible={cancelModal.open} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: '#DC2626' }]}>Cancel Booking</Text>
+              <TouchableOpacity onPress={() => setCancelModal({ ...cancelModal, open: false })}>
+                <Ionicons name="close" size={24} color={COLORS.textDark} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.modalSub}>
+              Please select a reason for cancelling this booking. The homeowner will be notified immediately.
+            </Text>
+
+            <View style={styles.reasonsList}>
+              {[
+                'Emergency schedule conflict',
+                'Unable to reach service location',
+                'Parts / specialized tools unavailable',
+                'Customer requested cancellation',
+                'Safety or site access issue'
+              ].map((reason) => {
+                const isSelected = cancelModal.reason === reason;
+                return (
+                  <TouchableOpacity
+                    key={reason}
+                    style={[styles.reasonOption, isSelected && styles.reasonOptionActive]}
+                    onPress={() => setCancelModal((prev) => ({ ...prev, reason }))}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons
+                      name={isSelected ? 'radio-button-on' : 'radio-button-off'}
+                      size={18}
+                      color={isSelected ? COLORS.primary : COLORS.textMuted}
+                    />
+                    <Text style={[styles.reasonOptionText, isSelected && styles.reasonOptionTextActive]}>
+                      {reason}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <TextInput
+              style={[styles.otpInput, styles.completeTextInput, { marginTop: 10 }]}
+              multiline
+              numberOfLines={2}
+              value={cancelModal.customNote}
+              onChangeText={(t) => setCancelModal((prev) => ({ ...prev, customNote: t }))}
+              placeholder="Additional explanation or context (optional)..."
+              placeholderTextColor="#9CA3AF"
+            />
+
+            <TouchableOpacity
+              style={[styles.submitOtpBtn, { backgroundColor: '#DC2626' }]}
+              onPress={handleCancelBooking}
+              disabled={cancelModal.submitting}
+            >
+              {cancelModal.submitting ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={styles.submitOtpBtnText}>Confirm Cancellation</Text>
               )}
             </TouchableOpacity>
           </View>
@@ -648,20 +1004,126 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#152B3C'
   },
-  mapsBtn: {
+  cardHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10
+  },
+  gpsVerifiedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 5
+  },
+  gpsVerifiedBadgeText: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    color: '#059669'
+  },
+  maskedLocationBox: {
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    borderRadius: 8,
+    padding: 10
+  },
+  locationRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start'
+  },
+  generalLocalityText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#92400E'
+  },
+  maskedPrivacyNotice: {
+    fontSize: 11,
+    color: '#B45309',
+    marginTop: 3,
+    lineHeight: 15
+  },
+  fullLocationContainer: {
+    gap: 8
+  },
+  addressLineRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start'
+  },
+  addressPrimaryText: {
+    fontSize: 13.5,
+    fontWeight: '700',
+    color: COLORS.textDark
+  },
+  addressSecondaryText: {
+    fontSize: 12,
+    color: COLORS.textMuted,
+    marginTop: 2
+  },
+  landmarkBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 6
+  },
+  landmarkText: {
+    fontSize: 11.5,
+    color: '#92400E'
+  },
+  accessNotesBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+    backgroundColor: '#F0F9FF',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 6
+  },
+  accessNotesText: {
+    flex: 1,
+    fontSize: 11.5,
+    color: '#0369A1',
+    lineHeight: 15
+  },
+  gpsCoordsBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 6
+  },
+  gpsCoordsText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#047857'
+  },
+  directNavBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#EFF6FF',
-    paddingVertical: 9,
-    borderRadius: 8,
-    marginTop: 10,
-    gap: 6
+    gap: 8,
+    backgroundColor: '#2563EB',
+    paddingVertical: 12,
+    borderRadius: 10,
+    marginTop: 4,
+    shadowColor: '#2563EB',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 3
   },
-  mapsBtnText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#2563EB'
+  directNavBtnText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#FFFFFF'
   },
   otpCard: {
     backgroundColor: '#FFFBEB',
@@ -864,5 +1326,65 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
     color: '#FFFFFF'
+  },
+  cancelledNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#FEE2E2',
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 8
+  },
+  cancelledNoticeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#991B1B',
+    flex: 1
+  },
+  cancelBtnOutline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+    backgroundColor: '#FEF2F2',
+    paddingVertical: 10,
+    borderRadius: 8,
+    marginTop: 10
+  },
+  cancelBtnOutlineText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#DC2626'
+  },
+  reasonsList: {
+    gap: 8,
+    marginVertical: 8
+  },
+  reasonOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#F8FAFC'
+  },
+  reasonOptionActive: {
+    borderColor: COLORS.primary,
+    backgroundColor: '#EFF6FF'
+  },
+  reasonOptionText: {
+    fontSize: 13,
+    color: COLORS.textDark,
+    flex: 1
+  },
+  reasonOptionTextActive: {
+    fontWeight: '700',
+    color: COLORS.primary
   }
 });

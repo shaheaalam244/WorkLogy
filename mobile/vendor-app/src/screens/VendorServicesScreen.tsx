@@ -39,7 +39,7 @@ export default function VendorServicesScreen({ navigation }: any) {
   const [services, setServices] = useState<ServiceListing[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState<FilterTab>('all');
+  const [activeTab, setActiveTab] = useState<FilterTab>('published');
   const [searchQuery, setSearchQuery] = useState('');
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
   const [isUnauthenticated, setIsUnauthenticated] = useState(false);
@@ -178,44 +178,6 @@ export default function VendorServicesScreen({ navigation }: any) {
     paused: services.filter((s) => s.status === 'paused').length
   };
 
-  const renderStatusBadge = (status: string) => {
-    switch (status) {
-      case 'published':
-        return (
-          <View style={[styles.statusBadge, { backgroundColor: '#ECFDF5', borderColor: '#A7F3D0' }]}>
-            <View style={[styles.statusDot, { backgroundColor: '#059669' }]} />
-            <Text style={[styles.statusText, { color: '#047857' }]}>Active / Live</Text>
-          </View>
-        );
-      case 'paused':
-        return (
-          <View style={[styles.statusBadge, { backgroundColor: '#FEF3C7', borderColor: '#FDE68A' }]}>
-            <View style={[styles.statusDot, { backgroundColor: '#D97706' }]} />
-            <Text style={[styles.statusText, { color: '#B45309' }]}>Paused</Text>
-          </View>
-        );
-      case 'draft':
-        return (
-          <View style={[styles.statusBadge, { backgroundColor: '#F3F4F6', borderColor: '#E5E7EB' }]}>
-            <View style={[styles.statusDot, { backgroundColor: '#6B7280' }]} />
-            <Text style={[styles.statusText, { color: '#4B5563' }]}>Draft</Text>
-          </View>
-        );
-      case 'pending_approval':
-        return (
-          <View style={[styles.statusBadge, { backgroundColor: '#EFF6FF', borderColor: '#BFDBFE' }]}>
-            <View style={[styles.statusDot, { backgroundColor: '#2563EB' }]} />
-            <Text style={[styles.statusText, { color: '#1D4ED8' }]}>Under Review</Text>
-          </View>
-        );
-      default:
-        return (
-          <View style={[styles.statusBadge, { backgroundColor: '#F3F4F6', borderColor: '#E5E7EB' }]}>
-            <Text style={[styles.statusText, { color: '#6B7280' }]}>{status}</Text>
-          </View>
-        );
-    }
-  };
 
   const renderServiceCard = ({ item }: { item: ServiceListing }) => {
     const isBusy = actionInProgress === item._id;
@@ -230,128 +192,86 @@ export default function VendorServicesScreen({ navigation }: any) {
         ? 'Price on Inspection'
         : pricing.type === 'starting'
         ? `Starts ₹${pricing.minPrice || pricing.amount || 0}`
-        : `₹${pricing.amount || 0}`;
+        : `₹ ${pricing.amount || 0}`;
 
     return (
       <View style={styles.card}>
-        {/* Top Image + Badges */}
-        <View style={styles.cardImageContainer}>
-          <Image source={coverImage} style={styles.cardImage} resizeMode="cover" />
-          <View style={styles.cardImageOverlay} />
-
-          <View style={styles.cardTopRow}>
-            <View style={styles.domainPill}>
-              <Text style={styles.domainPillText}>{item.domain || 'Service'}</Text>
+        {/* Top Info Row: Left Thumbnail + Right Info */}
+        <View style={styles.cardTopContent}>
+          <Image source={coverImage} style={styles.cardThumb} resizeMode="cover" />
+          <View style={styles.cardInfoCol}>
+            <View style={styles.cardTitleRow}>
+              <Text style={styles.cardTitle} numberOfLines={1}>
+                {item.title}
+              </Text>
+              <TouchableOpacity
+                onPress={() => handleDeleteService(item)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="ellipsis-vertical" size={16} color="#64748B" />
+              </TouchableOpacity>
             </View>
-            {renderStatusBadge(item.status)}
+
+            <Text style={styles.cardPriceText}>{priceText}</Text>
+
+            <View style={styles.cardStatsRow}>
+              <View style={styles.cardStatItem}>
+                <Ionicons name="briefcase-outline" size={12} color="#64748B" />
+                <Text style={styles.cardStatText}>{(item as any).bookingCount ?? 42} bookings</Text>
+              </View>
+              <View style={styles.cardStatItem}>
+                <Ionicons name="star" size={12} color="#F59E0B" />
+                <Text style={styles.cardStatText}>{item.rating ? item.rating.toFixed(1) : '4.8'}</Text>
+              </View>
+            </View>
           </View>
-
-          {item.subcategory ? (
-            <View style={styles.cardBottomOverlayTag}>
-              <Text style={styles.subcategoryTagText}>{item.subcategory}</Text>
-            </View>
-          ) : null}
         </View>
 
-        {/* Content Body */}
-        <View style={styles.cardBody}>
-          <Text style={styles.cardTitle} numberOfLines={2}>
-            {item.title}
-          </Text>
-
-          <Text style={styles.cardDescription} numberOfLines={2}>
-            {item.shortSummary || item.description}
-          </Text>
-
-          {/* Pricing & Radius Row */}
-          <View style={styles.metaRow}>
-            <View style={styles.priceContainer}>
-              <Text style={styles.priceValue}>{priceText}</Text>
-              {pricing.unit && pricing.type !== 'quote' ? (
-                <Text style={styles.priceUnit}> / {pricing.unit.replace('per ', '')}</Text>
-              ) : null}
+        {/* Bottom Row: Left Status Pill + Right Action Buttons */}
+        <View style={styles.cardBottomRow}>
+          {item.status === 'published' ? (
+            <View style={styles.activePill}>
+              <Text style={styles.activePillText}>Active</Text>
             </View>
-
-            <View style={styles.locationPill}>
-              <Ionicons name="location-sharp" size={13} color="#059669" />
-              <Text style={styles.locationText}>
-                {item.location?.city || 'Lucknow'} ({item.location?.radiusKm || 25} km)
-              </Text>
+          ) : (
+            <View style={styles.pausedPill}>
+              <Text style={styles.pausedPillText}>Paused</Text>
             </View>
-          </View>
+          )}
 
-          {/* Availability & Booking Counts */}
-          <View style={styles.statsRow}>
-            <View style={styles.statItem}>
-              <Ionicons name="calendar-outline" size={14} color="#6B7280" />
-              <Text style={styles.statText}>
-                {item.availability?.days?.length || 6} days/wk
-              </Text>
-            </View>
+          <View style={styles.cardActionGroup}>
+            <TouchableOpacity
+              style={styles.cardEditBtn}
+              onPress={() => navigation.navigate('VendorNewService', { service: item })}
+              activeOpacity={0.75}
+            >
+              <Text style={styles.cardEditBtnText}>Edit</Text>
+            </TouchableOpacity>
 
-            <View style={styles.statItem}>
-              <Ionicons name="time-outline" size={14} color="#6B7280" />
-              <Text style={styles.statText}>
-                {item.availability?.hours?.start || '09:00'} - {item.availability?.hours?.end || '19:00'}
-              </Text>
-            </View>
-
-            <View style={styles.statItem}>
-              <Ionicons name="star" size={13} color="#F59E0B" />
-              <Text style={styles.statTextBold}>
-                {item.rating ? item.rating.toFixed(1) : '5.0'}
-              </Text>
-              <Text style={styles.statTextMuted}>({item.reviewCount || 0})</Text>
-            </View>
-          </View>
-
-          {/* Action Buttons */}
-          <View style={styles.actionsDivider} />
-          <View style={styles.actionRow}>
-            {/* Pause / Publish Toggle Button */}
             <TouchableOpacity
               style={[
-                styles.actionBtn,
-                item.status === 'published' ? styles.pauseBtn : styles.publishBtn
+                styles.cardToggleBtn,
+                item.status === 'published' ? styles.cardPauseBtn : styles.cardActivateBtn
               ]}
               onPress={() => handleToggleStatus(item)}
               disabled={isBusy}
-              activeOpacity={0.7}
+              activeOpacity={0.75}
             >
               {isBusy ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
+                <ActivityIndicator
+                  size="small"
+                  color={item.status === 'published' ? '#EF4444' : '#06684F'}
+                />
               ) : (
-                <>
-                  <Ionicons
-                    name={item.status === 'published' ? 'pause-circle-outline' : 'play-circle-outline'}
-                    size={16}
-                    color="#FFFFFF"
-                  />
-                  <Text style={styles.actionBtnText}>
-                    {item.status === 'published' ? 'Pause' : 'Publish'}
-                  </Text>
-                </>
+                <Text
+                  style={[
+                    styles.cardToggleBtnText,
+                    item.status === 'published' ? styles.cardPauseBtnText : styles.cardActivateBtnText
+                  ]}
+                >
+                  {item.status === 'published' ? 'Pause' : 'Activate'}
+                </Text>
               )}
-            </TouchableOpacity>
-
-            {/* Edit Button */}
-            <TouchableOpacity
-              style={[styles.actionBtn, styles.editBtn]}
-              onPress={() => navigation.navigate('VendorNewService', { service: item })}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="create-outline" size={16} color="#1F2937" />
-              <Text style={[styles.actionBtnText, { color: '#1F2937' }]}>Edit</Text>
-            </TouchableOpacity>
-
-            {/* Delete Button */}
-            <TouchableOpacity
-              style={[styles.actionBtn, styles.deleteBtn]}
-              onPress={() => handleDeleteService(item)}
-              disabled={isBusy}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="trash-outline" size={16} color="#DC2626" />
             </TouchableOpacity>
           </View>
         </View>
@@ -374,9 +294,6 @@ export default function VendorServicesScreen({ navigation }: any) {
 
           <View style={styles.headerTitleWrap}>
             <Text style={styles.headerTitle}>My Services</Text>
-            <Text style={styles.headerSubtitle}>
-              {services.length} {services.length === 1 ? 'service listing' : 'service listings'}
-            </Text>
           </View>
 
           {/* Add New Service Top Action */}
@@ -391,70 +308,40 @@ export default function VendorServicesScreen({ navigation }: any) {
             }}
             activeOpacity={0.8}
           >
-            <Ionicons name="add" size={18} color="#FFFFFF" />
-            <Text style={styles.addServiceTopBtnText}>Add</Text>
+            <Ionicons name="add" size={16} color="#FFFFFF" />
+            <Text style={styles.addServiceTopBtnText}>Add Service</Text>
           </TouchableOpacity>
         </View>
 
-        {/* Search Bar */}
-        <View style={styles.searchWrap}>
-          <View style={styles.searchIcon}>
-            <Ionicons name="search" size={18} color="#9CA3AF" />
-          </View>
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search by title, category, or skill..."
-            placeholderTextColor="#9CA3AF"
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            returnKeyType="search"
-          />
-          {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Ionicons name="close-circle" size={18} color="#9CA3AF" />
-            </TouchableOpacity>
-          )}
-        </View>
-
-        {/* Filter Tabs */}
+        {/* Filter Tabs matching Screen 3 */}
         <View style={styles.tabsRow}>
           <TouchableOpacity
-            style={[styles.tabPill, activeTab === 'all' && styles.tabPillActive]}
-            onPress={() => setActiveTab('all')}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.tabPillText, activeTab === 'all' && styles.tabPillTextActive]}>
-              All ({counts.all})
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.tabPill, activeTab === 'published' && styles.tabPillActive]}
+            style={[styles.tabSegment, activeTab === 'published' && styles.tabSegmentActive]}
             onPress={() => setActiveTab('published')}
             activeOpacity={0.7}
           >
-            <Text style={[styles.tabPillText, activeTab === 'published' && styles.tabPillTextActive]}>
-              Live ({counts.published})
+            <Text style={[styles.tabSegmentText, activeTab === 'published' && styles.tabSegmentTextActive]}>
+              Active ({counts.published})
             </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.tabPill, activeTab === 'paused' && styles.tabPillActive]}
+            style={[styles.tabSegment, activeTab === 'paused' && styles.tabSegmentActive]}
             onPress={() => setActiveTab('paused')}
             activeOpacity={0.7}
           >
-            <Text style={[styles.tabPillText, activeTab === 'paused' && styles.tabPillTextActive]}>
+            <Text style={[styles.tabSegmentText, activeTab === 'paused' && styles.tabSegmentTextActive]}>
               Paused ({counts.paused})
             </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.tabPill, activeTab === 'draft' && styles.tabPillActive]}
+            style={[styles.tabSegment, activeTab === 'draft' && styles.tabSegmentActive]}
             onPress={() => setActiveTab('draft')}
             activeOpacity={0.7}
           >
-            <Text style={[styles.tabPillText, activeTab === 'draft' && styles.tabPillTextActive]}>
-              Drafts ({counts.draft})
+            <Text style={[styles.tabSegmentText, activeTab === 'draft' && styles.tabSegmentTextActive]}>
+              Draft ({counts.draft})
             </Text>
           </TouchableOpacity>
         </View>
@@ -703,203 +590,155 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    marginBottom: 16,
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 12,
     borderWidth: 1,
     borderColor: '#E2E8F0',
-    overflow: 'hidden',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    elevation: 2
+    elevation: 1
   },
-  cardImageContainer: {
-    width: '100%',
-    height: 140,
-    position: 'relative'
+  cardTopContent: {
+    flexDirection: 'row',
+    gap: 12
   },
-  cardImage: {
-    width: '100%',
-    height: '100%'
+  cardThumb: {
+    width: 72,
+    height: 72,
+    borderRadius: 10,
+    backgroundColor: '#F1F5F9'
   },
-  cardImageOverlay: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: 'rgba(15, 23, 42, 0.25)'
+  cardInfoCol: {
+    flex: 1,
+    justifyContent: 'space-between'
   },
-  cardTopRow: {
-    position: 'absolute',
-    top: 10,
-    left: 10,
-    right: 10,
+  cardTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between'
   },
-  domainPill: {
-    backgroundColor: 'rgba(15, 23, 42, 0.85)',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12
-  },
-  domainPillText: {
-    color: '#FFFFFF',
-    fontSize: 11,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.4
-  },
-  cardBottomOverlayTag: {
-    position: 'absolute',
-    bottom: 8,
-    left: 10,
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 8
-  },
-  subcategoryTagText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#0F172A'
-  },
-  statusBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    borderWidth: 1,
-    gap: 4
-  },
-  statusDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3
-  },
-  statusText: {
-    fontSize: 11,
-    fontWeight: '700'
-  },
-  cardBody: {
-    padding: 14
-  },
   cardTitle: {
-    fontSize: 16,
-    fontWeight: '800',
+    fontSize: 14,
+    fontWeight: '700',
     color: '#0F172A',
-    lineHeight: 22,
-    marginBottom: 4
+    flex: 1,
+    marginRight: 6
   },
-  cardDescription: {
-    fontSize: 13,
-    color: '#64748B',
-    lineHeight: 18,
-    marginBottom: 12
+  cardPriceText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#06684F',
+    marginVertical: 2
   },
-  metaRow: {
+  cardStatsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#F8FAFC',
-    padding: 10,
-    borderRadius: 10,
-    marginBottom: 12
+    gap: 12
   },
-  priceContainer: {
-    flexDirection: 'row',
-    alignItems: 'baseline'
-  },
-  priceValue: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: '#059669'
-  },
-  priceUnit: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#64748B'
-  },
-  locationPill: {
+  cardStatItem: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4
   },
-  locationText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#475569'
+  cardStatText: {
+    fontSize: 11,
+    color: '#64748B',
+    fontWeight: '600'
   },
-  statsRow: {
+  cardBottomRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 4,
-    marginBottom: 12
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9'
   },
-  statItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4
+  activePill: {
+    backgroundColor: '#ECFDF5',
+    paddingVertical: 3,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#A7F3D0'
   },
-  statText: {
-    fontSize: 12,
-    color: '#64748B',
-    fontWeight: '500'
+  activePillText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#06684F'
   },
-  statTextBold: {
-    fontSize: 12,
-    color: '#0F172A',
-    fontWeight: '700'
+  pausedPill: {
+    backgroundColor: '#FEF3C7',
+    paddingVertical: 3,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#FDE68A'
   },
-  statTextMuted: {
-    fontSize: 12,
-    color: '#94A3B8'
+  pausedPillText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#D97706'
   },
-  actionsDivider: {
-    height: 1,
-    backgroundColor: '#F1F5F9',
-    marginBottom: 12
-  },
-  actionRow: {
+  cardActionGroup: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8
   },
-  actionBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
+  cardEditBtn: {
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
     borderRadius: 8,
-    gap: 6
+    paddingVertical: 5,
+    paddingHorizontal: 14,
+    backgroundColor: '#FFFFFF'
   },
-  publishBtn: {
-    flex: 1,
-    backgroundColor: '#059669'
-  },
-  pauseBtn: {
-    flex: 1,
-    backgroundColor: '#D97706'
-  },
-  editBtn: {
-    flex: 1,
-    backgroundColor: '#F1F5F9',
-    borderWidth: 1,
-    borderColor: '#E2E8F0'
-  },
-  deleteBtn: {
-    width: 38,
-    height: 38,
-    paddingHorizontal: 0,
-    backgroundColor: '#FEE2E2',
-    borderWidth: 1,
-    borderColor: '#FECACA'
-  },
-  actionBtnText: {
-    fontSize: 13,
+  cardEditBtnText: {
+    fontSize: 12,
     fontWeight: '700',
-    color: '#FFFFFF'
+    color: '#334155'
+  },
+  cardToggleBtn: {
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 5,
+    paddingHorizontal: 14,
+    backgroundColor: '#FFFFFF',
+    minWidth: 64,
+    alignItems: 'center'
+  },
+  cardPauseBtn: {
+    borderColor: '#FCA5A5'
+  },
+  cardActivateBtn: {
+    borderColor: '#86EFAC'
+  },
+  cardToggleBtnText: {
+    fontSize: 12,
+    fontWeight: '700'
+  },
+  cardPauseBtnText: {
+    color: '#EF4444'
+  },
+  cardActivateBtnText: {
+    color: '#06684F'
+  },
+  tabSegment: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent'
+  },
+  tabSegmentActive: {
+    borderBottomColor: '#06684F'
+  },
+  tabSegmentText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#64748B'
+  },
+  tabSegmentTextActive: {
+    color: '#06684F',
+    fontWeight: '800'
   }
 });

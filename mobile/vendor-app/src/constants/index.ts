@@ -4,7 +4,8 @@ export { COLORS };
 
 export const STORAGE_KEYS = {
   AUTH_TOKEN: 'worklogy_vendor_auth_token',
-  AUTH_USER: 'worklogy_vendor_auth_user'
+  AUTH_USER: 'worklogy_vendor_auth_user',
+  PUSH_TOKEN: 'worklogy_vendor_push_token'
 };
 
 export const SOCKET_EVENTS = {
@@ -15,5 +16,9 @@ export const SOCKET_EVENTS = {
   JOB_TAKEN: 'job_taken',
   STATUS_UPDATE: 'booking_status_updated',
   SEND_MESSAGE: 'send_message',
-  RECEIVE_MESSAGE: 'receive_message'
+  RECEIVE_MESSAGE: 'receive_message',
+  NEW_MESSAGE_NOTIFICATION: 'new_message_notification',
+  MESSAGES_READ: 'messages_read',
+  NEW_NOTIFICATION: 'new_notification',
+  NOTIFICATIONS_READ: 'notifications_read'
 };
