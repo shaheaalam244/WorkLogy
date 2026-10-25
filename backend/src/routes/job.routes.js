@@ -18,7 +18,7 @@ import {
 import { protect, optionalAuth } from '../middleware/auth.middleware.js';
 import { authorize } from '../middleware/role.middleware.js';
 import { validateCreateJob } from '../validators/job.validator.js';
-import { upload } from '../middleware/upload.middleware.js';
+import { upload, uploadSingleImage } from '../middleware/upload.middleware.js';
 
 const router = express.Router();
 
@@ -27,7 +27,7 @@ router.get('/nearby', protect, authorize('vendor'), getNearbyJobs);
 router.get('/emergency-leads', protect, authorize('vendor'), getEmergencyLeads);
 router.post('/', protect, authorize('customer'), validateCreateJob, createJob);
 
-router.post('/upload-image', protect, upload.single('image'), uploadJobImage);
+router.post('/upload-image', protect, uploadSingleImage, uploadJobImage);
 router.get('/my-customer-jobs', protect, authorize('customer'), getMyCustomerJobs);
 router.get('/my-jobs', protect, authorize('customer'), getMyCustomerJobs);
 router.get('/open', protect, authorize('vendor'), getNearbyJobs);
@@ -36,6 +36,7 @@ router.post('/:id/claim', protect, authorize('vendor'), claimJobInstant);
 router.post('/:id/claim-instant', protect, authorize('vendor'), claimJobInstant);
 router.post('/:id/decline', protect, authorize('vendor'), declineJob);
 router.post('/:id/cancel', protect, cancelJob);
+router.patch('/:id/cancel', protect, cancelJob);
 router.post('/:id/retry-dispatch', protect, retryJobDispatch);
 router.get('/:id', optionalAuth, getJobById);
 router.put('/:id', protect, updateJob);

@@ -8,7 +8,7 @@ import Notification from '../models/Notification.js';
 import Review from '../models/Review.js';
 import { getIO } from '../config/socket.js';
 import { decryptCustomerOtp, verifyOtpMatch, generateSecureOtp, hashOtp } from '../utils/otp.js';
-import { notifyBookingConfirmed, notifyStatusChange, notifyCancellation } from '../services/notification.service.js';
+import { notifyBookingConfirmed, notifyStatusChange, notifyCancellation, createNotification } from '../services/notification.service.js';
 import {
   calculateDistanceMeters,
 
@@ -142,15 +142,21 @@ export const createDirectBooking = async (req, res, next) => {
       .populate('customer', 'name email phone avatar')
       .populate('vendor', 'name email phone avatar businessName');
 
-    // Notify the professional persistently in DB
+    // Notify the professional persistently in DB and via remote push
     try {
-      await Notification.create({
-        recipient: vendorId,
-        sender: req.user.id,
+      await createNotification({
+        recipientId: vendorId,
+        senderId: req.user.id,
         type: 'job_alert',
         title: 'New Direct Booking Request!',
         message: `${req.user.name || 'A customer'} requested a direct booking for "${booking.serviceTitle}". Review and accept or decline.`,
-        link: `/vendor/bookings`
+        link: `/vendor/bookings`,
+        relatedResource: {
+          resourceType: 'booking',
+          resourceId: booking._id
+        },
+        sendEmailNotification: false,
+        sendPush: true
       });
     } catch (notifErr) {
       console.warn('Direct booking notification warning:', notifErr.message);
@@ -308,7 +314,12 @@ export const respondDirectBooking = async (req, res, next) => {
 export const getVendorBookings = async (req, res, next) => {
   try {
     const { status } = req.query;
-    let query = { vendor: req.user.id };
+    const vendorUserId = req.user.id || req.user._id;
+    const vendorProfile = await VendorProfile.findOne({ user: vendorUserId }).select('_id');
+    const vendorIds = [vendorUserId];
+    if (vendorProfile?._id) vendorIds.push(vendorProfile._id);
+
+    let query = { vendor: { $in: vendorIds } };
 
     if (status && status !== 'all') {
       if (status === 'scheduled' || status === 'confirmed') {
@@ -422,7 +433,23 @@ export const getVendorBookings = async (req, res, next) => {
         .sort({ scheduledDate: -1 });
     }
 
-    res.status(200).json({ success: true, count: bookings.length, bookings });
+    const sanitizedBookings = bookings.map((b) => {
+      const obj = b.toObject ? b.toObject() : { ...b };
+      if (obj.startOtp) {
+        delete obj.startOtp.otp;
+        delete obj.startOtp.codeHash;
+        delete obj.startOtp.customerEncryptedOtp;
+      }
+      obj.totalAmount = obj.pricing?.amount || obj.totalAmount;
+      obj.isOtpVerified = Boolean(
+        obj.startOtp?.isConsumed ||
+        obj.arrivalEvidence?.verified ||
+        ['in_progress', 'completion_pending', 'completed'].includes(obj.status)
+      );
+      return obj;
+    });
+
+    res.status(200).json({ success: true, count: sanitizedBookings.length, bookings: sanitizedBookings });
   } catch (error) {
     next(error);
   }
@@ -430,21 +457,127 @@ export const getVendorBookings = async (req, res, next) => {
 
 export const getBookingById = async (req, res, next) => {
   try {
-    const booking = await Booking.findById(req.params.id)
-      .populate('customer', 'name email phone avatar')
-      .populate('vendor', 'name email phone avatar')
-      .populate('job')
-      .populate('service')
-      .populate('review');
+    const rawId = (req.params.id || '').trim();
+    const isHex24 = mongoose.Types.ObjectId.isValid(rawId) && /^[0-9a-fA-F]{24}$/.test(rawId);
+
+    let booking = null;
+    if (isHex24) {
+      booking = await Booking.findById(rawId)
+        .populate('customer', 'name email phone avatar')
+        .populate('vendor', 'name email phone avatar')
+        .populate('job')
+        .populate('service')
+        .populate('review');
+
+      if (!booking) {
+        booking = await Booking.findOne({ job: rawId })
+          .populate('customer', 'name email phone avatar')
+          .populate('vendor', 'name email phone avatar')
+          .populate('job')
+          .populate('service')
+          .populate('review');
+      }
+    }
 
     if (!booking) {
-      return res.status(404).json({ success: false, message: 'Booking not found' });
+      // Check if rawId matches human-readable bookingReference with case-insensitivity
+      booking = await Booking.findOne({ bookingReference: new RegExp(`^${rawId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') })
+        .populate('customer', 'name email phone avatar')
+        .populate('vendor', 'name email phone avatar')
+        .populate('job')
+        .populate('service')
+        .populate('review');
     }
+
+    if (!booking) {
+      // Check if rawId is a standalone Job (by 24-char ObjectId or REQ- suffix reference)
+      let job = null;
+      if (isHex24) {
+        job = await Job.findById(rawId)
+          .populate('category', 'name icon')
+          .populate('selectedVendor', 'name avatar phone businessName rating');
+      }
+
+      // Check human-readable REQ-XXXXXX or #XXXXXX code matching the last 6 characters of Job ID
+      if (!job && (rawId.toUpperCase().startsWith('REQ-') || rawId.startsWith('#') || rawId.length === 6)) {
+        const suffix = rawId.replace(/^REQ-|^#/i, '').toLowerCase();
+        if (suffix.length >= 4) {
+          const currentUserId = (req.user._id || req.user.id).toString();
+          const candidateJobs = await Job.find({
+            customer: currentUserId,
+            isDeleted: { $ne: true }
+          })
+            .populate('category', 'name icon')
+            .populate('selectedVendor', 'name avatar phone businessName rating')
+            .sort({ createdAt: -1 })
+            .limit(50);
+
+          job = candidateJobs.find(j => j._id.toString().toLowerCase().endsWith(suffix)) || null;
+        }
+      }
+
+      if (job) {
+        const currentUserId = (req.user._id || req.user.id).toString();
+        const isOwner = job.customer?.toString() === currentUserId;
+        const isAssigned = (job.selectedVendor?._id || job.selectedVendor)?.toString() === currentUserId;
+
+        if (!isOwner && !isAssigned && req.user.role !== 'admin') {
+          return res.status(403).json({ success: false, message: 'Unauthorized to view this service request' });
+        }
+
+        // Return a normalized, complete booking-compatible record so the frontend renders seamlessly
+        const jobAsBooking = {
+          _id: job._id.toString(),
+          jobId: job._id.toString(),
+          bookingReference: `REQ-${job._id.toString().slice(-6).toUpperCase()}`,
+          bookingType: 'open_request',
+          serviceTitle: job.title,
+          category: job.category?.name || 'Home Services',
+          status: job.status,
+          urgency: job.urgency,
+          scheduledDate: job.preferredDate ? new Date(job.preferredDate) : job.createdAt,
+          timeSlot: job.preferredTime || 'Flexible',
+          address: job.location,
+          pricing: {
+            amount: job.budget?.amount || job.finalPrice?.amount || 0,
+            paymentStatus: 'pending',
+            isPaid: false
+          },
+          totalAmount: job.budget?.amount || job.finalPrice?.amount || 0,
+          problemDescription: job.description,
+          isJobRequest: true,
+          customer: job.customer,
+          vendor: job.selectedVendor ? {
+            _id: job.selectedVendor._id || job.selectedVendor,
+            name: job.selectedVendor.name || job.selectedVendor.businessName || 'Assigned Specialist',
+            businessName: job.selectedVendor.businessName || job.selectedVendor.name,
+            phone: job.selectedVendor.phone,
+            avatar: job.selectedVendor.avatar,
+            rating: job.selectedVendor.rating || 4.9
+          } : null,
+          createdAt: job.createdAt,
+          updatedAt: job.updatedAt
+        };
+
+        return res.status(200).json({
+          success: true,
+          jobOnly: true,
+          job,
+          booking: jobAsBooking
+        });
+      }
+
+      return res.status(404).json({ success: false, message: 'Booking or service request not found' });
+    }
+
+    const currentUserId = (req.user._id || req.user.id).toString();
+    const bookingVendorId = (booking.vendor?._id || booking.vendor)?.toString();
+    const bookingCustomerId = (booking.customer?._id || booking.customer)?.toString();
 
     // Verify vendor or customer access
     if (
-      booking.vendor._id.toString() !== req.user.id &&
-      booking.customer._id.toString() !== req.user.id &&
+      bookingVendorId !== currentUserId &&
+      bookingCustomerId !== currentUserId &&
       req.user.role !== 'admin'
     ) {
       return res.status(403).json({ success: false, message: 'Unauthorized to view this booking' });
@@ -452,7 +585,7 @@ export const getBookingById = async (req, res, next) => {
 
     const bookingObj = booking.toObject();
     // Vendor must NEVER see customer's plaintext OTP or sensitive hash before verification
-    if (booking.customer._id.toString() !== req.user.id && req.user.role !== 'admin') {
+    if (bookingCustomerId !== currentUserId && req.user.role !== 'admin') {
       if (bookingObj.startOtp) {
         delete bookingObj.startOtp.otp;
         delete bookingObj.startOtp.codeHash;
@@ -462,11 +595,18 @@ export const getBookingById = async (req, res, next) => {
 
     // Attach vendor profile information for professional card
     if (booking.vendor) {
-      const vendorProfile = await VendorProfile.findOne({ user: booking.vendor._id })
+      const vendorProfile = await VendorProfile.findOne({ user: booking.vendor._id || booking.vendor })
         .populate('categories', 'name icon slug')
         .lean();
       bookingObj.vendorProfile = vendorProfile;
     }
+
+    bookingObj.totalAmount = bookingObj.pricing?.amount || bookingObj.totalAmount;
+    bookingObj.isOtpVerified = Boolean(
+      bookingObj.startOtp?.isConsumed ||
+      bookingObj.arrivalEvidence?.verified ||
+      ['in_progress', 'completion_pending', 'completed'].includes(bookingObj.status)
+    );
 
     res.status(200).json({ success: true, booking: bookingObj });
   } catch (error) {
@@ -520,6 +660,13 @@ export const getBookingByJobId = async (req, res, next) => {
         .lean();
       bookingObj.vendorProfile = vendorProfile;
     }
+
+    bookingObj.totalAmount = bookingObj.pricing?.amount || bookingObj.totalAmount;
+    bookingObj.isOtpVerified = Boolean(
+      bookingObj.startOtp?.isConsumed ||
+      bookingObj.arrivalEvidence?.verified ||
+      ['in_progress', 'completion_pending', 'completed'].includes(bookingObj.status)
+    );
 
     res.status(200).json({ success: true, booking: bookingObj });
   } catch (error) {
@@ -939,10 +1086,25 @@ export const updateBookingStatus = async (req, res, next) => {
 
     await booking.save();
 
+    const returnObj = booking.toObject();
+    if ((booking.customer?._id || booking.customer)?.toString() !== req.user.id && req.user.role !== 'admin') {
+      if (returnObj.startOtp) {
+        delete returnObj.startOtp.otp;
+        delete returnObj.startOtp.codeHash;
+        delete returnObj.startOtp.customerEncryptedOtp;
+      }
+    }
+    returnObj.totalAmount = returnObj.pricing?.amount || returnObj.totalAmount;
+    returnObj.isOtpVerified = Boolean(
+      returnObj.startOtp?.isConsumed ||
+      returnObj.arrivalEvidence?.verified ||
+      ['in_progress', 'completion_pending', 'completed'].includes(returnObj.status)
+    );
+
     res.status(200).json({
       success: true,
       message: `Booking updated to ${status}`,
-      booking
+      booking: returnObj
     });
   } catch (error) {
     next(error);
@@ -991,7 +1153,7 @@ export const requestReschedule = async (req, res, next) => {
 export const getCustomerStartOtp = async (req, res, next) => {
   try {
     const booking = await Booking.findById(req.params.id)
-      .select('+startOtp.customerEncryptedOtp +startOtp.codeHash')
+      .select('+startOtp.customerEncryptedOtp +startOtp.codeHash +startOtp.otp')
       .populate('vendor', 'name email phone avatar')
       .populate('job', 'title status');
 
@@ -1216,7 +1378,7 @@ export const verifyStartOtp = async (req, res, next) => {
     }
 
     const booking = await Booking.findById(req.params.id)
-      .select('+startOtp.codeHash')
+      .select('+startOtp.codeHash +startOtp.otp')
       .populate('customer', 'name email phone')
       .populate('job');
 
@@ -1243,10 +1405,18 @@ export const verifyStartOtp = async (req, res, next) => {
     }
 
     if (booking.status === 'in_progress') {
+      const returnObj = booking.toObject();
+      if (returnObj.startOtp) {
+        delete returnObj.startOtp.otp;
+        delete returnObj.startOtp.codeHash;
+        delete returnObj.startOtp.customerEncryptedOtp;
+      }
+      returnObj.totalAmount = returnObj.pricing?.amount || returnObj.totalAmount;
+      returnObj.isOtpVerified = true;
       return res.status(200).json({
         success: true,
         message: 'Service is already in progress.',
-        booking
+        booking: returnObj
       });
     }
 
@@ -1258,9 +1428,15 @@ export const verifyStartOtp = async (req, res, next) => {
     }
 
     // Geofence Arrival Validation: Check if arrival was already verified or coordinates passed now
+    const destCoordsLat = booking.address?.coordinates?.lat || booking.job?.location?.coordinates?.lat;
+    const destCoordsLng = booking.address?.coordinates?.lng || booking.job?.location?.coordinates?.lng;
+    const hasDestinationCoords = destCoordsLat && destCoordsLng && (Number(destCoordsLat) !== 0 || Number(destCoordsLng) !== 0);
+
     const isArrivalValid =
-      booking.arrivalEvidence?.verified &&
-      (!booking.arrivalEvidence?.expiresAt || new Date() <= new Date(booking.arrivalEvidence.expiresAt));
+      booking.status === 'arrived' ||
+      !hasDestinationCoords ||
+      (booking.arrivalEvidence?.verified &&
+        (!booking.arrivalEvidence?.expiresAt || new Date() <= new Date(booking.arrivalEvidence.expiresAt)));
 
     if (!isArrivalValid) {
       if (latitude !== undefined && longitude !== undefined) {
@@ -1334,6 +1510,9 @@ export const verifyStartOtp = async (req, res, next) => {
     booking.status = 'in_progress';
     booking.startOtp.isConsumed = true;
     booking.startOtp.consumedAt = new Date();
+    if (!booking.arrivalEvidence) booking.arrivalEvidence = {};
+    booking.arrivalEvidence.verified = true;
+    booking.arrivalEvidence.verifiedAt = new Date();
     booking.statusHistory.push({
       status: 'in_progress',
       updatedBy: req.user.id,
@@ -1360,11 +1539,15 @@ export const verifyStartOtp = async (req, res, next) => {
       console.warn('Notification error on start:', notifErr.message);
     }
 
-
     // Real-time socket updates
     const io = getIO();
     if (io) {
       io.to('user_' + (booking.customer._id || booking.customer).toString()).emit('service_started', {
+        bookingId: booking._id,
+        jobId: booking.job?._id || booking.job,
+        startedAt: new Date()
+      });
+      io.to('user_' + (booking.vendor._id || booking.vendor).toString()).emit('service_started', {
         bookingId: booking._id,
         jobId: booking.job?._id || booking.job,
         startedAt: new Date()
@@ -1376,10 +1559,19 @@ export const verifyStartOtp = async (req, res, next) => {
       });
     }
 
+    const returnObj = booking.toObject();
+    if (returnObj.startOtp) {
+      delete returnObj.startOtp.otp;
+      delete returnObj.startOtp.codeHash;
+      delete returnObj.startOtp.customerEncryptedOtp;
+    }
+    returnObj.totalAmount = returnObj.pricing?.amount || returnObj.totalAmount;
+    returnObj.isOtpVerified = true;
+
     res.status(200).json({
       success: true,
       message: 'Service-Start OTP verified successfully. Work has commenced!',
-      booking
+      booking: returnObj
     });
   } catch (error) {
     next(error);

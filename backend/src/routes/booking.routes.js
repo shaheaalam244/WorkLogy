@@ -13,7 +13,7 @@ import {
   verifyStartOtp,
   regenerateStartOtp
 } from '../controllers/booking.controller.js';
-import { getCustomerBookings } from '../controllers/customer.controller.js';
+import { getCustomerBookings, cancelCustomerBooking } from '../controllers/customer.controller.js';
 import { createReview, getBookingReview } from '../controllers/review.controller.js';
 import { protect } from '../middleware/auth.middleware.js';
 import { authorize } from '../middleware/role.middleware.js';
@@ -49,6 +49,8 @@ router.post('/:id/complete-signoff', protect, authorize('vendor', 'admin'), (req
   return updateBookingStatus(req, res, next);
 });
 router.get('/:id', protect, getBookingById);
+router.patch('/:id/cancel', protect, authorize('customer', 'admin'), cancelCustomerBooking);
+router.post('/:id/cancel', protect, authorize('customer', 'admin'), cancelCustomerBooking);
 router.patch('/:id/status', protect, authorize('vendor', 'admin'), updateBookingStatus);
 router.patch('/:id/reschedule', protect, authorize('vendor', 'admin'), requestReschedule);
 

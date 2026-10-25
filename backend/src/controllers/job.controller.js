@@ -13,7 +13,9 @@ import { matchEligibleVendors, isVendorEligible } from '../services/vendorMatchi
 import { generateSecureOtp } from '../utils/otp.js';
 import { calculateDistanceMeters } from '../utils/geofence.js';
 import ServiceArea from '../models/ServiceArea.js';
-import { notifyBookingConfirmed, notifyCancellation } from '../services/notification.service.js';
+import Transaction from '../models/Transaction.js';
+import { notifyBookingConfirmed, notifyCancellation, createNotification } from '../services/notification.service.js';
+import { cancelCustomerBooking } from './customer.controller.js';
 
 export const getJobs = async (req, res, next) => {
   try {
@@ -137,11 +139,11 @@ async function computeNearbyCounts(vendorUserId, approvedCategoryIds, vendorCity
       declinedVendors: { $ne: vendorUserId },
       createdAt: { $gte: new Date(Date.now() - 48 * 60 * 60 * 1000) }
     }),
-    // Assigned to this vendor
+    // Assigned to this vendor (active assignments awaiting execution)
     Job.countDocuments({
       isDeleted: { $ne: true },
       selectedVendor: vendorUserId,
-      status: { $in: ['assigned', 'in_progress', 'completion_pending', 'completed'] }
+      status: 'assigned'
     }),
     // Cancelled jobs relevant to vendor
     Job.countDocuments({
@@ -241,9 +243,25 @@ export const getNearbyJobs = async (req, res, next) => {
     const coverageLocalities = [];
     const validAreaCoords = [];
 
+    // Service Area Coverage (OSM Dynamic Geo-Radius)
+    if (profile.serviceAreaCoverage?.coordinates?.lat && profile.serviceAreaCoverage?.coordinates?.lng) {
+      validAreaCoords.push({
+        lat: Number(profile.serviceAreaCoverage.coordinates.lat),
+        lng: Number(profile.serviceAreaCoverage.coordinates.lng),
+        radiusKm: profile.serviceAreaCoverage.radiusKm || 15
+      });
+    } else if (profile.coordinates?.lat && profile.coordinates?.lng) {
+      validAreaCoords.push({
+        lat: Number(profile.coordinates.lat),
+        lng: Number(profile.coordinates.lng),
+        radiusKm: profile.vendorServiceRadiusKm || 15
+      });
+    }
+
     if (Array.isArray(profile.serviceAreas)) {
       profile.serviceAreas.forEach(sa => {
-        if (sa && sa.name) coverageLocalities.push(sa.name.trim());
+        if (typeof sa === 'string' && sa.trim()) coverageLocalities.push(sa.trim());
+        else if (sa && sa.name) coverageLocalities.push(sa.name.trim());
         if (sa && sa.coordinates && (Number(sa.coordinates.lat) !== 0 || Number(sa.coordinates.lng) !== 0)) {
           validAreaCoords.push({
             lat: Number(sa.coordinates.lat),
@@ -320,29 +338,40 @@ export const getNearbyJobs = async (req, res, next) => {
     // 8. Build Base Query according to Tab
     let query = { isDeleted: { $ne: true } };
 
-    // Standard city check: job must be in vendor's city
-    if (vendorCity) {
-      query['location.city'] = { $regex: new RegExp('^' + vendorCity + '$', 'i') };
-    }
-
-    // Non-city-wide locality filtering:
-    if (!hasCityWide && uniqueLocalities.length > 0) {
-      const locRegexes = uniqueLocalities.map(loc => new RegExp(loc, 'i'));
-      query['location.locality'] = { $in: locRegexes };
-    }
-
-    // Category restriction: must be within vendor's approved categories!
-    query.category = { $in: approvedCategoryIds };
-
-    if (tab === 'assigned') {
+    if (tab === 'assigned' || tab === 'accepted') {
       // Jobs assigned to this vendor
+      query.selectedVendor = vendorUserId;
+      query.status = 'assigned';
+    } else if (tab === 'all_assigned') {
+      // All active assigned, in_progress, and completed jobs
       query.selectedVendor = vendorUserId;
       query.status = { $in: ['assigned', 'in_progress', 'completion_pending', 'completed'] };
     } else if (tab === 'cancelled') {
       // Historical view of cancelled jobs matching vendor
       query.status = 'cancelled';
+      query.$or = [
+        { selectedVendor: vendorUserId },
+        {
+          category: { $in: approvedCategoryIds },
+          ...(vendorCity ? { 'location.city': { $regex: new RegExp('^' + vendorCity + '$', 'i') } } : {})
+        }
+      ];
     } else {
       // Active opportunities ('all', 'new', 'open')
+      // Standard city check: job must be in vendor's city
+      if (vendorCity) {
+        query['location.city'] = { $regex: new RegExp('^' + vendorCity + '$', 'i') };
+      }
+
+      // Non-city-wide locality filtering:
+      if (!hasCityWide && uniqueLocalities.length > 0) {
+        const locRegexes = uniqueLocalities.map(loc => new RegExp(loc, 'i'));
+        query['location.locality'] = { $in: locRegexes };
+      }
+
+      // Category restriction: must be within vendor's approved categories!
+      query.category = { $in: approvedCategoryIds };
+
       query.status = { $in: ['open', 'dispatching'] };
       query.selectedVendor = null;
       query.declinedVendors = { $ne: vendorUserId };
@@ -464,6 +493,25 @@ export const getNearbyJobs = async (req, res, next) => {
       jobObj.distanceKm = distanceKm;
       jobObj.distanceFormatted = distanceFormatted;
 
+      // Filter out opportunities that strictly fall outside vendor's configured service territory
+      if (!isAssignedToThisVendor && profile.serviceAreaCoverage?.coordinates?.lat) {
+        const vendorRadiusKm = profile.serviceAreaCoverage.radiusKm || profile.vendorServiceRadiusKm || 15;
+        if (distanceKm != null && distanceKm > vendorRadiusKm) {
+          return null;
+        }
+        const excluded = Array.isArray(profile.serviceAreaCoverage.excludedLocalityIds)
+          ? profile.serviceAreaCoverage.excludedLocalityIds
+          : [];
+        if (excluded.length > 0 && jobObj.location?.locality) {
+          const locLower = jobObj.location.locality.toLowerCase().trim();
+          const isLocExcluded = excluded.some(ex => {
+            const exLower = ex.toLowerCase();
+            return locLower.includes(exLower) || exLower.includes(locLower);
+          });
+          if (isLocExcluded) return null;
+        }
+      }
+
       // Privacy Masking:
       if (!isAssignedToThisVendor) {
         if (jobObj.location) {
@@ -494,7 +542,7 @@ export const getNearbyJobs = async (req, res, next) => {
       }
 
       return jobObj;
-    });
+    }).filter(Boolean);
 
     // If sorting by distance:
     if (sortBy === 'distance') {
@@ -828,19 +876,30 @@ export const createJob = async (req, res, next) => {
       }
 
       const isEmergency = job.urgency === 'emergency';
+      const categoryName = job.category?.name || 'Service';
+      const locality = job.location?.locality || job.location?.city || 'your area';
+      const notifTitle = isEmergency
+        ? `🚨 Emergency Job Available: ${job.title}`
+        : `New job near you`;
+      const notifMessage = isEmergency
+        ? `Emergency request in ${locality}. First contractor to accept wins!`
+        : `New ${categoryName} request in ${locality}`;
+
       for (const vendor of eligibleVendors) {
         try {
-          await Notification.create({
-            recipient: vendor.userId,
-            sender: req.user.id,
-            title: isEmergency
-              ? `🚨 Emergency Job Available: ${job.title}`
-              : `⚡ Instant Job Available: ${job.title}`,
-            message: isEmergency
-              ? `Emergency request in ${job.location?.locality || job.location?.city}. First contractor to accept wins!`
-              : `New ${job.urgency} urgency request in ${job.location?.locality || job.location?.city}. First contractor to confirm price wins!`,
+          await createNotification({
+            recipientId: vendor.userId,
+            senderId: req.user.id,
+            title: notifTitle,
+            message: notifMessage,
             type: 'job_alert',
-            link: `/vendor/jobs/${job._id}`
+            link: `/vendor/jobs/${job._id}`,
+            relatedResource: {
+              resourceType: 'job',
+              resourceId: job._id
+            },
+            sendEmailNotification: false,
+            sendPush: true
           });
 
           if (io) {
@@ -922,7 +981,12 @@ export const uploadJobImage = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Please select an image to upload' });
     }
 
-    const result = await uploadToCloudinary(req.file.buffer, 'worklogy/jobs');
+    const ext = req.file.originalname ? req.file.originalname.split('.').pop() : 'jpg';
+    const result = await uploadToCloudinary(req.file.buffer, 'worklogy/jobs', {
+      extension: ext,
+      reqHost: req.get('host'),
+      reqProtocol: req.protocol
+    });
     res.status(200).json({
       success: true,
       url: result.secure_url,
@@ -1539,16 +1603,88 @@ export const declineJob = async (req, res, next) => {
  */
 export const cancelJob = async (req, res, next) => {
   try {
-    const currentUserId = req.user._id ? req.user._id.toString() : req.user.id.toString();
+    const currentUserId = (req.user._id || req.user.id).toString();
     const isAdmin = req.user.role === 'admin';
+    const rawId = (req.params.id || req.body.jobId || req.body.bookingId || req.body.id || '').trim();
+
+    if (!rawId) {
+      return res.status(400).json({ success: false, message: 'Job or booking identifier is required for cancellation.' });
+    }
 
     const cancelReason = req.body.reason || 'Cancelled by customer';
     const comments = req.body.comments ? ` - ${req.body.comments}` : '';
     const fullReason = `${cancelReason}${comments}`;
 
+    const isHex24 = mongoose.Types.ObjectId.isValid(rawId) && /^[0-9a-fA-F]{24}$/.test(rawId);
+
+    // 1. Check if the provided identifier is actually a Booking (by _id, bookingReference, or linked job)
+    let linkedBooking = null;
+    if (isHex24) {
+      linkedBooking = await Booking.findById(rawId);
+      if (!linkedBooking) {
+        linkedBooking = await Booking.findOne({ job: rawId });
+      }
+    }
+    if (!linkedBooking) {
+      linkedBooking = await Booking.findOne({ bookingReference: rawId.toUpperCase() });
+    }
+
+    // If an authoritative Booking document is matched, delegate to cancelCustomerBooking
+    if (linkedBooking) {
+      req.params.id = linkedBooking._id.toString();
+      return cancelCustomerBooking(req, res, next);
+    }
+
+    // 2. Resolve Job (by _id or REQ- suffix)
+    let targetJobId = null;
+    if (isHex24) {
+      const j = await Job.findById(rawId);
+      if (j) targetJobId = j._id;
+    }
+
+    if (!targetJobId && rawId.toUpperCase().startsWith('REQ-')) {
+      const suffix = rawId.slice(4);
+      const j = await Job.findOne({
+        customer: currentUserId,
+        _id: { $regex: new RegExp(suffix + '$', 'i') }
+      });
+      if (j) targetJobId = j._id;
+    }
+
+    if (!targetJobId) {
+      return res.status(404).json({ success: false, message: 'Job or booking not found' });
+    }
+
+    // Check authorization on Job
+    const existingJob = await Job.findById(targetJobId);
+    if (!existingJob) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    if (existingJob.customer?.toString() !== currentUserId && !isAdmin) {
+      return res.status(403).json({ success: false, message: 'Not authorized to cancel this request' });
+    }
+
+    // Idempotent handling: If already cancelled
+    if (existingJob.status === 'cancelled') {
+      return res.status(200).json({
+        success: true,
+        message: 'Job is already cancelled',
+        job: existingJob
+      });
+    }
+
+    // Prevent cancellation of completed requests
+    if (existingJob.status === 'completed') {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot cancel request. It is already completed.'
+      });
+    }
+
     // Atomic conditional transition: only cancel if current status permits and user is authorized
     const updateQuery = {
-      _id: req.params.id,
+      _id: targetJobId,
       status: { $nin: ['completed', 'cancelled'] },
       isDeleted: { $ne: true }
     };
@@ -1577,16 +1713,10 @@ export const cancelJob = async (req, res, next) => {
     );
 
     if (!updatedJob) {
-      const existingJob = await Job.findById(req.params.id);
-      if (!existingJob) {
-        return res.status(404).json({ success: false, message: 'Job not found' });
-      }
-      if (existingJob.customer?.toString() !== currentUserId && !isAdmin) {
-        return res.status(403).json({ success: false, message: 'Not authorized to cancel this request' });
-      }
+      const refetched = await Job.findById(targetJobId);
       return res.status(400).json({
         success: false,
-        message: `Cannot cancel request. It is already ${existingJob.status}.`
+        message: `Cannot cancel request. It is already ${refetched?.status || 'processed'}.`
       });
     }
 
@@ -1596,6 +1726,10 @@ export const cancelJob = async (req, res, next) => {
         status: 'cancelled',
         declineReason: fullReason
       });
+      await Transaction.updateMany(
+        { booking: updatedJob.booking },
+        { $set: { paymentStatus: 'refunded', settlementStatus: 'settled' } }
+      );
     }
 
     // Invalidate and reject all pending vendor applications/proposals
@@ -1614,6 +1748,7 @@ export const cancelJob = async (req, res, next) => {
     if (io) {
       const cancelPayload = {
         jobId: updatedJob._id.toString(),
+        bookingId: updatedJob.booking ? updatedJob.booking.toString() : null,
         title: updatedJob.title,
         status: 'cancelled',
         reason: fullReason,
@@ -1624,6 +1759,10 @@ export const cancelJob = async (req, res, next) => {
       io.emit('job_cancelled', cancelPayload);
       io.emit('job_taken', { jobId: updatedJob._id.toString(), title: updatedJob.title, reason: 'cancelled' });
       io.emit('job_status_updated', { jobId: updatedJob._id.toString(), status: 'cancelled' });
+      if (updatedJob.booking) {
+        io.emit('booking_cancelled', cancelPayload);
+        io.emit('booking_status_updated', { bookingId: updatedJob.booking.toString(), status: 'cancelled' });
+      }
 
       // 2. Specific room emissions
       io.to('job_' + updatedJob._id.toString()).emit('job_cancelled', cancelPayload);
@@ -1660,7 +1799,6 @@ export const cancelJob = async (req, res, next) => {
     } catch (notifErr) {
       console.warn('Cancellation notification error:', notifErr.message);
     }
-
 
     res.status(200).json({ success: true, message: 'Request cancelled successfully', job: populatedJob });
   } catch (error) {

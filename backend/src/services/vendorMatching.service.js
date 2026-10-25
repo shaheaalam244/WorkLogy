@@ -1,8 +1,33 @@
 import mongoose from 'mongoose';
+import fs from 'fs';
 import VendorProfile from '../models/VendorProfile.js';
 import ServiceListing from '../models/ServiceListing.js';
 import Booking from '../models/Booking.js';
 import User from '../models/User.js';
+import { calculateHaversineDistanceKm } from './vendorDiscovery.service.js';
+
+let localityLookup = null;
+function getLocalityLookup() {
+  if (!localityLookup) {
+    try {
+      const filePath = new URL('../../data/localities.json', import.meta.url);
+      const raw = fs.readFileSync(filePath, 'utf-8');
+      const list = JSON.parse(raw);
+      const idToName = new Map();
+      const nameToId = new Map();
+      list.forEach(l => {
+        idToName.set(l.localityId.toLowerCase(), l.name.toLowerCase());
+        nameToId.set(l.name.toLowerCase(), l.localityId.toLowerCase());
+      });
+      localityLookup = { idToName, nameToId };
+    } catch (e) {
+      localityLookup = { idToName: new Map(), nameToId: new Map() };
+    }
+  }
+  return localityLookup;
+}
+
+
 
 /**
  * Check if current time falls within vendor's emergency working hours
@@ -96,7 +121,7 @@ export const vendorHasMatchingService = (profile, categoryId, categoryName = '',
 /**
  * Check locality & service area matching
  */
-export const vendorServesArea = (profile, jobLocality = '', jobCity = 'Lucknow') => {
+export const vendorServesArea = (profile, jobLocality = '', jobCity = 'Lucknow', jobCoordinates = null) => {
   if (!profile) return true;
 
   const localityLower = (jobLocality || '').toLowerCase().trim();
@@ -108,21 +133,53 @@ export const vendorServesArea = (profile, jobLocality = '', jobCity = 'Lucknow')
     return false;
   }
 
-  // Check emergency & skill service areas if configured
+  // 1. Check dynamic OSM serviceAreaCoverage if configured
+  const coverage = profile.serviceAreaCoverage;
+  if (coverage && coverage.coordinates?.lat && coverage.coordinates?.lng) {
+    const baseLat = coverage.coordinates.lat;
+    const baseLng = coverage.coordinates.lng;
+    const radiusKm = coverage.radiusKm || profile.vendorServiceRadiusKm || 15;
+    const excluded = Array.isArray(coverage.excludedLocalityIds) ? coverage.excludedLocalityIds : [];
+
+    // If job has GPS coordinates, verify straight-line distance is within vendor's radius
+    if (jobCoordinates && typeof jobCoordinates.lat === 'number' && typeof jobCoordinates.lng === 'number') {
+      const dist = calculateHaversineDistanceKm(baseLat, baseLng, jobCoordinates.lat, jobCoordinates.lng);
+      if (dist != null && dist > radiusKm) {
+        return false;
+      }
+    }
+    // Check explicit locality exclusion
+    if (localityLower && excluded.length > 0) {
+      const lookup = getLocalityLookup();
+      const isExcluded = excluded.some(ex => {
+        const exLower = ex.toLowerCase();
+        if (localityLower.includes(exLower) || exLower.includes(localityLower)) return true;
+        const canonicalName = lookup.idToName.get(exLower);
+        if (canonicalName && (localityLower.includes(canonicalName) || canonicalName.includes(localityLower))) return true;
+        const locId = lookup.nameToId.get(localityLower);
+        if (locId && locId === exLower) return true;
+        return false;
+      });
+      if (isExcluded) return false;
+    }
+  }
+
+  // 2. Check emergency & skill service areas if configured
   const emergencyAreas = profile.emergencyAvailability?.serviceAreas || [];
   const skillAreas = (profile.services || []).map(s => s.serviceArea).filter(Boolean);
-  const areas = [...emergencyAreas, ...skillAreas];
+  const legacyAreas = profile.serviceAreas || [];
+  const areas = [...emergencyAreas, ...skillAreas, ...legacyAreas];
 
   if (Array.isArray(areas) && areas.length > 0) {
     const hasAll = areas.some(a => {
-      const al = a.toLowerCase();
+      const al = (typeof a === 'string' ? a : a.name || '').toLowerCase();
       return al.includes('all') || al.includes('entire') || al === 'lucknow';
     });
     if (hasAll) return true;
 
     if (localityLower) {
       return areas.some(a => {
-        const al = a.toLowerCase();
+        const al = (typeof a === 'string' ? a : a.name || '').toLowerCase();
         return al.includes(localityLower) || localityLower.includes(al);
       });
     }
@@ -142,6 +199,11 @@ export const matchEligibleVendors = async (job) => {
   const jobTitle = job.title || '';
   const jobCity = (job.location?.city || 'Lucknow').trim();
   const jobLocality = (job.location?.locality || '').trim();
+  const jobLat = job.location?.coordinates?.lat != null ? Number(job.location.coordinates.lat) : null;
+  const jobLng = job.location?.coordinates?.lng != null ? Number(job.location.coordinates.lng) : null;
+  const jobCoords = jobLat != null && jobLng != null && !isNaN(jobLat) && !isNaN(jobLng) && (jobLat !== 0 || jobLng !== 0)
+    ? { lat: jobLat, lng: jobLng }
+    : null;
   const isEmergency = job.urgency === 'emergency';
   const customerId = (job.customer?._id || job.customer)?.toString();
 
@@ -177,7 +239,7 @@ export const matchEligibleVendors = async (job) => {
       }
 
       // 3. Service area / locality matching
-      if (!vendorServesArea(prof, jobLocality, jobCity)) {
+      if (!vendorServesArea(prof, jobLocality, jobCity, jobCoords)) {
         continue;
       }
 
@@ -190,6 +252,15 @@ export const matchEligibleVendors = async (job) => {
         continue;
       }
 
+      let distKm = null;
+      if (jobCoords) {
+        const vLat = prof.serviceAreaCoverage?.coordinates?.lat ?? prof.coordinates?.lat;
+        const vLng = prof.serviceAreaCoverage?.coordinates?.lng ?? prof.coordinates?.lng;
+        if (vLat != null && vLng != null) {
+          distKm = calculateHaversineDistanceKm(vLat, vLng, jobCoords.lat, jobCoords.lng);
+        }
+      }
+
       eligibleEmergencyVendors.push({
         userId: prof.user._id,
         user: prof.user,
@@ -198,9 +269,18 @@ export const matchEligibleVendors = async (job) => {
         hourlyRate: prof.emergencyAvailability?.callOutFee || prof.hourlyRate || 500,
         callOutFee: prof.emergencyAvailability?.callOutFee || 499,
         verified: prof.verifiedBadge?.status === 'verified',
-        isEmergencyResponder: true
+        isEmergencyResponder: true,
+        distanceKm: distKm
       });
     }
+
+    eligibleEmergencyVendors.sort((a, b) => {
+      if (a.distanceKm != null && b.distanceKm != null) {
+        if (a.distanceKm !== b.distanceKm) return a.distanceKm - b.distanceKm;
+      } else if (a.distanceKm != null) return -1;
+      else if (b.distanceKm != null) return 1;
+      return (b.rating || 0) - (a.rating || 0);
+    });
 
     return eligibleEmergencyVendors;
   }
@@ -238,11 +318,20 @@ export const matchEligibleVendors = async (job) => {
     if (!prof.user || prof.user.status === 'suspended') continue;
     const uid = prof.user._id.toString();
     if (uid === customerId) continue;
-    if (!vendorServesArea(prof, jobLocality, jobCity)) continue;
+    if (!vendorServesArea(prof, jobLocality, jobCity, jobCoords)) continue;
 
     // Verify skill/category match
     const hasSkill = vendorHasMatchingService(prof, categoryId, categoryName, jobTitle);
     if (!hasSkill && prof.categories?.length > 0) continue;
+
+    let distKm = null;
+    if (jobCoords) {
+      const vLat = prof.serviceAreaCoverage?.coordinates?.lat ?? prof.coordinates?.lat;
+      const vLng = prof.serviceAreaCoverage?.coordinates?.lng ?? prof.coordinates?.lng;
+      if (vLat != null && vLng != null) {
+        distKm = calculateHaversineDistanceKm(vLat, vLng, jobCoords.lat, jobCoords.lng);
+      }
+    }
 
     vendorMap.set(uid, {
       userId: prof.user._id,
@@ -251,7 +340,8 @@ export const matchEligibleVendors = async (job) => {
       rating: prof.rating || 5.0,
       hourlyRate: prof.hourlyRate || 500,
       verified: prof.verifiedBadge?.status === 'verified',
-      categories: prof.categories || []
+      categories: prof.categories || [],
+      distanceKm: distKm
     });
   }
 
@@ -268,7 +358,8 @@ export const matchEligibleVendors = async (job) => {
         rating: list.rating || 5.0,
         hourlyRate: list.pricing?.amount || 500,
         verified: true,
-        categories: []
+        categories: [],
+        distanceKm: null
       });
     }
   }
@@ -286,6 +377,14 @@ export const matchEligibleVendors = async (job) => {
       eligibleVendors.push(cand);
     }
   }
+
+  eligibleVendors.sort((a, b) => {
+    if (a.distanceKm != null && b.distanceKm != null) {
+      if (a.distanceKm !== b.distanceKm) return a.distanceKm - b.distanceKm;
+    } else if (a.distanceKm != null) return -1;
+    else if (b.distanceKm != null) return 1;
+    return (b.rating || 0) - (a.rating || 0);
+  });
 
   return eligibleVendors;
 };

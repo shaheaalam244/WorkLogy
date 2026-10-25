@@ -123,7 +123,7 @@ const BookingSchema = new mongoose.Schema(
       index: true
     },
     startOtp: {
-      otp: { type: String },
+      otp: { type: String, select: false },
       codeHash: { type: String, select: false },
       customerEncryptedOtp: { type: String, select: false },
       expiresAt: { type: Date },
@@ -170,7 +170,23 @@ const BookingSchema = new mongoose.Schema(
       ref: 'Review'
     }
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
+  }
 );
+
+BookingSchema.virtual('totalAmount').get(function () {
+  return this.pricing?.amount;
+});
+
+BookingSchema.virtual('isOtpVerified').get(function () {
+  return Boolean(
+    this.startOtp?.isConsumed ||
+    this.arrivalEvidence?.verified ||
+    ['in_progress', 'completion_pending', 'completed'].includes(this.status)
+  );
+});
 
 export default mongoose.models.Booking || mongoose.model('Booking', BookingSchema);
