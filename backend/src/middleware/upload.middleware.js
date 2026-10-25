@@ -15,3 +15,13 @@ export const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB max
   fileFilter
 });
+
+export const uploadSingleImage = (req, res, next) => {
+  upload.fields([{ name: 'image', maxCount: 1 }, { name: 'file', maxCount: 1 }])(req, res, (err) => {
+    if (err) return next(err);
+    if (req.files) {
+      req.file = req.files.image?.[0] || req.files.file?.[0];
+    }
+    next();
+  });
+};

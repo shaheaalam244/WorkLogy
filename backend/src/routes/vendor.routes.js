@@ -18,10 +18,14 @@ import {
   getServiceListingById,
   updateServiceListing,
   updateServiceListingStatus,
-  deleteServiceListing
+  deleteServiceListing,
+  getVendorServiceArea,
+  updateVendorServiceArea,
+  uploadVendorImage
 } from '../controllers/vendor.controller.js';
 import { protect } from '../middleware/auth.middleware.js';
 import { authorize } from '../middleware/role.middleware.js';
+import { uploadSingleImage } from '../middleware/upload.middleware.js';
 
 const router = express.Router();
 
@@ -36,6 +40,14 @@ router.patch('/profile', protect, authorize('vendor', 'admin'), updateVendorProf
 router.put('/profile', protect, authorize('vendor', 'admin'), updateVendorProfile);
 router.get('/profile/me', protect, authorize('vendor', 'admin'), getVendorProfile);
 router.put('/profile/me', protect, authorize('vendor', 'admin'), updateVendorProfile);
+
+// Image Upload
+router.post('/upload-image', protect, authorize('vendor', 'admin'), uploadSingleImage, uploadVendorImage);
+
+// Service area coverage routes
+router.get('/service-area', protect, authorize('vendor', 'admin'), getVendorServiceArea);
+router.put('/service-area', protect, authorize('vendor', 'admin'), updateVendorServiceArea);
+
 router.post('/verification', protect, authorize('vendor', 'admin'), submitVerificationDocs);
 router.get('/verification/status', protect, authorize('vendor', 'admin'), getVerificationStatus);
 router.get('/dashboard-stats', protect, authorize('vendor', 'admin'), getVendorDashboardStats);
@@ -61,3 +73,4 @@ router.get('/calendar', protect, authorize('vendor', 'admin'), getVendorCalendar
 router.get('/:id', getVendorById);
 
 export default router;
+

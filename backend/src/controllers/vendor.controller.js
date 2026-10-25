@@ -9,41 +9,60 @@ import Job from '../models/Job.js';
 import Application from '../models/Application.js';
 import Review from '../models/Review.js';
 import Notification from '../models/Notification.js';
+import ServiceArea from '../models/ServiceArea.js';
+import Zone from '../models/Zone.js';
+import Locality from '../models/Locality.js';
+import { sanitizePublicVendor } from '../utils/sanitizeVendor.js';
+import { discoverNearbyVendors, calculateHaversineDistanceKm } from '../services/vendorDiscovery.service.js';
+import { uploadToCloudinary } from '../config/cloudinary.js';
 
-/**
- * Strips private identity documents, internal notes, and administrative fields for public APIs.
- */
-export const sanitizePublicVendor = (vendorDoc) => {
-  if (!vendorDoc) return null;
-  const v = vendorDoc.toObject ? vendorDoc.toObject() : { ...vendorDoc };
-
-  // Only expose public-safe verification status and timestamp
-  const rawStatus = v.verifiedBadge?.status || 'not_submitted';
-  const isVerified = rawStatus === 'verified' || rawStatus === 'approved';
-  v.verifiedBadge = {
-    status: isVerified ? 'verified' : (rawStatus === 'unsubmitted' ? 'not_submitted' : rawStatus),
-    verifiedAt: v.verifiedBadge?.verifiedAt || null
-  };
-
-  // Strictly remove all sensitive identity documents, internal notes & audit trails
-  delete v.adminNotes;
-  delete v.approvalHistory;
-  delete v.rejectionReason;
-  delete v.rejectionHistory;
-  delete v.earningsTotal;
-
-  // Sensitive contact fields masking
-  if (v.user && typeof v.user === 'object') {
-    delete v.user.password;
-    delete v.user.suspensionReason;
-  }
-
-  return v;
-};
+export { sanitizePublicVendor };
 
 export const getVendors = async (req, res, next) => {
   try {
-    const { category, search, city, minRating, verifiedOnly, sortBy, page = 1, limit = 24 } = req.query;
+    const {
+      category,
+      search,
+      city,
+      minRating,
+      verifiedOnly,
+      sortBy,
+      page = 1,
+      limit = 24,
+      lat,
+      lng,
+      latitude,
+      longitude,
+      locality,
+      zoneId,
+      nearby,
+      mode,
+      radiusKm
+    } = req.query;
+
+    // If client passes location parameters or requests distance-based discovery, invoke Smart Discovery
+    const hasCoordinates = (latitude != null || lat != null) && (longitude != null || lng != null);
+    const hasLocality = Boolean(locality && locality.trim());
+    const isNearbyRequested = nearby === 'true' || sortBy === 'distance' || Boolean(zoneId);
+
+    if (hasCoordinates || hasLocality || isNearbyRequested) {
+      const discoveryResult = await discoverNearbyVendors({
+        latitude: latitude ?? lat,
+        longitude: longitude ?? lng,
+        locality: locality || (city && city !== 'all' ? city : undefined),
+        zoneId,
+        category,
+        search,
+        verifiedOnly,
+        sortBy,
+        radiusKm,
+        page,
+        limit,
+        mode: mode || (hasCoordinates ? 'gps' : 'locality')
+      });
+      return res.status(200).json(discoveryResult);
+    }
+
     // Only show approved professionals in public searches
     let query = {
       approvalStatus: 'approved'
@@ -56,7 +75,36 @@ export const getVendors = async (req, res, next) => {
     if (city && city.trim() && city.trim() !== 'all') {
       const parts = city.trim().split(',').map(p => p.trim()).filter(Boolean);
       const regexPattern = parts.length > 1 ? parts.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') : city.trim();
-      query.city = { $regex: regexPattern, $options: 'i' };
+      
+      let areaIds = [];
+      try {
+        const matchedAreas = await ServiceArea.find({
+          $or: [
+            { name: { $regex: regexPattern, $options: 'i' } },
+            { city: { $regex: regexPattern, $options: 'i' } }
+          ]
+        }).select('_id');
+        areaIds = matchedAreas.map(a => a._id);
+      } catch (err) {
+        console.warn('ServiceArea lookup warning:', err.message);
+      }
+
+      const cityCondition = [
+        { city: { $regex: regexPattern, $options: 'i' } },
+        { 'emergencyAvailability.serviceAreas': { $regex: regexPattern, $options: 'i' } },
+        { 'services.serviceArea': { $regex: regexPattern, $options: 'i' } }
+      ];
+
+      if (areaIds.length > 0) {
+        cityCondition.push({ serviceAreas: { $in: areaIds } });
+      }
+
+      if (query.$or) {
+        query.$and = [{ $or: query.$or }, { $or: cityCondition }];
+        delete query.$or;
+      } else {
+        query.$or = cityCondition;
+      }
     }
 
     if (category && category !== 'all') {
@@ -137,14 +185,37 @@ export const getVendors = async (req, res, next) => {
       VendorProfile.countDocuments(query)
     ]);
 
-    const sanitizedVendors = vendors.map(v => sanitizePublicVendor(v));
+    let finalVendors = vendors;
+    let finalTotal = total;
+
+    // Fallback: If no vendors found in this specific locality, fallback to all approved vendors
+    if (finalVendors.length === 0 && city) {
+      const fallbackQuery = { approvalStatus: 'approved' };
+      const [fallbackList, fallbackCount] = await Promise.all([
+        VendorProfile.find(fallbackQuery)
+          .populate('user', 'name email avatar phone')
+          .populate('categories', 'name slug icon')
+          .populate('serviceAreas', 'name city state')
+          .populate('emergencyAvailability.categories', 'name slug icon')
+          .sort(sortOptions)
+          .skip(skip)
+          .limit(limitNum),
+        VendorProfile.countDocuments(fallbackQuery)
+      ]);
+      if (fallbackList.length > 0) {
+        finalVendors = fallbackList;
+        finalTotal = fallbackCount;
+      }
+    }
+
+    const sanitizedVendors = finalVendors.map(v => sanitizePublicVendor(v));
 
     res.status(200).json({
       success: true,
       count: sanitizedVendors.length,
-      total,
+      total: finalTotal,
       page: pageNum,
-      totalPages: Math.ceil(total / limitNum) || 1,
+      totalPages: Math.ceil(finalTotal / limitNum) || 1,
       vendors: sanitizedVendors
     });
   } catch (error) {
@@ -200,8 +271,9 @@ export const getVendorById = async (req, res, next) => {
     const limit = Math.max(1, Math.min(50, parseInt(req.query.limit) || 10));
     const skip = (page - 1) * limit;
 
+    const vendorUserId = vendor.user?._id || vendor.user;
     const publicReviewFilter = {
-      vendor: { $in: [vendor.user._id, vendor._id] },
+      vendor: { $in: [vendorUserId, vendor._id].filter(Boolean) },
       moderationStatus: 'approved',
       isPublic: true
     };
@@ -288,6 +360,7 @@ export const getVendorById = async (req, res, next) => {
 export const getVendorProfile = async (req, res, next) => {
   try {
     let vendor = await VendorProfile.findOne({ user: req.user.id })
+      .populate('user', 'name email avatar phone')
       .populate('categories')
       .populate('serviceAreas')
       .populate('emergencyAvailability.categories')
@@ -300,6 +373,7 @@ export const getVendorProfile = async (req, res, next) => {
         city: 'Lucknow'
       });
       vendor = await VendorProfile.findById(vendor._id)
+        .populate('user', 'name email avatar phone')
         .populate('categories')
         .populate('serviceAreas')
         .populate('emergencyAvailability.categories')
@@ -308,6 +382,9 @@ export const getVendorProfile = async (req, res, next) => {
 
     const vendorObj = vendor.toObject ? vendor.toObject() : { ...vendor };
     vendorObj.isAvailable = vendor.availability?.isAvailableNow ?? true;
+    if (!vendorObj.avatar && vendor.user && typeof vendor.user === 'object' && vendor.user.avatar) {
+      vendorObj.avatar = vendor.user.avatar;
+    }
 
     res.status(200).json({ success: true, vendor: vendorObj });
   } catch (error) {
@@ -319,6 +396,8 @@ export const updateVendorProfile = async (req, res, next) => {
   try {
     // Strip restricted administrative & reputation fields so vendors cannot approve themselves
     const updates = { ...req.body };
+    const avatarUrl = updates.avatar;
+
     const protectedFields = [
       'approvalStatus',
       'approvalHistory',
@@ -335,11 +414,30 @@ export const updateVendorProfile = async (req, res, next) => {
     ];
     protectedFields.forEach(field => delete updates[field]);
 
+    // If avatar, name or phone was updated, persist directly to User record
+    const userUpdates = {};
+    if (avatarUrl && typeof avatarUrl === 'string' && avatarUrl.trim()) {
+      userUpdates.avatar = avatarUrl.trim();
+    }
+    if (updates.name && typeof updates.name === 'string' && updates.name.trim()) {
+      userUpdates.name = updates.name.trim();
+    }
+    if (updates.fullName && typeof updates.fullName === 'string' && updates.fullName.trim()) {
+      userUpdates.name = updates.fullName.trim();
+    }
+    if (updates.phone && typeof updates.phone === 'string' && updates.phone.trim()) {
+      userUpdates.phone = updates.phone.trim();
+    }
+    if (Object.keys(userUpdates).length > 0) {
+      await mongoose.model('User').findByIdAndUpdate(req.user.id, userUpdates);
+    }
+
     let vendor = await VendorProfile.findOneAndUpdate(
       { user: req.user.id },
       { $set: updates },
       { new: true, runValidators: true, upsert: true }
     )
+      .populate('user', 'name email avatar phone')
       .populate('categories')
       .populate('serviceAreas')
       .populate('emergencyAvailability.categories')
@@ -415,17 +513,50 @@ export const submitVerificationDocs = async (req, res, next) => {
       });
     }
 
+    // Normalize verificationType to schema enum
+    const typeMapping = {
+      'aadhaar card': 'aadhaar_card',
+      'aadhaar': 'aadhaar_card',
+      'aadhaar_card': 'aadhaar_card',
+      'aadhaar_masked': 'aadhaar_masked',
+      'pan card': 'pan_card',
+      'pan': 'pan_card',
+      'pan_card': 'pan_card',
+      'voter id': 'voter_id',
+      'voter': 'voter_id',
+      'voter_id': 'voter_id',
+      'trade license': 'trade_license',
+      'trade_license': 'trade_license',
+      'government_id': 'government_id',
+      'business_registration': 'business_registration',
+      'identity_and_trade': 'identity_and_trade'
+    };
+    const normalizedType = typeMapping[String(verificationType || '').toLowerCase().trim()] || 'aadhaar_card';
+
+    // Maintain existing verified/submitted documents and append new ones without duplicates
+    const existingDocs = vendor.verifiedBadge?.documents || [];
+    const existingUrls = new Set(existingDocs.map((d) => d.url));
+    const newDocs = documents
+      .filter((d) => !existingUrls.has(d.url))
+      .map((d) => ({
+        name: d.name,
+        docType: d.docType || d.type || 'identity',
+        url: d.url,
+        uploadedAt: new Date()
+      }));
+    const mergedDocs = [...existingDocs, ...newDocs];
+
     vendor.verifiedBadge = {
       status: 'pending_review',
       verificationRequestId,
-      verificationType: verificationType || 'aadhaar_masked',
+      verificationType: normalizedType,
       maskedIdNumber,
       consentProvided: true,
       consentedAt: new Date(),
       submittedAt: new Date(),
-      documents: documents.map(d => ({
+      documents: mergedDocs.length > 0 ? mergedDocs : documents.map((d) => ({
         name: d.name,
-        docType: d.docType || 'identity',
+        docType: d.docType || d.type || 'identity',
         url: d.url,
         uploadedAt: new Date()
       })),
@@ -1022,12 +1153,30 @@ export const updateVendorAvailability = async (req, res, next) => {
       if (req.body.hours.end) vendor.availability.hours.end = req.body.hours.end;
     }
 
+    // Emergency availability
+    if (typeof req.body.emergencyAvailable === 'boolean') {
+      if (!vendor.emergencyAvailability) vendor.emergencyAvailability = {};
+      vendor.emergencyAvailability.isAvailable = req.body.emergencyAvailable;
+      vendor.markModified('emergencyAvailability');
+    }
+
+    // Maximum daily jobs
+    if (typeof req.body.maxDailyJobs === 'number' || typeof req.body.maxDailyJobs === 'string') {
+      const parsed = parseInt(req.body.maxDailyJobs, 10);
+      if (!isNaN(parsed) && parsed > 0) {
+        if (!vendor.emergencyAvailability) vendor.emergencyAvailability = {};
+        vendor.emergencyAvailability.maxDailyJobs = parsed;
+        vendor.markModified('emergencyAvailability');
+      }
+    }
+
     vendor.markModified('availability');
     await vendor.save();
 
     res.status(200).json({
       success: true,
       availability: vendor.availability,
+      emergencyAvailability: vendor.emergencyAvailability,
       isAvailable: vendor.availability.isAvailableNow
     });
   } catch (error) {
@@ -1120,13 +1269,21 @@ export const getVendorDashboardStats = async (req, res, next) => {
 
     // Earnings & Escrow strictly from MongoDB Transaction records
     const transactions = await Transaction.find({ vendor: req.user.id });
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
     let totalEarnings = 0;
+    let todayEarnings = 0;
     let pendingEscrow = 0;
 
     transactions.forEach(t => {
       const net = Number(t.netAmount || t.grossAmount || 0);
-      if (t.paymentStatus === 'paid_to_bank' || t.settlementStatus === 'settled' || t.type === 'escrow_release') {
+      const isSettled = t.paymentStatus === 'paid_to_bank' || t.settlementStatus === 'settled' || t.type === 'escrow_release';
+      if (isSettled) {
         totalEarnings += net;
+        if (new Date(t.createdAt) >= startOfToday) {
+          todayEarnings += net;
+        }
       } else if (t.paymentStatus === 'held_in_escrow' || t.settlementStatus === 'pending' || t.type === 'escrow_hold') {
         pendingEscrow += net;
       }
@@ -1144,6 +1301,29 @@ export const getVendorDashboardStats = async (req, res, next) => {
     if (totalServices > 0) completeness += 20;
     if (vendorProfile?.verifiedBadge?.status === 'verified') completeness += 15;
 
+    // Weekly performance breakdown for the past 7 days
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const weeklyChartData = [];
+    const now = new Date();
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      const dayStart = new Date(new Date(d).setHours(0, 0, 0, 0));
+      const dayEnd = new Date(new Date(d).setHours(23, 59, 59, 999));
+      const dayNet = transactions
+        .filter(t => {
+          const tDate = new Date(t.createdAt);
+          return tDate >= dayStart && tDate <= dayEnd && (t.paymentStatus === 'paid_to_bank' || t.settlementStatus === 'settled' || t.type === 'escrow_release');
+        })
+        .reduce((sum, t) => sum + Number(t.netAmount || t.grossAmount || 0), 0);
+      weeklyChartData.push({
+        day: dayNames[dayStart.getDay()],
+        amount: dayNet
+      });
+    }
+
+    const totalRequests = (await Booking.countDocuments({ vendor: req.user.id })) + (submittedQuotations || 0);
+
     res.status(200).json({
       success: true,
       stats: {
@@ -1152,17 +1332,20 @@ export const getVendorDashboardStats = async (req, res, next) => {
         pendingServices,
         matchingJobsCount,
         submittedQuotations,
+        totalRequests,
         awaitingDecisionCount,
         acceptedQuotationsCount,
         upcomingBookingsCount,
         activeJobsCount,
         completedJobsCount: completedJobsCount || vendorProfile?.completedJobsCount || 0,
         totalEarnings,
+        todayEarnings,
         pendingEscrow,
+        weeklyChartData,
         rating: vendorProfile?.rating || 5.0,
         reviewCount: vendorProfile?.reviewCount || 0,
         profileCompleteness: Math.min(completeness, 100),
-        verificationStatus: vendorProfile?.verifiedBadge?.status || 'verified',
+        verificationStatus: vendorProfile?.verifiedBadge?.status || vendorProfile?.approvalStatus || 'not_submitted',
         recentJobs,
         recentQuotations,
         upcomingBookings: activeBookings
@@ -1172,3 +1355,272 @@ export const getVendorDashboardStats = async (req, res, next) => {
     next(error);
   }
 };
+
+/**
+ * GET /api/vendors/service-area
+ * Returns saved base coordinates, radius, selections, and canonical zone-locality coverage
+ */
+export const getVendorServiceArea = async (req, res, next) => {
+  try {
+    const authUserId = req.user?._id || req.user?.id;
+    let vendor = await VendorProfile.findOne({ user: authUserId }).lean();
+    if (!vendor) {
+      return res.status(404).json({
+        success: false,
+        requiresOnboarding: true,
+        code: 'VENDOR_PROFILE_NOT_FOUND',
+        message: 'Vendor profile not found. Please complete vendor onboarding.'
+      });
+    }
+
+    const coverage = vendor.serviceAreaCoverage || {};
+    const baseLat = coverage.coordinates?.lat ?? vendor.coordinates?.lat ?? 26.8467;
+    const baseLng = coverage.coordinates?.lng ?? vendor.coordinates?.lng ?? 80.9462;
+    const radiusKm = coverage.radiusKm ?? vendor.vendorServiceRadiusKm ?? 15;
+    const baseAddress = coverage.baseAddress || (vendor.locality ? `${vendor.locality}, ${vendor.city || 'Lucknow'}` : 'Hazratganj, Lucknow');
+    const pincode = coverage.pincode || '226001';
+    const excludedLocalityIds = coverage.excludedLocalityIds || [];
+    const selectedLocalityIds = coverage.selectedLocalityIds || [];
+
+    // Fetch active zones & localities
+    const [zones, localities] = await Promise.all([
+      Zone.find({ isActive: true }).sort({ zoneId: 1 }).lean(),
+      Locality.find({ isActive: true }).sort({ zoneId: 1, name: 1 }).lean()
+    ]);
+
+    const zoneMap = new Map();
+    zones.forEach(z => {
+      zoneMap.set(z.zoneId, {
+        zoneId: z.zoneId,
+        zoneName: z.zoneName,
+        centerArea: z.centerArea,
+        city: z.city || 'Lucknow',
+        coordinates: z.coordinates,
+        localities: []
+      });
+    });
+
+    let totalWithinRadius = 0;
+    let selectedCount = 0;
+    const coveredZoneIds = new Set();
+
+    localities.forEach(loc => {
+      const locLat = loc.coordinates?.lat;
+      const locLng = loc.coordinates?.lng;
+      const distanceKm = calculateHaversineDistanceKm(baseLat, baseLng, locLat, locLng);
+      const isWithinRadius = distanceKm != null && distanceKm <= radiusKm;
+      const isExcluded = excludedLocalityIds.includes(loc.localityId);
+
+      // A locality is active/selected if within radius AND not excluded, or explicitly in selectedLocalityIds
+      const isSelected = isWithinRadius && !isExcluded;
+
+      if (isWithinRadius) totalWithinRadius++;
+      if (isSelected) {
+        selectedCount++;
+        coveredZoneIds.add(loc.zoneId);
+      }
+
+      const z = zoneMap.get(loc.zoneId);
+      if (z) {
+        z.localities.push({
+          localityId: loc.localityId,
+          name: loc.name,
+          pinCode: loc.pinCode || '226001',
+          coordinates: loc.coordinates,
+          distanceKm,
+          isWithinRadius,
+          isSelected,
+          isExcluded
+        });
+      }
+    });
+
+    const groupedZones = Array.from(zoneMap.values()).map(z => ({
+      ...z,
+      totalCount: z.localities.length,
+      withinRadiusCount: z.localities.filter(l => l.isWithinRadius).length,
+      selectedCount: z.localities.filter(l => l.isSelected).length
+    }));
+
+    res.status(200).json({
+      success: true,
+      serviceArea: {
+        baseAddress,
+        pincode,
+        coordinates: { lat: baseLat, lng: baseLng },
+        radiusKm,
+        selectedLocalityIds,
+        excludedLocalityIds,
+        selectedZoneIds: Array.from(coveredZoneIds),
+        updatedAt: coverage.updatedAt || vendor.updatedAt,
+        version: coverage.version || 1
+      },
+      coverage: {
+        totalLocalities: localities.length,
+        totalWithinRadius,
+        selectedCount,
+        excludedCount: excludedLocalityIds.length,
+        zonesCoveredCount: coveredZoneIds.size,
+        zones: groupedZones
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * PUT /api/vendors/service-area
+ * Saves vendor base coordinates, radius, exclusions, and updates vendor profile
+ */
+export const updateVendorServiceArea = async (req, res, next) => {
+  try {
+    const {
+      coordinates,
+      radiusKm,
+      baseAddress,
+      pincode,
+      selectedLocalityIds = [],
+      excludedLocalityIds = [],
+      selectedZoneIds = []
+    } = req.body;
+
+    // Validation
+    if (!coordinates || typeof coordinates.lat !== 'number' || typeof coordinates.lng !== 'number') {
+      return res.status(400).json({ success: false, message: 'Valid base coordinates (lat, lng) are required.' });
+    }
+    if (coordinates.lat < -90 || coordinates.lat > 90 || coordinates.lng < -180 || coordinates.lng > 180) {
+      return res.status(400).json({ success: false, message: 'Coordinates out of valid range.' });
+    }
+
+    const allowedRadii = [5, 10, 15, 20, 25, 30];
+    const parsedRadius = Number(radiusKm);
+    if (!allowedRadii.includes(parsedRadius)) {
+      return res.status(400).json({ success: false, message: `Radius must be one of: ${allowedRadii.join(', ')} km.` });
+    }
+
+    const authUserId = req.user?._id || req.user?.id;
+    let vendor = await VendorProfile.findOne({ user: authUserId });
+    if (!vendor) {
+      return res.status(404).json({
+        success: false,
+        requiresOnboarding: true,
+        code: 'VENDOR_PROFILE_NOT_FOUND',
+        message: 'Vendor profile not found. Please complete vendor onboarding.'
+      });
+    }
+
+    // Resolve closest locality to base coordinates for display and sync
+    const allLocalities = await Locality.find({ isActive: true }).lean();
+    let minDistance = Infinity;
+    let closestLoc = null;
+    allLocalities.forEach(loc => {
+      const d = calculateHaversineDistanceKm(coordinates.lat, coordinates.lng, loc.coordinates?.lat, loc.coordinates?.lng);
+      if (d != null && d < minDistance) {
+        minDistance = d;
+        closestLoc = loc;
+      }
+    });
+
+    const determinedLocality = closestLoc ? closestLoc.name : (vendor.locality || 'Hazratganj');
+    const determinedZoneId = closestLoc ? closestLoc.zoneId : (vendor.zoneId || 'LKO-Z01');
+    const determinedZoneName = closestLoc ? closestLoc.zoneName : (vendor.zoneName || 'Central Lucknow');
+    const determinedPinCode = pincode || (closestLoc ? closestLoc.pinCode : '226001');
+
+    // Filter which localities are within radius
+    const localitiesWithinRadius = allLocalities.filter(loc => {
+      const d = calculateHaversineDistanceKm(coordinates.lat, coordinates.lng, loc.coordinates?.lat, loc.coordinates?.lng);
+      return d != null && d <= parsedRadius;
+    });
+
+    const excludedSet = new Set(Array.isArray(excludedLocalityIds) ? excludedLocalityIds : []);
+    const activeSelectedLocalities = localitiesWithinRadius.filter(loc => !excludedSet.has(loc.localityId));
+    const activeSelectedLocalityIds = activeSelectedLocalities.map(loc => loc.localityId);
+    const activeSelectedZoneIds = [...new Set(activeSelectedLocalities.map(loc => loc.zoneId))];
+    const activeSelectedNames = activeSelectedLocalities.map(loc => loc.name);
+
+    // Update serviceAreaCoverage
+    const newVersion = (vendor.serviceAreaCoverage?.version || 0) + 1;
+    vendor.serviceAreaCoverage = {
+      baseAddress: (baseAddress || `${determinedLocality}, Lucknow`).trim(),
+      pincode: determinedPinCode,
+      coordinates: {
+        lat: coordinates.lat,
+        lng: coordinates.lng
+      },
+      radiusKm: parsedRadius,
+      selectedLocalityIds: activeSelectedLocalityIds,
+      selectedZoneIds: activeSelectedZoneIds,
+      excludedLocalityIds: Array.from(excludedSet),
+      version: newVersion,
+      updatedAt: new Date()
+    };
+
+    // Synchronize top-level fields for backwards compatibility
+    vendor.coordinates = {
+      lat: coordinates.lat,
+      lng: coordinates.lng
+    };
+    vendor.location = {
+      type: 'Point',
+      coordinates: [coordinates.lng, coordinates.lat]
+    };
+    vendor.vendorServiceRadiusKm = parsedRadius;
+    vendor.locality = determinedLocality;
+    vendor.city = 'Lucknow';
+    vendor.zoneId = determinedZoneId;
+    vendor.zoneName = determinedZoneName;
+
+    await vendor.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Service area updated successfully',
+      serviceArea: vendor.serviceAreaCoverage,
+      coverageSummary: {
+        totalWithinRadius: localitiesWithinRadius.length,
+        selectedCount: activeSelectedLocalities.length,
+        excludedCount: excludedSet.size,
+        zonesCoveredCount: activeSelectedZoneIds.length
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * POST /api/vendors/upload-image
+ * Secure multipart image upload for vendor avatar, work portfolio, or documents
+ */
+export const uploadVendorImage = async (req, res, next) => {
+  try {
+    const file = req.file || (req.files && (req.files.image?.[0] || req.files.file?.[0]));
+    if (!file) {
+      return res.status(400).json({ success: false, message: 'Please select an image to upload.' });
+    }
+
+    if (!file.mimetype.startsWith('image/') && file.mimetype !== 'application/pdf') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid file type. Only image files (JPEG, PNG, WEBP) and PDF documents are supported.'
+      });
+    }
+
+    const ext = file.originalname ? file.originalname.split('.').pop() : 'jpg';
+    const result = await uploadToCloudinary(file.buffer, 'worklogy/vendors', {
+      extension: ext,
+      reqHost: req.get('host'),
+      reqProtocol: req.protocol
+    });
+
+    res.status(200).json({
+      success: true,
+      url: result.secure_url,
+      publicId: result.public_id
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
