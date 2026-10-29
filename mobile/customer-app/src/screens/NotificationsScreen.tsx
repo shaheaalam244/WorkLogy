@@ -140,6 +140,8 @@ export default function NotificationsScreen({ navigation }: any) {
       case 'message':
         return <Ionicons name="chatbubble-ellipses" size={20} color="#2563EB" />;
       case 'payment':
+      case 'refund':
+      case 'escrow':
         return <Ionicons name="card" size={20} color="#16A34A" />;
       case 'job_alert':
       case 'quotation_received':

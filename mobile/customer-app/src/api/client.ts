@@ -1,4 +1,4 @@
-import { CONFIG } from '../config';
+import { CONFIG, SERVERS } from '../config';
 import { secureStorage } from '../storage/secureStorage';
 import { STORAGE_KEYS } from '../constants';
 import type { User, ServiceCategory, Job, Booking, ReviewItem, ChatMessage, ConversationItem, ServiceAddress } from '../types';
@@ -74,10 +74,13 @@ export function clearMemoryCache(prefix?: string): void {
   }
 }
 
-// ── Dynamic Host Failover with Sticky Memory ──
-const FALLBACK_API_BASE = 'http://76.13.246.224:5001/api';
-const FALLBACK_SOCKET_URL = 'http://76.13.246.224:5001';
+// ── Dynamic Host Management & Multi-Server Support ──
+export type ServerTarget = 'local' | 'vps' | 'auto';
 
+const FALLBACK_API_BASE = `http://${SERVERS.VPS_HOST}/api`;
+const FALLBACK_SOCKET_URL = `http://${SERVERS.VPS_HOST}`;
+
+let currentServerTarget: ServerTarget = 'auto';
 let activeBaseUrl = CONFIG.API_BASE_URL;
 let activeSocketUrl = CONFIG.SOCKET_URL;
 
@@ -89,9 +92,72 @@ export function getActiveSocketUrl(): string {
   return activeSocketUrl;
 }
 
+export function getCurrentServerTarget(): ServerTarget {
+  return currentServerTarget;
+}
+
 export function resetActiveHost(): void {
   activeBaseUrl = CONFIG.API_BASE_URL;
   activeSocketUrl = CONFIG.SOCKET_URL;
+}
+
+export function applyServerTarget(target: ServerTarget, customHost?: string): void {
+  currentServerTarget = target;
+  const localHost = customHost || SERVERS.LOCAL_LAN_HOST;
+
+  if (target === 'local') {
+    activeBaseUrl = `http://${localHost}/api`;
+    activeSocketUrl = `http://${localHost}`;
+  } else if (target === 'vps') {
+    activeBaseUrl = `http://${SERVERS.VPS_HOST}/api`;
+    activeSocketUrl = `http://${SERVERS.VPS_HOST}`;
+  } else {
+    // 'auto' mode: default to configured local or env, with VPS auto-fallback
+    activeBaseUrl = CONFIG.API_BASE_URL;
+    activeSocketUrl = CONFIG.SOCKET_URL;
+  }
+}
+
+export async function switchServerTarget(target: ServerTarget, customHost?: string): Promise<void> {
+  await secureStorage.setItem(STORAGE_KEYS.SERVER_TARGET, target);
+  if (customHost) {
+    await secureStorage.setItem(STORAGE_KEYS.CUSTOM_LOCAL_HOST, customHost);
+  }
+  applyServerTarget(target, customHost);
+  clearMemoryCache();
+}
+
+export async function initializeServerTarget(): Promise<ServerTarget> {
+  try {
+    const saved = await secureStorage.getItem(STORAGE_KEYS.SERVER_TARGET);
+    if (saved === 'local' || saved === 'vps' || saved === 'auto') {
+      currentServerTarget = saved as ServerTarget;
+    }
+    const customHost = await secureStorage.getItem(STORAGE_KEYS.CUSTOM_LOCAL_HOST);
+    applyServerTarget(currentServerTarget, customHost || undefined);
+  } catch (err) {
+    console.warn('[API] Server target init notice:', err);
+  }
+  return currentServerTarget;
+}
+
+// Kick off initialization asynchronously
+initializeServerTarget().catch(() => {});
+
+export async function pingServerHealth(baseUrl: string, timeoutMs = 3500): Promise<{ ok: boolean; latency: number; service?: string; error?: string }> {
+  const start = Date.now();
+  try {
+    const cleanBase = baseUrl.replace(/\/api\/?$/, '');
+    const res = await doFetchWithTimeout(`${cleanBase}/api/health`, { method: 'GET' }, timeoutMs);
+    const latency = Date.now() - start;
+    if (res.ok) {
+      const data = await res.json().catch(() => ({}));
+      return { ok: true, latency, service: data.service || 'Worklogy API' };
+    }
+    return { ok: false, latency, error: `HTTP ${res.status}` };
+  } catch (err: any) {
+    return { ok: false, latency: Date.now() - start, error: err.message || 'Unreachable' };
+  }
 }
 
 // ── In-Flight Request Deduplication Map for GET requests ──
@@ -167,12 +233,22 @@ async function executeRequest<T>(endpoint: string, options: RequestOptions = {})
   try {
     response = await doFetchWithTimeout(primaryUrl, { ...fetchOptions, headers }, timeout);
   } catch (networkErr: any) {
-    // If primary failed and wasn't already the fallback, fail over stickily to the live VPS backend
+    // If the user explicitly locked the app to 'local' mode, do not fail over silently to VPS
+    if (currentServerTarget === 'local') {
+      const explicitLocalErr: any = new Error(
+        `Local backend is unreachable at ${currentBase}. Please run 'npm run dev' in backend or switch to VPS in Profile.`
+      );
+      explicitLocalErr.isNetworkError = true;
+      explicitLocalErr.serverTarget = 'local';
+      throw explicitLocalErr;
+    }
+
+    // In 'auto' mode: if primary failed and wasn't already VPS, fail over stickily to the live VPS backend
     if (!primaryUrl.startsWith(FALLBACK_API_BASE)) {
       try {
         const fallbackUrl = `${FALLBACK_API_BASE}${endpoint}`;
         response = await doFetchWithTimeout(fallbackUrl, { ...fetchOptions, headers }, 12000);
-        // Sticky failover: remember the working server for all subsequent calls and socket!
+        // Sticky failover: remember VPS for subsequent calls and socket in this session
         activeBaseUrl = FALLBACK_API_BASE;
         activeSocketUrl = FALLBACK_SOCKET_URL;
       } catch {
@@ -201,8 +277,13 @@ async function executeRequest<T>(endpoint: string, options: RequestOptions = {})
       throw expiredErr;
     }
 
-    const err: any = new Error(data.message || data.error || `HTTP error ${response.status}`);
+    let errorMsg = data.message || data.error;
+    if (!errorMsg && Array.isArray(data.errors) && data.errors.length > 0) {
+      errorMsg = data.errors.map((e: any) => e.message || e.msg).filter(Boolean).join('. ');
+    }
+    const err: any = new Error(errorMsg || `HTTP error ${response.status}`);
     err.status = response.status;
+    err.errors = data.errors;
     throw err;
   }
 
@@ -241,9 +322,11 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
 
   if (isGet) {
     inFlightGetRequests.set(reqKey, promise);
-    promise.finally(() => {
-      inFlightGetRequests.delete(reqKey);
-    });
+    promise
+      .catch(() => {})
+      .finally(() => {
+        inFlightGetRequests.delete(reqKey);
+      });
   }
 
   return promise;
@@ -498,7 +581,11 @@ export const api = {
     },
 
     getBookingById: async (id: string) => {
-      return await request<{ success: boolean; booking: Booking }>(`/bookings/${id}`);
+      return await request<{ success: boolean; booking: Booking; job?: any; quotations?: any[] }>(`/bookings/${id}`);
+    },
+
+    getStartOtp: async (id: string) => {
+      return await request<{ success: boolean; otp: string; arrivalOtp?: string; isConsumed?: boolean; expiresAt?: string }>(`/bookings/${id}/start-otp`);
     },
 
     createDirectBooking: async (bookingData: {
@@ -543,6 +630,37 @@ export const api = {
     }
   },
 
+  // Quotations & Applications
+  applications: {
+    getJobApplications: async (jobId: string) => {
+      return await request<{ success: boolean; count?: number; applications: any[] }>(`/applications/job/${jobId}`);
+    },
+
+    acceptQuotation: async (applicationId: string) => {
+      return await request<{ success: boolean; message: string; application: any; booking: any }>(
+        `/applications/${applicationId}/status`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ status: 'accepted' })
+        }
+      );
+    },
+
+    rejectQuotation: async (applicationId: string) => {
+      return await request<{ success: boolean; message: string }>(
+        `/applications/${applicationId}/status`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ status: 'rejected' })
+        }
+      );
+    },
+
+    getCustomerQuotations: async () => {
+      return await request<{ success: boolean; count: number; applications: any[] }>('/customer/quotations');
+    }
+  },
+
   // Services Discovery
   services: {
     getServices: async (params?: { category?: string; domain?: string; city?: string; search?: string; minPrice?: number; maxPrice?: number; sortBy?: string; page?: number; limit?: number }) => {
@@ -576,6 +694,18 @@ export const api = {
     },
 
     getAddresses: async () => {
+      const token = await getStoredAuthToken();
+      if (!token) {
+        return { success: true, addresses: [] };
+      }
+      try {
+        const res = await request<{ success: boolean; addresses?: ServiceAddress[]; profile?: any }>('/customer/addresses');
+        if (res?.addresses) {
+          return { success: true, addresses: res.addresses as ServiceAddress[] };
+        }
+      } catch {
+        // Fallback to /users/customer/profile
+      }
       try {
         const res = await request<{ success: boolean; profile: any }>('/users/customer/profile');
         if (res?.profile?.addresses) {
@@ -701,10 +831,28 @@ export const api = {
     },
 
     getTransactions: async () => {
+      const token = await getStoredAuthToken();
+      if (!token) {
+        return { success: true, count: 0, transactions: [] };
+      }
       return await request<{ success: boolean; count: number; transactions: any[] }>('/customer/transactions');
     },
 
     getStats: async () => {
+      const token = await getStoredAuthToken();
+      if (!token) {
+        return {
+          success: true,
+          activeJobsCount: 0,
+          activeBookingsCount: 0,
+          openRequestsCount: 0,
+          totalJobsCount: 0,
+          totalBookingsCount: 0,
+          transactionCount: 0,
+          savedVendorsCount: 0,
+          savedAddressesCount: 0
+        };
+      }
       try {
         return await request<{
           success: boolean;
@@ -749,11 +897,38 @@ export const api = {
 
   // Reviews
   reviews: {
-    submit: async (data: { booking: string; rating: number; title?: string; comment: string }) => {
+    submit: async (data: {
+      booking?: string;
+      bookingId?: string;
+      vendorId?: string;
+      rating: number;
+      title?: string;
+      comment: string;
+    }) => {
+      const bId = data.bookingId || data.booking;
       return await request<{ success: boolean; review: ReviewItem }>('/reviews', {
         method: 'POST',
-        body: JSON.stringify(data)
+        body: JSON.stringify({
+          ...data,
+          bookingId: bId,
+          booking: bId,
+          vendorId: data.vendorId
+        })
       });
+    },
+
+    checkEligibility: async (vendorId: string) => {
+      return await request<{ success: boolean; eligible: boolean; booking?: any; message?: string }>(
+        `/reviews/eligible/${vendorId}`
+      );
+    },
+
+    getAwaiting: async () => {
+      return await request<{ success: boolean; count: number; bookings: any[] }>('/reviews/awaiting');
+    },
+
+    getByBookingId: async (bookingId: string) => {
+      return await request<{ success: boolean; review: ReviewItem | null }>(`/reviews/booking/${bookingId}`);
     },
 
     getRecentReviews: async (limit: number = 6) => {
@@ -824,13 +999,21 @@ export const api = {
   // Notifications
   notifications: {
     getUnreadCount: async () => {
-      const res = await request<{ success: boolean; unreadCount?: number; count?: number }>('/notifications/unread-count');
-      const count = typeof res?.unreadCount === 'number'
-        ? res.unreadCount
-        : typeof res?.count === 'number'
-        ? res.count
-        : 0;
-      return { success: res?.success ?? true, unreadCount: count, count };
+      const token = await getStoredAuthToken();
+      if (!token) {
+        return { success: true, unreadCount: 0, count: 0 };
+      }
+      try {
+        const res = await request<{ success: boolean; unreadCount?: number; count?: number }>('/notifications/unread-count');
+        const count = typeof res?.unreadCount === 'number'
+          ? res.unreadCount
+          : typeof res?.count === 'number'
+          ? res.count
+          : 0;
+        return { success: res?.success ?? true, unreadCount: count, count };
+      } catch {
+        return { success: false, unreadCount: 0, count: 0 };
+      }
     },
 
     getAll: async (params?: { page?: number; limit?: number; filter?: string }) => {
@@ -875,6 +1058,36 @@ export const api = {
         method: 'PATCH',
         body: JSON.stringify(preferences)
       });
+    },
+
+    registerPushToken: async (data: {
+      token: string;
+      platform?: string;
+      deviceId?: string;
+      deviceModel?: string;
+      appVersion?: string;
+    }) => {
+      return await request<{ success: boolean; message?: string }>('/notifications/push-token', {
+        method: 'POST',
+        body: JSON.stringify(data)
+      });
+    },
+
+    deregisterPushToken: async (token: string) => {
+      return await request<{ success: boolean; message?: string }>('/notifications/push-token', {
+        method: 'DELETE',
+        body: JSON.stringify({ token })
+      });
+    },
+
+    sendTestPush: async (payload?: { title?: string; body?: string }) => {
+      return await request<{ success: boolean; message?: string; sentCount?: number; totalAttempted?: number }>(
+        '/notifications/test-push',
+        {
+          method: 'POST',
+          body: JSON.stringify(payload || {})
+        }
+      );
     }
   },
 
@@ -895,7 +1108,9 @@ export const api = {
   // Location / Geocoding
   location: {
     reverseGeocode: async (lat: number, lng: number) => {
-      return await request<{ success: boolean; address: any }>(`/location/reverse-geocode?lat=${lat}&lng=${lng}`);
+      return await request<{ success: boolean; address: any }>(`/location/reverse-geocode?lat=${lat}&lng=${lng}`, {
+        requiresAuth: false
+      });
     }
   },
 
@@ -956,7 +1171,15 @@ export const api = {
     },
 
     getUnreadCount: async () => {
-      return await request<{ success: boolean; unreadCount: number }>('/chat/unread-count');
+      const token = await getStoredAuthToken();
+      if (!token) {
+        return { success: true, unreadCount: 0 };
+      }
+      try {
+        return await request<{ success: boolean; unreadCount: number }>('/chat/unread-count');
+      } catch {
+        return { success: false, unreadCount: 0 };
+      }
     }
   },
 
@@ -1061,6 +1284,13 @@ export const api = {
         requiresAuth: false
       });
     }
+  },
+  servers: {
+    getTarget: getCurrentServerTarget,
+    switchTarget: switchServerTarget,
+    ping: pingServerHealth,
+    getActiveBaseUrl,
+    getActiveSocketUrl
   }
 };
 

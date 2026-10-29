@@ -25,11 +25,11 @@ const router = express.Router();
 router.get('/', optionalAuth, getJobs);
 router.get('/nearby', protect, authorize('vendor'), getNearbyJobs);
 router.get('/emergency-leads', protect, authorize('vendor'), getEmergencyLeads);
-router.post('/', protect, authorize('customer'), validateCreateJob, createJob);
+router.post('/', protect, authorize('customer', 'admin'), validateCreateJob, createJob);
 
 router.post('/upload-image', protect, uploadSingleImage, uploadJobImage);
-router.get('/my-customer-jobs', protect, authorize('customer'), getMyCustomerJobs);
-router.get('/my-jobs', protect, authorize('customer'), getMyCustomerJobs);
+router.get('/my-customer-jobs', protect, authorize('customer', 'admin'), getMyCustomerJobs);
+router.get('/my-jobs', protect, authorize('customer', 'admin'), getMyCustomerJobs);
 router.get('/open', protect, authorize('vendor'), getNearbyJobs);
 router.post('/:id/accept', protect, authorize('vendor'), claimJobInstant);
 router.post('/:id/claim', protect, authorize('vendor'), claimJobInstant);

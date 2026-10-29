@@ -25,12 +25,27 @@ const VendorProfileSchema = new mongoose.Schema(
       type: String,
       default: ''
     },
-    categories: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'ServiceCategory'
-      }
-    ],
+    onboardingStep: {
+      type: String,
+      enum: ['profile_pending', 'domains_pending', 'first_service_pending', 'completed'],
+      default: 'profile_pending'
+    },
+    categories: {
+      type: [
+        {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'ServiceCategory'
+        }
+      ],
+      validate: [
+        function (val) {
+          if (!Array.isArray(val)) return true;
+          const unique = new Set(val.map(id => (id ? (id._id || id).toString() : '')).filter(Boolean));
+          return unique.size <= 3;
+        },
+        'A vendor can select a maximum of 3 distinct service domains.'
+      ]
+    },
     services: [
       {
         category: {
@@ -289,8 +304,20 @@ const VendorProfileSchema = new mongoose.Schema(
       default: 0
     }
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
+  }
 );
+
+VendorProfileSchema.virtual('serviceDomainIds')
+  .get(function () {
+    return this.categories;
+  })
+  .set(function (val) {
+    this.categories = val;
+  });
 
 VendorProfileSchema.index({ location: '2dsphere' });
 VendorProfileSchema.index({ zoneId: 1, approvalStatus: 1 });

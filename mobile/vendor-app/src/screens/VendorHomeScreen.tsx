@@ -19,7 +19,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../hooks/useAuth';
 import { api } from '../api/client';
 import { COLORS } from '../theme/colors';
-import { formatCurrency, formatDate, getStatusColor, formatStatusText } from '../utils/formatters';
+import { formatCurrency, formatDate, getStatusColor, formatStatusText, isTemporaryEmail } from '../utils/formatters';
 import { getServiceImage } from '../utils/serviceImages';
 import Header from '../components/Header';
 import { socketService } from '../services/socketService';
@@ -261,14 +261,13 @@ export default function VendorHomeScreen({ navigation }: any) {
     );
   };
 
-  // Data Derivations
-  const businessName = vendorProfile?.businessName || user?.name || 'Mohammad Aalam';
-  const rating = vendorProfile?.rating || dashboardStats?.rating || 4.9;
-  const reviewCount = vendorProfile?.reviewCount || vendorProfile?.reviewsCount || dashboardStats?.reviewCount || 128;
-  const experienceYears = vendorProfile?.experienceYears || 5;
+  const businessName = vendorProfile?.businessName || user?.name || 'Professional Partner';
+  const rating = vendorProfile?.rating || dashboardStats?.rating || 0;
+  const reviewCount = vendorProfile?.reviewCount || vendorProfile?.reviewsCount || dashboardStats?.reviewCount || 0;
+  const experienceYears = vendorProfile?.experienceYears || 0;
   const categoryTitle = vendorProfile?.categories?.length
     ? (vendorProfile.categories as any).map((c: any) => c.name || c).join(', ')
-    : 'AC Technician';
+    : 'Services Partner';
   const serviceLocation = vendorProfile?.locality
     ? `${vendorProfile.locality}, ${vendorProfile.city || 'Lucknow'}`
     : vendorProfile?.serviceAreas?.[0] || 'Lucknow, Uttar Pradesh';
@@ -308,6 +307,15 @@ export default function VendorHomeScreen({ navigation }: any) {
     ? dashboardStats.weeklyChartData
     : defaultWeeklyChart;
   const maxChartVal = Math.max(...chartData.map((d: any) => d.amount || 0), 8000);
+
+  // Onboarding Checklist calculation
+  const hasProfileName = !!(user?.name && user.name !== 'New Contractor');
+  const hasDomains = !!(vendorProfile?.categories && vendorProfile.categories.length > 0);
+  const hasServices = myServices.length > 0;
+  const hasEmail = !!(user?.email && !isTemporaryEmail(user.email));
+  const isOnboardingIncomplete = !hasProfileName || !hasDomains || !hasServices || !hasEmail;
+  const completedStepsCount = (hasProfileName ? 1 : 0) + (hasDomains ? 1 : 0) + (hasServices ? 1 : 0) + (hasEmail ? 1 : 0);
+  const progressPercent = Math.round((completedStepsCount / 4) * 100);
 
   return (
     <View style={styles.screenWrapper}>
@@ -369,6 +377,79 @@ export default function VendorHomeScreen({ navigation }: any) {
           /* ───────────── SCREEN 1: MAIN VENDOR DASHBOARD ────────────────────────── */
           /* ========================================================================= */
           <View>
+            {/* ── ONBOARDING RESUME CHECKLIST CARD (If skipped or incomplete) ── */}
+            {isOnboardingIncomplete && (
+              <View style={styles.checklistCard}>
+                <View style={styles.checklistHeader}>
+                  <View style={styles.checklistTitleRow}>
+                    <Ionicons name="sparkles" size={16} color={COLORS.primary} style={{ marginRight: 6 }} />
+                    <Text style={styles.checklistTitle}>Finish Your Account Setup</Text>
+                  </View>
+                  <View style={styles.checklistBadge}>
+                    <Text style={styles.checklistBadgeText}>{progressPercent}% Done</Text>
+                  </View>
+                </View>
+
+                <Text style={styles.checklistSubtitle}>
+                  Complete your profile setup to unlock full matching job feeds and customer inquiries.
+                </Text>
+
+                <View style={styles.progressBarTrack}>
+                  <View style={[styles.progressBarFill, { width: `${progressPercent}%` }]} />
+                </View>
+
+                <View style={styles.checklistTasks}>
+                  {!hasProfileName && (
+                    <TouchableOpacity
+                      style={styles.taskItem}
+                      onPress={() => navigation.navigate('VendorOnboardingProfile')}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="business-outline" size={16} color={COLORS.primary} style={{ marginRight: 8 }} />
+                      <Text style={styles.taskText}>Add Business Details & Legal Name</Text>
+                      <Ionicons name="chevron-forward" size={16} color={COLORS.textSecondary} />
+                    </TouchableOpacity>
+                  )}
+
+                  {!hasDomains && (
+                    <TouchableOpacity
+                      style={styles.taskItem}
+                      onPress={() => navigation.navigate('VendorOnboardingDomains')}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="briefcase-outline" size={16} color={COLORS.primary} style={{ marginRight: 8 }} />
+                      <Text style={styles.taskText}>Choose Up to 3 Service Domains</Text>
+                      <Ionicons name="chevron-forward" size={16} color={COLORS.textSecondary} />
+                    </TouchableOpacity>
+                  )}
+
+                  {!hasServices && (
+                    <TouchableOpacity
+                      style={styles.taskItem}
+                      onPress={() => navigation.navigate('VendorOnboardingService')}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="add-circle-outline" size={16} color={COLORS.primary} style={{ marginRight: 8 }} />
+                      <Text style={styles.taskText}>Create Your First Service Offering</Text>
+                      <Ionicons name="chevron-forward" size={16} color={COLORS.textSecondary} />
+                    </TouchableOpacity>
+                  )}
+
+                  {!hasEmail && (
+                    <TouchableOpacity
+                      style={styles.taskItem}
+                      onPress={() => navigation.navigate('VendorSettings')}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="mail-outline" size={16} color={COLORS.primary} style={{ marginRight: 8 }} />
+                      <Text style={styles.taskText}>Fill Email for Invoices & Booking Receipts</Text>
+                      <Ionicons name="chevron-forward" size={16} color={COLORS.textSecondary} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            )}
+
             {/* ── 2. VENDOR PROFILE SUMMARY CARD ── */}
             <View style={styles.vendorProfileCard}>
               <View style={styles.profileAvatarWrap}>
@@ -467,7 +548,7 @@ export default function VendorHomeScreen({ navigation }: any) {
               {/* Card 1: New Jobs */}
               <TouchableOpacity
                 style={styles.singleMetricCard}
-                onPress={() => navigation.navigate('JobsTab', { initialTab: 'new' })}
+                onPress={() => navigation.navigate('JobsTab', { initialTab: 'all' })}
                 activeOpacity={0.8}
               >
                 <View style={[styles.metricSquareIcon, { backgroundColor: '#ECFDF5' }]}>
@@ -701,7 +782,7 @@ export default function VendorHomeScreen({ navigation }: any) {
                   No Active Booking in Progress
                 </Text>
                 <Text style={{ fontSize: 13, color: '#D1FAE5', textAlign: 'center', marginTop: 4, marginBottom: 14, paddingHorizontal: 20 }}>
-                  You are online and ready for new service requests. Check direct inquiries and nearby jobs below.
+                  You are online and ready for new service requests. Check nearby jobs below.
                 </Text>
                 <TouchableOpacity
                   style={{ backgroundColor: '#FFFFFF', paddingHorizontal: 18, paddingVertical: 9, borderRadius: 20 }}
@@ -713,101 +794,12 @@ export default function VendorHomeScreen({ navigation }: any) {
               </View>
             )}
 
-            {/* ── 6. DIRECT INQUIRIES SECTION ── */}
-            <View style={styles.sectionContainer}>
-              <View style={styles.sectionHeaderLine}>
-                <View style={styles.sectionTitleWithBadge}>
-                  <Text style={styles.sectionMainTitle}>Direct Inquiries</Text>
-                  <View style={styles.orangeNewPill}>
-                    <Text style={styles.orangeNewPillText}>New</Text>
-                  </View>
-                </View>
-                <TouchableOpacity
-                  onPress={() => navigation.navigate('JobsTab', { initialTab: 'requests' })}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.sectionGreenAction}>View All ❯</Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Direct Inquiry Card */}
-              {directInquiries.length > 0 ? (
-                directInquiries.slice(0, 1).map((inquiry) => (
-                  <View key={inquiry._id} style={styles.directInquiryCard}>
-                    <View style={styles.diContentRow}>
-                      <Image
-                        source={getServiceImage('appliance-repair')}
-                        style={styles.diThumb}
-                      />
-                      <View style={{ flex: 1, marginLeft: 12 }}>
-                        <Text style={styles.diJobTitle} numberOfLines={1}>{inquiry.serviceTitle}</Text>
-                        <Text style={styles.diLocationText} numberOfLines={1}>
-                          📍 {inquiry.address?.locality || 'Indira Nagar, Lucknow'}
-                        </Text>
-                        <Text style={styles.diScheduleText}>
-                          📅 {inquiry.scheduledDate ? formatDate(inquiry.scheduledDate) : 'Today, 3:00 PM'}
-                        </Text>
-                        <Text style={styles.diBudgetText}>{formatCurrency(inquiry.totalAmount || 500)}</Text>
-                      </View>
-                    </View>
-                    <View style={styles.diButtonsRow}>
-                      <TouchableOpacity
-                        style={styles.diDeclineBtn}
-                        onPress={() => handleDeclineInquiry(inquiry._id)}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={styles.diDeclineBtnText}>Decline</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.diAcceptBtn}
-                        onPress={() => handleAcceptInquiry(inquiry._id)}
-                        activeOpacity={0.85}
-                      >
-                        <Text style={styles.diAcceptBtnText}>Accept Job</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                ))
-              ) : (
-                <View style={styles.directInquiryCard}>
-                  <View style={styles.diContentRow}>
-                    <Image
-                      source={getServiceImage('appliance-repair')}
-                      style={styles.diThumb}
-                    />
-                    <View style={{ flex: 1, marginLeft: 12 }}>
-                      <Text style={styles.diJobTitle}>Chimney Repair</Text>
-                      <Text style={styles.diLocationText}>📍 Indira Nagar, Lucknow</Text>
-                      <Text style={styles.diScheduleText}>📅 Today, 3:00 PM</Text>
-                      <Text style={styles.diBudgetText}>₹ 400 - 600</Text>
-                    </View>
-                  </View>
-                  <View style={styles.diButtonsRow}>
-                    <TouchableOpacity
-                      style={styles.diDeclineBtn}
-                      onPress={() => Alert.alert('Inquiry Closed', 'This demonstration inquiry has been dismissed.')}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={styles.diDeclineBtnText}>Decline</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.diAcceptBtn}
-                      onPress={() => navigation.navigate('JobsTab', { initialTab: 'requests' })}
-                      activeOpacity={0.85}
-                    >
-                      <Text style={styles.diAcceptBtnText}>Accept Job</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              )}
-            </View>
-
-            {/* ── 7. NEARBY JOBS FOR YOU ── */}
+            {/* ── 6. NEARBY JOBS FOR YOU ── */}
             <View style={styles.sectionContainer}>
               <View style={styles.sectionHeaderLine}>
                 <Text style={styles.sectionMainTitle}>Nearby Jobs for You</Text>
                 <TouchableOpacity
-                  onPress={() => navigation.navigate('JobsTab', { initialTab: 'new' })}
+                  onPress={() => navigation.navigate('JobsTab', { initialTab: 'all' })}
                   activeOpacity={0.7}
                 >
                   <Text style={styles.sectionGreenAction}>See All</Text>
@@ -848,7 +840,7 @@ export default function VendorHomeScreen({ navigation }: any) {
                         if (openJobs.length > 0) {
                           navigation.navigate('VendorJobDetail', { jobId: openJobs[0]._id, job: openJobs[0] });
                         } else {
-                          navigation.navigate('JobsTab', { initialTab: 'new' });
+                          navigation.navigate('JobsTab', { initialTab: 'all' });
                         }
                       }}
                       activeOpacity={0.8}
@@ -891,7 +883,7 @@ export default function VendorHomeScreen({ navigation }: any) {
                         if (openJobs.length > 1) {
                           navigation.navigate('VendorJobDetail', { jobId: openJobs[1]._id, job: openJobs[1] });
                         } else {
-                          navigation.navigate('JobsTab', { initialTab: 'new' });
+                          navigation.navigate('JobsTab', { initialTab: 'all' });
                         }
                       }}
                       activeOpacity={0.8}
@@ -934,7 +926,7 @@ export default function VendorHomeScreen({ navigation }: any) {
                         if (openJobs.length > 2) {
                           navigation.navigate('VendorJobDetail', { jobId: openJobs[2]._id, job: openJobs[2] });
                         } else {
-                          navigation.navigate('JobsTab', { initialTab: 'new' });
+                          navigation.navigate('JobsTab', { initialTab: 'all' });
                         }
                       }}
                       activeOpacity={0.8}
@@ -1168,7 +1160,7 @@ export default function VendorHomeScreen({ navigation }: any) {
               <View style={styles.sectionHeaderLine}>
                 <Text style={styles.sectionMainTitle}>Service Categories in Your Area</Text>
                 <TouchableOpacity
-                  onPress={() => navigation.navigate('JobsTab', { initialTab: 'new' })}
+                  onPress={() => navigation.navigate('JobsTab', { initialTab: 'all' })}
                   activeOpacity={0.7}
                 >
                   <Text style={styles.sectionGreenAction}>See All</Text>
@@ -1221,53 +1213,52 @@ export default function VendorHomeScreen({ navigation }: any) {
                 </TouchableOpacity>
               </View>
 
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.reviewsScroll}
-              >
-                {/* Review 1 */}
-                <View style={styles.reviewCard}>
-                  <View style={styles.reviewTopRow}>
-                    <View style={[styles.reviewerAvatar, { backgroundColor: '#E0E7FF' }]}>
-                      <Text style={{ fontWeight: '800', color: '#3730A3' }}>A</Text>
-                    </View>
-                    <View style={{ flex: 1, marginLeft: 10 }}>
-                      <Text style={styles.reviewerName}>Amit Verma</Text>
-                      <View style={styles.reviewStarsRow}>
-                        {[1, 2, 3, 4, 5].map((s) => (
-                          <Ionicons key={s} name="star" size={11} color="#F59E0B" />
-                        ))}
-                        <Text style={styles.reviewDateText}> • 2 days ago</Text>
-                      </View>
-                    </View>
-                  </View>
-                  <Text style={styles.reviewBodyText} numberOfLines={3}>
-                    Very professional and on time. AC service done perfectly. Highly recommended!
+              {customerReviews.length === 0 ? (
+                <View style={styles.emptyCardContainer}>
+                  <Ionicons name="star-outline" size={28} color="#94A3B8" />
+                  <Text style={styles.emptyCardTitle}>No Customer Reviews Yet</Text>
+                  <Text style={styles.emptyCardSub}>
+                    Client reviews and ratings from completed service bookings will appear here.
                   </Text>
                 </View>
-
-                {/* Review 2 */}
-                <View style={styles.reviewCard}>
-                  <View style={styles.reviewTopRow}>
-                    <View style={[styles.reviewerAvatar, { backgroundColor: '#FCE7F3' }]}>
-                      <Text style={{ fontWeight: '800', color: '#9D174D' }}>P</Text>
-                    </View>
-                    <View style={{ flex: 1, marginLeft: 10 }}>
-                      <Text style={styles.reviewerName}>Priya Singh</Text>
-                      <View style={styles.reviewStarsRow}>
-                        {[1, 2, 3, 4, 5].map((s) => (
-                          <Ionicons key={s} name="star" size={11} color="#F59E0B" />
-                        ))}
-                        <Text style={styles.reviewDateText}> • 5 days ago</Text>
+              ) : (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.reviewsScroll}
+                >
+                  {customerReviews.map((rev: any, idx: number) => (
+                    <View key={rev._id || idx} style={styles.reviewCard}>
+                      <View style={styles.reviewTopRow}>
+                        <View style={[styles.reviewerAvatar, { backgroundColor: '#E0E7FF' }]}>
+                          <Text style={{ fontWeight: '800', color: '#3730A3' }}>
+                            {(rev.customer?.name || rev.clientName || 'C').charAt(0).toUpperCase()}
+                          </Text>
+                        </View>
+                        <View style={{ flex: 1, marginLeft: 10 }}>
+                          <Text style={styles.reviewerName}>{rev.customer?.name || rev.clientName || 'Verified Client'}</Text>
+                          <View style={styles.reviewStarsRow}>
+                            {[1, 2, 3, 4, 5].map((s) => (
+                              <Ionicons
+                                key={s}
+                                name={s <= (rev.rating || 5) ? 'star' : 'star-outline'}
+                                size={11}
+                                color="#F59E0B"
+                              />
+                            ))}
+                            <Text style={styles.reviewDateText}>
+                              {' • ' + (rev.createdAt ? new Date(rev.createdAt).toLocaleDateString() : 'Recent')}
+                            </Text>
+                          </View>
+                        </View>
                       </View>
+                      <Text style={styles.reviewBodyText} numberOfLines={3}>
+                        {rev.comment || rev.review || 'Completed job satisfactorily.'}
+                      </Text>
                     </View>
-                  </View>
-                  <Text style={styles.reviewBodyText} numberOfLines={3}>
-                    Good work and polite behavior. Will definitely book again.
-                  </Text>
-                </View>
-              </ScrollView>
+                  ))}
+                </ScrollView>
+              )}
             </View>
 
             {/* ── 7. QUICK ACTIONS (4 ITEMS) ── */}
@@ -2479,5 +2470,125 @@ const styles = StyleSheet.create({
     backgroundColor: '#E2E8F0',
     borderWidth: 1.5,
     borderColor: '#A7F3D0'
+  },
+  emptyInquiryCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 4
+  },
+  emptyInquiryTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1E293B',
+    marginTop: 8
+  },
+  emptyInquirySub: {
+    fontSize: 12,
+    color: '#64748B',
+    textAlign: 'center',
+    marginTop: 4
+  },
+  emptyCardContainer: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 4
+  },
+  emptyCardTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1E293B',
+    marginTop: 8
+  },
+  emptyCardSub: {
+    fontSize: 12,
+    color: '#64748B',
+    textAlign: 'center',
+    marginTop: 4
+  },
+  checklistCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1.5,
+    borderColor: '#E6F4F0',
+    marginBottom: 16,
+    shadowColor: '#17212B',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2
+  },
+  checklistHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6
+  },
+  checklistTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center'
+  },
+  checklistTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#17212B'
+  },
+  checklistBadge: {
+    backgroundColor: '#E6F4F0',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6
+  },
+  checklistBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#08765A'
+  },
+  checklistSubtitle: {
+    fontSize: 12,
+    color: '#687583',
+    lineHeight: 16,
+    marginBottom: 12
+  },
+  progressBarTrack: {
+    height: 6,
+    backgroundColor: '#EDF1F3',
+    borderRadius: 3,
+    overflow: 'hidden',
+    marginBottom: 12
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: '#0B8F6A',
+    borderRadius: 3
+  },
+  checklistTasks: {
+    gap: 8
+  },
+  taskItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: '#F8FAFB',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#DDE4E8'
+  },
+  taskText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#17212B'
   }
 });

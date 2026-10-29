@@ -1,14 +1,33 @@
 import crypto from 'crypto';
+import mongoose from 'mongoose';
+import bcrypt from 'bcryptjs';
 import User from '../models/User.js';
 import VendorProfile from '../models/VendorProfile.js';
 import CustomerProfile from '../models/CustomerProfile.js';
+import ServiceCategory from '../models/ServiceCategory.js';
 import Notification from '../models/Notification.js';
-import { generateToken } from '../utils/generateToken.js';
+import Session from '../models/Session.js';
+import OtpChallenge from '../models/OtpChallenge.js';
+import { generateAccessToken, generateRefreshToken, generateToken, REFRESH_SESSION_DAYS } from '../utils/generateToken.js';
 import { logActivity } from '../utils/logActivity.js';
+import { sendOtpSms, normalizeIndianPhone, isValidIndianPhone, hashToken } from '../utils/sms.js';
+import { verifyOtpMatch, generateSecureOtp } from '../utils/otp.js';
 
 export const register = async (req, res, next) => {
   try {
-    const { name, email, password, role, phone, businessName } = req.body;
+    const {
+      name,
+      email,
+      password,
+      role,
+      phone,
+      businessName,
+      category,
+      categories,
+      selectedCategory,
+      selectedCategories,
+      serviceDomainIds
+    } = req.body;
 
     const existingUser = await User.findOne({ email });
     if (existingUser) {
@@ -17,6 +36,72 @@ export const register = async (req, res, next) => {
 
     // Strictly enforce role boundaries: public registration can only create customer or vendor
     const assignedRole = role === 'vendor' ? 'vendor' : 'customer';
+
+    // For vendors, validate and enforce 1 to 3 active service domains BEFORE creating user
+    let initialCategoryIds = [];
+    if (assignedRole === 'vendor') {
+      const rawDomains = serviceDomainIds || categories || selectedCategories || category || selectedCategory;
+      const domainInputList = Array.isArray(rawDomains)
+        ? rawDomains
+        : (rawDomains ? [rawDomains] : []);
+
+      // Filter and deduplicate raw non-empty strings/IDs
+      const rawUniqueStrings = Array.from(
+        new Set(
+          domainInputList
+            .map(item => (typeof item === 'object' && item?._id ? item._id.toString() : String(item || '')).trim())
+            .filter(Boolean)
+        )
+      );
+
+      if (rawUniqueStrings.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please select at least 1 service domain (maximum 3).'
+        });
+      }
+
+      if (rawUniqueStrings.length > 3) {
+        return res.status(400).json({
+          success: false,
+          message: 'A vendor can select a maximum of 3 service domains.'
+        });
+      }
+
+      for (const itemStr of rawUniqueStrings) {
+        if (mongoose.Types.ObjectId.isValid(itemStr)) {
+          const foundCat = await ServiceCategory.findOne({ _id: itemStr, isActive: { $ne: false } });
+          if (foundCat && !initialCategoryIds.some(id => id.toString() === foundCat._id.toString())) {
+            initialCategoryIds.push(foundCat._id);
+          }
+        } else {
+          const foundCat = await ServiceCategory.findOne({
+            isActive: { $ne: false },
+            $or: [
+              { slug: itemStr.toLowerCase() },
+              { name: new RegExp('^' + itemStr + '$', 'i') }
+            ]
+          });
+          if (foundCat && !initialCategoryIds.some(id => id.toString() === foundCat._id.toString())) {
+            initialCategoryIds.push(foundCat._id);
+          }
+        }
+      }
+
+      if (initialCategoryIds.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'None of the selected service domains are valid or currently active. Please select valid domains.'
+        });
+      }
+
+      if (initialCategoryIds.length > 3) {
+        return res.status(400).json({
+          success: false,
+          message: 'A vendor can select a maximum of 3 service domains.'
+        });
+      }
+    }
 
     const user = await User.create({
       name,
@@ -32,8 +117,10 @@ export const register = async (req, res, next) => {
         businessName: businessName || name + ' Services',
         tagline: 'Professional service provider',
         hourlyRate: 50,
-        approvalStatus: 'pending'
+        approvalStatus: 'pending',
+        categories: initialCategoryIds
       });
+
 
       // Notify all admins of the new application
       try {
@@ -85,15 +172,36 @@ export const register = async (req, res, next) => {
 export const login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
+    const rawInput = (email || '').trim();
 
-    const user = await User.findOne({ email }).select('+password');
+    if (!rawInput || !password) {
+      return res.status(400).json({ success: false, message: 'Please provide both email/mobile and password' });
+    }
+
+    // Support both registered Email and 10-digit Indian Mobile Phone
+    const digitsOnly = rawInput.replace(/\D/g, '');
+    let user;
+    if (digitsOnly.length === 10) {
+      user = await User.findOne({
+        phone: { $in: [digitsOnly, `+91${digitsOnly}`, `+91 ${digitsOnly}`, `0${digitsOnly}`] }
+      }).select('+password');
+    } else {
+      user = await User.findOne({ email: rawInput.toLowerCase() }).select('+password');
+    }
+
     if (!user) {
-      return res.status(401).json({ success: false, message: 'Invalid credentials' });
+      return res.status(401).json({
+        success: false,
+        message: 'Account not found. If you registered using Mobile OTP, please log in using the Mobile OTP tab.'
+      });
     }
 
     const isMatch = await user.matchPassword(password);
     if (!isMatch) {
-      return res.status(401).json({ success: false, message: 'Invalid credentials' });
+      return res.status(401).json({
+        success: false,
+        message: 'Incorrect password. If you registered via Mobile OTP, you can log in directly using Mobile OTP.'
+      });
     }
 
     // Strict account status check: suspended/deactivated users cannot log in
@@ -109,25 +217,66 @@ export const login = async (req, res, next) => {
     user.lastLogin = new Date();
     await user.save();
 
-    const token = generateToken(user._id, user.role);
+    // Create Persistent Server Session (90 days)
+    const rawRefreshToken = generateRefreshToken();
+    const refreshTokenHash = hashToken(rawRefreshToken);
+    const sessionToken = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(24).toString('hex');
+    const expiresAt = new Date(Date.now() + REFRESH_SESSION_DAYS * 24 * 60 * 60 * 1000);
+
+    const session = await Session.create({
+      user: user._id,
+      role: user.role,
+      sessionToken,
+      refreshTokenHash,
+      deviceInfo: req.body.deviceInfo || {},
+      expiresAt
+    });
+
+    const token = generateAccessToken(user._id, user.role, session._id);
+
+    // Compute vendor profile and onboarding status if vendor
+    let vendorProfile = null;
+    let onboardingStep = 'completed';
+    if (user.role === 'vendor') {
+      vendorProfile = await VendorProfile.findOne({ user: user._id })
+        .populate('categories')
+        .populate('serviceAreas');
+      if (vendorProfile) {
+        onboardingStep = vendorProfile.onboardingStep || 'profile_pending';
+        if (!vendorProfile.onboardingStep || vendorProfile.onboardingStep === 'profile_pending') {
+          if (vendorProfile.categories && vendorProfile.categories.length > 0 && user.name && user.name !== 'New Contractor') {
+            onboardingStep = 'completed';
+          }
+        }
+      }
+    }
 
     await logActivity({
       userId: user._id,
       role: user.role,
       action: 'USER_LOGIN',
-      details: { email: user.email }
+      details: { email: user.email, sessionId: session._id }
     });
 
     res.status(200).json({
       success: true,
       token,
+      refreshToken: rawRefreshToken,
+      session: {
+        id: session._id,
+        expiresAt: session.expiresAt
+      },
       user: {
         id: user._id,
+        _id: user._id,
         name: user.name,
         email: user.email,
+        phone: user.phone,
         role: user.role,
         avatar: user.avatar
-      }
+      },
+      profile: vendorProfile,
+      onboardingStep
     });
   } catch (error) {
     next(error);
@@ -280,3 +429,472 @@ export const resetPassword = async (req, res, next) => {
     next(error);
   }
 };
+
+/**
+ * ── VENDOR MOBILE OTP (LOGIN & REGISTRATION) ──
+ * Request 6-digit OTP for vendor login or new partner registration.
+ */
+export const sendLoginOtp = async (req, res, next) => {
+  try {
+    const { phone, purpose = 'login' } = req.body;
+    if (!phone) {
+      return res.status(400).json({ success: false, message: 'Please enter your mobile number' });
+    }
+
+    const normalizedPhone = normalizeIndianPhone(phone);
+    if (!isValidIndianPhone(normalizedPhone)) {
+      return res.status(400).json({ success: false, message: 'Please enter a valid 10-digit Indian mobile number' });
+    }
+
+    const isRegister = purpose === 'register' || purpose === 'vendor_register';
+    const otpPurpose = isRegister ? 'vendor_register' : 'vendor_login';
+
+    // Lookup existing vendor with this phone number
+    const existingUser = await User.findOne({
+      phone: { $in: [normalizedPhone, `+91${normalizedPhone}`, `+91 ${normalizedPhone}`, `0${normalizedPhone}`] },
+      role: 'vendor'
+    });
+
+    if (isRegister) {
+      if (existingUser) {
+        return res.status(409).json({
+          success: false,
+          code: 'ALREADY_REGISTERED',
+          message: `An active contractor account is already registered for +91 ${normalizedPhone}. Please log in.`
+        });
+      }
+    } else {
+      if (!existingUser) {
+        return res.status(404).json({
+          success: false,
+          code: 'NOT_REGISTERED',
+          message: `No registered contractor account found for +91 ${normalizedPhone}. Please check your number or register as a new partner.`
+        });
+      }
+
+      if (existingUser.status === 'suspended' || existingUser.isActive === false) {
+        return res.status(403).json({
+          success: false,
+          message: existingUser.suspensionReason
+            ? `Account suspended: ${existingUser.suspensionReason}. Please contact support.`
+            : 'Your contractor account is currently suspended. Please contact support.'
+        });
+      }
+    }
+
+    // Rate Limiting 1: 60-second cooldown
+    const recentChallenge = await OtpChallenge.findOne({
+      phone: normalizedPhone,
+      purpose: otpPurpose,
+      createdAt: { $gt: new Date(Date.now() - 60 * 1000) }
+    }).sort({ createdAt: -1 });
+
+    if (recentChallenge) {
+      const remainingSeconds = Math.ceil((recentChallenge.createdAt.getTime() + 60 * 1000 - Date.now()) / 1000);
+      return res.status(429).json({
+        success: false,
+        message: `Please wait ${remainingSeconds} seconds before requesting a new OTP.`,
+        cooldownSeconds: remainingSeconds
+      });
+    }
+
+    // Rate Limiting 2: max 5 requests per hour
+    const hourlyCount = await OtpChallenge.countDocuments({
+      phone: normalizedPhone,
+      purpose: otpPurpose,
+      createdAt: { $gt: new Date(Date.now() - 60 * 60 * 1000) }
+    });
+
+    if (hourlyCount >= 5) {
+      return res.status(429).json({
+        success: false,
+        message: 'Too many OTP requests for this mobile number. Please try again after 1 hour.'
+      });
+    }
+
+    // Invalidate previous unconsumed OTPs for this phone and purpose
+    await OtpChallenge.updateMany(
+      { phone: normalizedPhone, purpose: otpPurpose, isConsumed: false },
+      { $set: { isConsumed: true, consumedAt: new Date() } }
+    );
+
+    // Generate secure 6-digit OTP
+    const { otp, codeHash } = generateSecureOtp();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+
+    await OtpChallenge.create({
+      phone: normalizedPhone,
+      codeHash,
+      purpose: otpPurpose,
+      expiresAt,
+      ipAddress: req.ip || ''
+    });
+
+    // Send SMS
+    const smsResult = await sendOtpSms({
+      phone: normalizedPhone,
+      otp,
+      purpose: otpPurpose
+    });
+
+    await logActivity({
+      userId: existingUser?._id || null,
+      role: 'vendor',
+      action: isRegister ? 'VENDOR_REGISTER_OTP_REQUESTED' : 'VENDOR_LOGIN_OTP_REQUESTED',
+      details: { phone: `+91 ******${normalizedPhone.slice(-4)}` }
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `6-digit verification code sent to +91 ******${normalizedPhone.slice(-4)}`,
+      phone: normalizedPhone,
+      purpose: otpPurpose,
+      cooldownSeconds: 60,
+      expiresInSeconds: 300,
+      provider: smsResult.provider,
+      ...(smsResult.debugCode ? { debugCode: smsResult.debugCode } : {})
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * ── VERIFY VENDOR MOBILE OTP ──
+ * Verify 6-digit OTP, validate account (or create initial verified registration), and return persistent session tokens.
+ */
+export const verifyLoginOtp = async (req, res, next) => {
+  try {
+    const { phone, otp, deviceInfo } = req.body;
+
+    if (!phone || !otp) {
+      return res.status(400).json({ success: false, message: 'Mobile number and 6-digit OTP are required' });
+    }
+
+    const normalizedPhone = normalizeIndianPhone(phone);
+    const cleanOtp = String(otp).trim();
+
+    if (!/^\d{6}$/.test(cleanOtp)) {
+      return res.status(400).json({ success: false, message: 'Please enter a valid 6-digit verification code' });
+    }
+
+    // Find latest active, unconsumed challenge for this phone (login or register)
+    const challenge = await OtpChallenge.findOne({
+      phone: normalizedPhone,
+      purpose: { $in: ['vendor_login', 'vendor_register'] },
+      isConsumed: false,
+      expiresAt: { $gt: new Date() }
+    }).sort({ createdAt: -1 });
+
+    if (!challenge) {
+      return res.status(400).json({
+        success: false,
+        message: 'The verification code has expired or is invalid. Please request a new OTP.'
+      });
+    }
+
+    if (challenge.attempts >= challenge.maxAttempts) {
+      challenge.isConsumed = true;
+      challenge.consumedAt = new Date();
+      await challenge.save();
+      return res.status(429).json({
+        success: false,
+        message: 'Maximum verification attempts exceeded. Please request a new OTP.'
+      });
+    }
+
+    // Timing-safe verification
+    const isMatch = verifyOtpMatch(cleanOtp, challenge.codeHash);
+    if (!isMatch) {
+      challenge.attempts += 1;
+      await challenge.save();
+      const remainingAttempts = Math.max(0, challenge.maxAttempts - challenge.attempts);
+      return res.status(400).json({
+        success: false,
+        message: remainingAttempts > 0
+          ? `Incorrect verification code. ${remainingAttempts} attempts remaining.`
+          : 'Incorrect verification code. Maximum attempts exceeded, please request a new code.',
+        remainingAttempts
+      });
+    }
+
+    // Consume OTP immediately to prevent reuse
+    challenge.isConsumed = true;
+    challenge.consumedAt = new Date();
+    await challenge.save();
+
+    let user = await User.findOne({
+      phone: { $in: [normalizedPhone, `+91${normalizedPhone}`, `+91 ${normalizedPhone}`, `0${normalizedPhone}`] },
+      role: 'vendor'
+    });
+
+    let isNewUser = false;
+    let vendorProfile = null;
+
+    if (!user) {
+      if (challenge.purpose === 'vendor_register') {
+        // Create initial verified vendor user
+        isNewUser = true;
+        const randomPass = crypto.randomBytes(16).toString('hex');
+        const hashedPassword = await bcrypt.hash(randomPass, 10);
+        user = await User.create({
+          name: 'New Contractor',
+          email: `temp_${normalizedPhone}_${Date.now()}@worklogy.local`,
+          phone: normalizedPhone,
+          role: 'vendor',
+          password: hashedPassword
+        });
+
+        vendorProfile = await VendorProfile.create({
+          user: user._id,
+          businessName: 'My Service Business',
+          onboardingStep: 'profile_pending',
+          categories: []
+        });
+      } else {
+        return res.status(404).json({
+          success: false,
+          code: 'NOT_REGISTERED',
+          message: 'No active contractor profile found for this mobile number.'
+        });
+      }
+    } else {
+      if (user.status === 'suspended' || user.isActive === false) {
+        return res.status(403).json({
+          success: false,
+          message: user.suspensionReason
+            ? `Account suspended: ${user.suspensionReason}. Please contact support.`
+            : 'Your contractor account is currently suspended. Please contact support.'
+        });
+      }
+
+      vendorProfile = await VendorProfile.findOne({ user: user._id }).populate('categories serviceAreas');
+      if (!vendorProfile) {
+        vendorProfile = await VendorProfile.create({
+          user: user._id,
+          businessName: user.name + ' Services',
+          onboardingStep: 'profile_pending',
+          categories: []
+        });
+      }
+    }
+
+    user.lastLogin = new Date();
+    await user.save();
+
+    // Create Persistent Server Session (90 days)
+    const rawRefreshToken = generateRefreshToken();
+    const refreshTokenHash = hashToken(rawRefreshToken);
+    const sessionToken = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(24).toString('hex');
+    const expiresAt = new Date(Date.now() + REFRESH_SESSION_DAYS * 24 * 60 * 60 * 1000);
+
+    const session = await Session.create({
+      user: user._id,
+      role: user.role,
+      sessionToken,
+      refreshTokenHash,
+      deviceInfo: deviceInfo || {},
+      expiresAt
+    });
+
+    // 15-minute Access Token
+    const accessToken = generateAccessToken(user._id, user.role, session._id);
+
+    // Compute Onboarding Step
+    let onboardingStep = vendorProfile.onboardingStep || 'profile_pending';
+    if (!isNewUser && (!vendorProfile.onboardingStep || vendorProfile.onboardingStep === 'profile_pending')) {
+      if (vendorProfile.categories && vendorProfile.categories.length > 0 && user.name && user.name !== 'New Contractor') {
+        onboardingStep = 'completed';
+      }
+    }
+
+    await logActivity({
+      userId: user._id,
+      role: user.role,
+      action: isNewUser ? 'VENDOR_REGISTER_OTP_SUCCESS' : 'VENDOR_LOGIN_OTP_SUCCESS',
+      details: { phone: `+91 ******${normalizedPhone.slice(-4)}`, sessionId: session._id }
+    });
+
+    res.status(200).json({
+      success: true,
+      token: accessToken,
+      refreshToken: rawRefreshToken,
+      session: {
+        id: session._id,
+        expiresAt: session.expiresAt
+      },
+      user: {
+        id: user._id,
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        avatar: user.avatar
+      },
+      profile: vendorProfile,
+      isNewUser,
+      onboardingStep
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * ── REFRESH TOKEN SESSION ──
+ * Concurrency-safe rotating refresh token session renewal.
+ */
+export const refreshTokenSession = async (req, res, next) => {
+  try {
+    const rawRefreshToken = req.body.refreshToken || req.headers['x-refresh-token'];
+
+    if (!rawRefreshToken || typeof rawRefreshToken !== 'string') {
+      return res.status(400).json({
+        success: false,
+        code: 'MISSING_REFRESH_TOKEN',
+        message: 'Refresh token is required'
+      });
+    }
+
+    const tokenHash = hashToken(rawRefreshToken);
+
+    // 1. Search for active session matching this refreshTokenHash
+    let session = await Session.findOne({
+      refreshTokenHash: tokenHash,
+      isActive: true,
+      expiresAt: { $gt: new Date() }
+    });
+
+    // 2. Concurrency Grace Period:
+    // If not found by current hash, check if it was rotated in the last 30 seconds
+    if (!session) {
+      const gracePeriod = new Date(Date.now() - 30 * 1000);
+      session = await Session.findOne({
+        previousRefreshTokenHash: tokenHash,
+        rotatedAt: { $gt: gracePeriod },
+        isActive: true,
+        expiresAt: { $gt: new Date() }
+      });
+    }
+
+    if (!session) {
+      // Check if this was an expired or revoked session
+      const revokedSession = await Session.findOne({
+        $or: [{ refreshTokenHash: tokenHash }, { previousRefreshTokenHash: tokenHash }]
+      });
+
+      if (revokedSession) {
+        return res.status(401).json({
+          success: false,
+          code: 'SESSION_REVOKED',
+          message: 'Your login session has expired or was signed out. Please sign in again.'
+        });
+      }
+
+      return res.status(401).json({
+        success: false,
+        code: 'INVALID_REFRESH_TOKEN',
+        message: 'Invalid session credentials. Please sign in again.'
+      });
+    }
+
+    // Verify user
+    const user = await User.findById(session.user);
+    if (!user || user.status === 'suspended' || user.isActive === false) {
+      session.isActive = false;
+      session.revokedAt = new Date();
+      session.revokedReason = 'account_suspended_or_deleted';
+      await session.save();
+
+      return res.status(403).json({
+        success: false,
+        code: 'ACCOUNT_SUSPENDED',
+        message: 'Account suspended or inaccessible.'
+      });
+    }
+
+    // Rotate refresh token
+    const newRawRefreshToken = generateRefreshToken();
+    const newRefreshTokenHash = hashToken(newRawRefreshToken);
+
+    session.previousRefreshTokenHash = session.refreshTokenHash;
+    session.refreshTokenHash = newRefreshTokenHash;
+    session.rotatedAt = new Date();
+    session.lastUsedAt = new Date();
+    await session.save();
+
+    // Issue new 15-minute Access Token
+    const newAccessToken = generateAccessToken(user._id, user.role, session._id);
+
+    res.status(200).json({
+      success: true,
+      token: newAccessToken,
+      refreshToken: newRawRefreshToken,
+      user: {
+        id: user._id,
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        avatar: user.avatar
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * ── LOGOUT SESSION ──
+ * Explicit session revocation on server.
+ */
+export const logoutSession = async (req, res, next) => {
+  try {
+    const rawRefreshToken = req.body?.refreshToken || req.headers['x-refresh-token'];
+    const { allDevices } = req.body || {};
+
+    let revokedCount = 0;
+
+    // 1. If allDevices is requested and user is authenticated
+    if (allDevices && req.user?._id) {
+      const result = await Session.updateMany(
+        { user: req.user._id, isActive: true },
+        { $set: { isActive: false, revokedAt: new Date(), revokedReason: 'all_devices_logout' } }
+      );
+      revokedCount = result.modifiedCount;
+    } else {
+      // 2. Revoke by refreshToken
+      if (rawRefreshToken) {
+        const tokenHash = hashToken(rawRefreshToken);
+        const result = await Session.updateOne(
+          {
+            $or: [{ refreshTokenHash: tokenHash }, { previousRefreshTokenHash: tokenHash }],
+            isActive: true
+          },
+          { $set: { isActive: false, revokedAt: new Date(), revokedReason: 'user_logout' } }
+        );
+        revokedCount += result.modifiedCount || 0;
+      }
+
+      // 3. Revoke by sessionId attached in req
+      if (req.sessionId) {
+        const result = await Session.updateOne(
+          { _id: req.sessionId, isActive: true },
+          { $set: { isActive: false, revokedAt: new Date(), revokedReason: 'user_logout' } }
+        );
+        revokedCount += result.modifiedCount || 0;
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Logged out and session revoked successfully',
+      revokedSessions: revokedCount
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+

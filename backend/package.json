@@ -6,7 +6,10 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon src/server.js"
+    "dev": "nodemon src/server.js",
+    "use:local": "node ../switch-server.js local",
+    "use:vps": "node ../switch-server.js vps",
+    "check:server": "node ../switch-server.js status"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

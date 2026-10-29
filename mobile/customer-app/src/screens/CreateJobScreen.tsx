@@ -10,10 +10,14 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
-  Modal
+  Modal,
+  Image,
+  Linking
 } from 'react-native';
-import { Ionicons, Feather, MaterialIcons } from '@expo/vector-icons';
+import { Ionicons, Feather } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { api } from '../api/client';
+import { useAuth } from '../hooks/useAuth';
 import { COLORS } from '../theme/colors';
 import { dataSyncService } from '../services/dataSyncService';
 import type { ServiceAddress } from '../types';
@@ -25,6 +29,7 @@ import {
   cleanAdministrative,
   isKnownLocality
 } from '../services/locationService';
+import { CANONICAL_LOCALITIES } from '../constants/zonesData';
 
 interface LocalitySuggestion {
   localityId?: string;
@@ -36,8 +41,66 @@ interface LocalitySuggestion {
   };
 }
 
+const CANONICAL_CATEGORY_SUGGESTIONS: Record<string, string[]> = {
+  'electrical-services': [
+    'Ceiling Fan Installation',
+    'Switchboard Repair',
+    'Wiring & Rewiring',
+    'Light Fixture Fitting',
+    'Inverter & Backup Setup',
+    'Electrical Fault Diagnosis'
+  ],
+  'plumbing-services': [
+    'Pipe Leakage Repair',
+    'Tap & Faucet Replacement',
+    'Bathroom Fittings Installation',
+    'Drainage & Blockage Clearing',
+    'Water Tank Cleaning'
+  ],
+  'ac-hvac-services': [
+    'AC Not Cooling / Low Cooling',
+    'Complete AC Service & Filter Wash',
+    'Gas Leakage & Refilling',
+    'Split AC Installation',
+    'Water Dripping from AC'
+  ],
+  'appliance-repair': [
+    'Washing Machine Repair',
+    'Refrigerator Not Cooling',
+    'Microwave Heating Failure',
+    'RO Water Purifier Service',
+    'Geyser Not Heating Water'
+  ],
+  'carpentry-furniture': [
+    'Door Lock & Handle Repair',
+    'Furniture Assembly / Dismantling',
+    'Wooden Cupboard Hinges Fix',
+    'Window Mesh & Latch Fitting'
+  ],
+  'home-cleaning': [
+    'Full Home Deep Cleaning',
+    'Kitchen Deep Cleaning',
+    'Bathroom Disinfection & Tile Wash',
+    'Sofa & Carpet Shampooing'
+  ],
+  'painting-renovation': [
+    'Full House Interior Painting',
+    'Wall Seepage & Touch-Up Paint',
+    'Waterproofing Treatment',
+    'Texture & Accent Wall'
+  ]
+};
+
 export default function CreateJobScreen({ route, navigation }: any) {
   const { categorySlug, categoryName, subservice, basePrice, title: initialTitle, urgency: initialUrgency } = route.params || {};
+  const { user } = useAuth();
+
+  // Category Selection State
+  const [availableCategories, setAvailableCategories] = useState<any[]>([]);
+  const [selectedCategorySlug, setSelectedCategorySlug] = useState<string>(categorySlug || 'electrical-services');
+  const [selectedCategoryName, setSelectedCategoryName] = useState<string>(categoryName || 'Electrical Services');
+  const [categorySearchQuery, setCategorySearchQuery] = useState('');
+  const [showAllCategoriesModal, setShowAllCategoriesModal] = useState(false);
 
   // Form Fields
   const [title, setTitle] = useState(initialTitle || (subservice ? `${subservice} Service` : ''));
@@ -45,6 +108,10 @@ export default function CreateJobScreen({ route, navigation }: any) {
   const [urgency, setUrgency] = useState<'normal' | 'emergency'>(
     initialUrgency === 'high' || initialUrgency === 'emergency' ? 'emergency' : 'normal'
   );
+
+  // Optional Photo Attachments State
+  const [attachedPhotos, setAttachedPhotos] = useState<{ uri: string; name?: string }[]>([]);
+  const [pickingPhoto, setPickingPhoto] = useState(false);
 
   // Pricing Preference: Mode B ("Request Quotes") is the recommended default
   const [budgetType, setBudgetType] = useState<'quote' | 'fixed'>('quote');
@@ -59,6 +126,10 @@ export default function CreateJobScreen({ route, navigation }: any) {
   const [pincode, setPincode] = useState('');
   const [zoneId, setZoneId] = useState<string | null>(null);
 
+  // Save Address for Future Bookings State
+  const [saveAddressForFuture, setSaveAddressForFuture] = useState(true);
+  const [saveAddressLabel, setSaveAddressLabel] = useState<'Home' | 'Work' | 'Other'>('Home');
+
   // GPS & Coordinates Metadata
   const [coordinates, setCoordinates] = useState<{ lat: number; lng: number } | null>(null);
   const [locationSource, setLocationSource] = useState<'gps' | 'manual' | 'saved_address'>('manual');
@@ -68,17 +139,6 @@ export default function CreateJobScreen({ route, navigation }: any) {
   const [savedAddresses, setSavedAddresses] = useState<ServiceAddress[]>([]);
   const [loadingAddresses, setLoadingAddresses] = useState(false);
   const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);
-
-  // Quick Add Address Modal State
-  const [showQuickAddModal, setShowQuickAddModal] = useState(false);
-  const [quickLabel, setQuickLabel] = useState('Home');
-  const [quickHouse, setQuickHouse] = useState('');
-  const [quickStreet, setQuickStreet] = useState('');
-  const [quickLocality, setQuickLocality] = useState('');
-  const [quickCity, setQuickCity] = useState('Lucknow');
-  const [quickPincode, setQuickPincode] = useState('226010');
-  const [quickState, setQuickState] = useState('Uttar Pradesh');
-  const [savingQuickAddress, setSavingQuickAddress] = useState(false);
 
   // Status & Autocomplete State
   const [submitting, setSubmitting] = useState(false);
@@ -101,6 +161,34 @@ export default function CreateJobScreen({ route, navigation }: any) {
       }
     };
   }, []);
+
+  // Fetch active service categories
+  useEffect(() => {
+    let isMounted = true;
+    api.categories
+      .getAll()
+      .then((res) => {
+        if (isMounted && res?.categories && res.categories.length > 0) {
+          setAvailableCategories(res.categories);
+          if (!categorySlug) {
+            const defaultCat = res.categories.find((c: any) => c.slug === 'electrical-services') || res.categories[0];
+            if (defaultCat) {
+              setSelectedCategorySlug(defaultCat.slug);
+              setSelectedCategoryName(defaultCat.name);
+            }
+          } else {
+            const matched = res.categories.find((c: any) => c.slug === categorySlug);
+            if (matched) {
+              setSelectedCategoryName(matched.name);
+            }
+          }
+        }
+      })
+      .catch(() => {});
+    return () => {
+      isMounted = false;
+    };
+  }, [categorySlug]);
 
   // Intercept back actions when form has unsaved edits
   useEffect(() => {
@@ -146,7 +234,7 @@ export default function CreateJobScreen({ route, navigation }: any) {
       const res = await api.customer.getAddresses();
       if (res?.addresses && Array.isArray(res.addresses) && res.addresses.length > 0) {
         setSavedAddresses(res.addresses);
-        // Preselect active default saved address, or first address ("jo active rhe wo aaye")
+        // Preselect active default saved address, or first address
         const activeAddr = res.addresses.find((a) => a.isDefault) || res.addresses[0];
         if (activeAddr) {
           applySavedAddress(activeAddr);
@@ -189,6 +277,7 @@ export default function CreateJobScreen({ route, navigation }: any) {
 
   const applySavedAddress = (addr: ServiceAddress) => {
     setSelectedAddressId(addr._id || null);
+    setSaveAddressForFuture(false); // already saved!
     setHouseNumber(addr.houseNumber || '');
     setStreetAddress(addr.street || '');
     setLocality(addr.locality || addr.landmark || '');
@@ -196,7 +285,7 @@ export default function CreateJobScreen({ route, navigation }: any) {
     setStateName(addr.state || 'Uttar Pradesh');
     setPincode(addr.zipCode || addr.pincode || '');
 
-    // Set coordinates only if valid and non-zero (never fabricate coordinates)
+    // Set coordinates only if valid and non-zero
     if (addr.coordinates && (Number(addr.coordinates.lat) !== 0 || Number(addr.coordinates.lng) !== 0)) {
       setCoordinates({
         lat: Number(addr.coordinates.lat),
@@ -211,69 +300,60 @@ export default function CreateJobScreen({ route, navigation }: any) {
     }
   };
 
-  const handleSaveQuickAddress = async () => {
-    if (!quickStreet.trim() || !quickCity.trim() || !quickPincode.trim()) {
-      Alert.alert('Required Fields', 'Street/Colony, City, and PIN code are required to save an address.');
+  const handlePickPhotos = async () => {
+    if (attachedPhotos.length >= 4) {
+      Alert.alert('Limit Reached', 'You can attach up to 4 photos per service request.');
       return;
     }
-
     try {
-      setSavingQuickAddress(true);
-      const payload: Partial<ServiceAddress> = {
-        label: quickLabel,
-        houseNumber: quickHouse.trim(),
-        street: quickStreet.trim(),
-        locality: quickLocality.trim(),
-        landmark: quickLocality.trim(),
-        city: quickCity.trim(),
-        state: quickState.trim() || 'Uttar Pradesh',
-        zipCode: quickPincode.trim(),
-        isDefault: savedAddresses.length === 0
-      };
-
-      const res = await api.customer.addAddress(payload);
-      let updatedList = savedAddresses;
-      if (res?.addresses && Array.isArray(res.addresses)) {
-        updatedList = res.addresses;
-        setSavedAddresses(res.addresses);
-      } else {
-        const fresh = await api.customer.getAddresses();
-        if (fresh?.addresses) {
-          updatedList = fresh.addresses;
-          setSavedAddresses(fresh.addresses);
-        }
+      setPickingPhoto(true);
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert(
+          'Photo Access Needed',
+          'Please allow access to your photos to attach images of the problem.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() }
+          ]
+        );
+        return;
       }
 
-      // Automatically select and apply the newly added address
-      const newlyAdded = updatedList[updatedList.length - 1];
-      if (newlyAdded) {
-        applySavedAddress(newlyAdded);
-      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsMultipleSelection: true,
+        selectionLimit: 4 - attachedPhotos.length,
+        quality: 0.75
+      });
 
-      setShowQuickAddModal(false);
-      setQuickHouse('');
-      setQuickStreet('');
-      setQuickLocality('');
-      setQuickPincode('226010');
-      Alert.alert('Address Saved 🎉', `"${quickLabel}" address has been saved and selected for this service request.`);
-    } catch (err: any) {
-      Alert.alert('Failed to Save', err.message || 'Could not save address. Please try again.');
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const validAssets = result.assets.filter((a) => {
+          if (a.fileSize && a.fileSize > 5 * 1024 * 1024) {
+            Alert.alert('File Too Large', 'Please select images under 5 MB each.');
+            return false;
+          }
+          return true;
+        });
+        setAttachedPhotos((prev) => [...prev, ...validAssets.map((a) => ({ uri: a.uri }))].slice(0, 4));
+      }
+    } catch {
+      Alert.alert('Notice', 'Could not open photo library.');
     } finally {
-      setSavingQuickAddress(false);
+      setPickingPhoto(false);
     }
   };
 
-  /**
-   * Auto-Detects GPS coordinates and reverse geocodes into separated address fields
-   * Handles permission denial, disabled services, timeouts, and strips plus codes
-   */
+  const handleRemovePhoto = (index: number) => {
+    setAttachedPhotos((prev) => prev.filter((_, idx) => idx !== index));
+  };
+
   const handleDetectLocation = async () => {
     const currentSeq = ++gpsSeqRef.current;
     try {
       setDetectingLocation(true);
       const res = await detectGpsLocation();
 
-      // Discard outdated async result if a newer request was dispatched
       if (currentSeq !== gpsSeqRef.current) return;
 
       if (!res.success || !res.location) {
@@ -300,7 +380,6 @@ export default function CreateJobScreen({ route, navigation }: any) {
 
       const loc = res.location;
 
-      // Populate separated fields cleanly — never allow Plus Codes or Divisions
       if (loc.street && !isPlusCode(loc.street) && !isDivision(loc.street)) {
         setStreetAddress(loc.street);
       }
@@ -320,36 +399,23 @@ export default function CreateJobScreen({ route, navigation }: any) {
       if (loc.coordinates) {
         setCoordinates(loc.coordinates);
         setLocationSource('gps');
-        setAccuracyMeters(loc.accuracyMeters ?? null);
       }
-
-      // If accuracy reading is very imprecise (> 500m), advise the customer
-      if (loc.accuracyMeters && loc.accuracyMeters > 500) {
-        Alert.alert(
-          'Approximate Location (±' + loc.accuracyMeters + 'm)',
-          'Your device returned an approximate location reading. Please verify your locality and building/street number before submitting.',
-          [{ text: 'Review Address', style: 'default' }]
-        );
+      if (loc.accuracyMeters != null) {
+        setAccuracyMeters(loc.accuracyMeters);
       }
+      setSelectedAddressId(null);
+      setSaveAddressForFuture(true);
     } catch (err: any) {
-      Alert.alert('Location Error', err?.message || 'Could not detect your GPS location automatically.');
+      Alert.alert('GPS Notice', err.message || 'Failed to detect GPS location. You can enter your address manually.');
     } finally {
-      setDetectingLocation(false);
+      if (currentSeq === gpsSeqRef.current) {
+        setDetectingLocation(false);
+      }
     }
   };
 
-  /**
-   * Debounced Locality Search / Autocomplete via Backend Zone & Locality API
-   */
   const handleLocalityChange = (text: string) => {
-    // If user enters an administrative division, clean it
-    let cleanedText = text;
-    if (isDivision(text)) {
-      cleanedText = cleanAdministrative(text);
-    }
-    setLocality(cleanedText);
-
-    // If user modifies locality text after GPS auto-detect, switch source to manual
+    setLocality(text);
     if (locationSource === 'gps') {
       setLocationSource('manual');
     }
@@ -358,48 +424,50 @@ export default function CreateJobScreen({ route, navigation }: any) {
       clearTimeout(searchDebounceRef.current);
     }
 
-    const query = cleanedText.trim();
-    if (query.length < 2) {
+    const trimmed = text.trim();
+    if (trimmed.length < 2) {
       setLocalitySuggestions([]);
       setShowSuggestions(false);
       return;
     }
 
-    searchDebounceRef.current = setTimeout(async () => {
-      const seq = ++searchSeqRef.current;
+    const currentSeq = ++searchSeqRef.current;
+    searchDebounceRef.current = setTimeout(() => {
       try {
         setLoadingSuggestions(true);
-        const res = await api.zones.getLocalities({ search: query });
-        if (seq === searchSeqRef.current) {
-          if (res?.localities && res.localities.length > 0) {
-            setLocalitySuggestions(res.localities.slice(0, 6));
-            setShowSuggestions(true);
-          } else {
-            setLocalitySuggestions([]);
-            setShowSuggestions(false);
-          }
-        }
+        const lower = trimmed.toLowerCase();
+        const matches: LocalitySuggestion[] = CANONICAL_LOCALITIES.filter(
+          (loc) =>
+            loc.name.toLowerCase().includes(lower) ||
+            loc.city.toLowerCase().includes(lower)
+        )
+          .slice(0, 8)
+          .map((loc) => ({
+            localityId: loc.localityId,
+            name: loc.name,
+            zoneId: loc.zoneId,
+            coordinates: loc.coordinates
+          }));
+
+        if (currentSeq !== searchSeqRef.current) return;
+        setLocalitySuggestions(matches);
+        setShowSuggestions(matches.length > 0);
       } catch {
-        if (seq === searchSeqRef.current) {
+        if (currentSeq === searchSeqRef.current) {
           setLocalitySuggestions([]);
           setShowSuggestions(false);
         }
       } finally {
-        if (seq === searchSeqRef.current) {
+        if (currentSeq === searchSeqRef.current) {
           setLoadingSuggestions(false);
         }
       }
-    }, 250);
+    }, 200);
   };
 
   const handleSelectLocality = (item: LocalitySuggestion) => {
     setLocality(item.name);
-    if (item.zoneId) {
-      setZoneId(item.zoneId);
-    }
-    if (!city) {
-      setCity('Lucknow');
-    }
+    if (item.zoneId) setZoneId(item.zoneId);
     if (item.coordinates && (item.coordinates.lat || item.coordinates.lng)) {
       setCoordinates(item.coordinates);
       setLocationSource('manual');
@@ -417,6 +485,16 @@ export default function CreateJobScreen({ route, navigation }: any) {
     }
   };
 
+  const currentCategoryObj = availableCategories.find((c) => c.slug === selectedCategorySlug);
+  const currentCategorySuggestions =
+    currentCategoryObj?.subcategories?.length > 0
+      ? currentCategoryObj.subcategories
+      : CANONICAL_CATEGORY_SUGGESTIONS[selectedCategorySlug] || [];
+
+  const filteredCategories = availableCategories.filter((cat: any) =>
+    (cat.name || '').toLowerCase().includes(categorySearchQuery.toLowerCase())
+  );
+
   /**
    * Submit Job with Optional Budget or Quote Request
    */
@@ -425,12 +503,12 @@ export default function CreateJobScreen({ route, navigation }: any) {
 
     // Validate Required Fields
     if (!title.trim() || title.trim().length < 3) {
-      Alert.alert('Required Information', 'Please provide a descriptive service title (at least 3 characters).');
+      Alert.alert('Service Needed', 'Please provide or select a service title (e.g. Ceiling fan installation or AC not cooling).');
       return;
     }
 
-    if (!description.trim() || description.trim().length < 10) {
-      Alert.alert('Required Information', 'Please describe the problem or requirements in detail (at least 10 characters).');
+    if (!description.trim() || description.trim().length < 5) {
+      Alert.alert('Describe the Problem', 'Please briefly describe what needs fixing or installing (at least 5 characters).');
       return;
     }
 
@@ -441,12 +519,11 @@ export default function CreateJobScreen({ route, navigation }: any) {
     if (isDivision(finalLocality)) {
       Alert.alert(
         'Invalid Locality',
-        'An administrative division (e.g. "Lucknow Division") cannot be used as a locality. Please specify your sector, colony, or neighborhood (e.g. Kamalabad Barhauli, Gomti Nagar).'
+        'Please specify your neighborhood or area (e.g. Kamalabad Barhauli, Gomti Nagar).'
       );
       return;
     }
 
-    // Automatic swap detection: if user put a canonical locality in City (e.g. "Gomti Nagar")
     if (isKnownLocality(finalCity)) {
       if (!finalLocality || finalLocality.toLowerCase() === 'lucknow') {
         finalLocality = finalCity;
@@ -457,12 +534,12 @@ export default function CreateJobScreen({ route, navigation }: any) {
     }
 
     if (!finalCity || finalCity.length < 2) {
-      Alert.alert('Required Information', 'City is required for technician dispatch.');
+      Alert.alert('City Required', 'Please enter your city for service dispatch.');
       return;
     }
 
-    if (!streetAddress.trim() && !finalLocality) {
-      Alert.alert('Required Information', 'Please provide your street address or locality so nearby professionals know the service area.');
+    if (!finalLocality && !streetAddress.trim()) {
+      Alert.alert('Area / Locality Required', 'Please specify your area or locality so nearby professionals know where to go.');
       return;
     }
 
@@ -477,7 +554,7 @@ export default function CreateJobScreen({ route, navigation }: any) {
     if (budgetType === 'fixed' && budgetAmount.trim()) {
       const num = Number(budgetAmount.trim());
       if (isNaN(num) || num <= 0) {
-        Alert.alert('Invalid Budget', 'Please enter a valid positive budget amount in ₹, or switch to "Request Quotes".');
+        Alert.alert('Invalid Budget', 'Please enter a valid positive budget amount in ₹, or switch to "Get Quotes".');
         return;
       }
       if (num > 1000000) {
@@ -489,11 +566,23 @@ export default function CreateJobScreen({ route, navigation }: any) {
         amount: Math.round(num)
       };
     } else {
-      // Default & Mode B: Request Quotes (no mandatory price)
       budgetPayload = {
         type: 'quote',
         amount: 0
       };
+    }
+
+    // Validate Authentication
+    if (!user?._id) {
+      Alert.alert(
+        'Sign In Required',
+        'Please sign in to your customer account to submit a service request.',
+        [
+          { text: 'Sign In', onPress: () => navigation.navigate('Login') },
+          { text: 'Cancel', style: 'cancel' }
+        ]
+      );
+      return;
     }
 
     try {
@@ -501,7 +590,7 @@ export default function CreateJobScreen({ route, navigation }: any) {
       setSubmitting(true);
 
       const selectedSavedAddress = savedAddresses.find((a) => a._id === selectedAddressId);
-      const chosenLabel = selectedSavedAddress?.label || 'Service Location';
+      const chosenLabel = selectedSavedAddress?.label || saveAddressLabel || 'Home';
 
       const assembledAddress = [
         houseNumber.trim(),
@@ -536,30 +625,52 @@ export default function CreateJobScreen({ route, navigation }: any) {
       const res = await api.jobs.createJob({
         title: title.trim(),
         description: description.trim(),
-        category: categorySlug || 'electrician',
+        category: selectedCategorySlug || categorySlug || 'electrical-services',
         subcategory: subservice || undefined,
         urgency: urgency === 'emergency' ? 'urgent' : 'medium',
         budget: budgetPayload,
-        location: locationPayload
+        location: locationPayload,
+        images: attachedPhotos.map((p) => p.uri)
       });
+
+      // Save Address for Future Use if explicitly checked and not already a saved address
+      if (saveAddressForFuture && !selectedAddressId) {
+        try {
+          await api.customer.addAddress({
+            label: saveAddressLabel,
+            houseNumber: houseNumber.trim(),
+            street: streetAddress.trim() || finalLocality,
+            locality: finalLocality,
+            city: finalCity,
+            state: stateName.trim() || 'Uttar Pradesh',
+            zipCode: pincode.trim() || '226010',
+            coordinates: coordinates || { lat: 0, lng: 0 },
+            isDefault: savedAddresses.length === 0
+          });
+          dataSyncService.notify('PROFILE_CHANGED');
+        } catch (addrErr) {
+          console.warn('Address save notice:', addrErr);
+        }
+      }
 
       // Synchronize affected queries across all screens
       dataSyncService.notify('BOOKINGS_CHANGED', res);
 
-      const pricingDesc =
-        budgetPayload.type === 'fixed' && budgetPayload.amount > 0
-          ? `Fixed Budget: ₹${budgetPayload.amount.toLocaleString('en-IN')}`
-          : 'Request Quotes (Vendors will submit competitive quotes)';
+      const createdJobId = (res as any)?.job?._id || (res as any)?.job?.id || (res as any)?._id;
 
       Alert.alert(
-        'Service Request Created 🎉',
-        `Your request has been broadcast to verified local professionals.\n\n📍 Location: ${finalLocality ? finalLocality + ', ' : ''}${finalCity}\n💰 Pricing: ${pricingDesc}`,
+        'Service Request Posted! 🎉',
+        `Your request has been broadcast to verified local professionals.\n\n📍 Location: ${finalLocality ? finalLocality + ', ' : ''}${finalCity}\n💰 Preference: ${
+          budgetPayload.type === 'fixed' ? `Fixed ₹${budgetPayload.amount}` : 'Compare Quotes'
+        }`,
         [
           {
-            text: 'View My Jobs',
+            text: 'View Request Details',
             onPress: () => {
-              if (navigation.replace) {
-                navigation.replace('MyJobsTab');
+              if (createdJobId && navigation.replace) {
+                navigation.replace('JobDetail', { jobId: createdJobId });
+              } else if (createdJobId) {
+                navigation.navigate('JobDetail', { jobId: createdJobId });
               } else {
                 navigation.navigate('MyJobsTab');
               }
@@ -568,6 +679,17 @@ export default function CreateJobScreen({ route, navigation }: any) {
         ]
       );
     } catch (err: any) {
+      if (err?.isAuthError || err?.isTokenMissing || err?.isSessionExpired || err?.status === 401) {
+        Alert.alert(
+          'Sign In Required',
+          'Your session has expired or you are not signed in. Please sign in to submit your request.',
+          [
+            { text: 'Sign In', onPress: () => navigation.navigate('Login') },
+            { text: 'Cancel', style: 'cancel' }
+          ]
+        );
+        return;
+      }
       Alert.alert('Submission Error', err.message || 'Failed to submit service request. Please check your connection.');
     } finally {
       isSubmittingRef.current = false;
@@ -584,168 +706,347 @@ export default function CreateJobScreen({ route, navigation }: any) {
         style={styles.container}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
-        bounces={false}
-        alwaysBounceVertical={false}
-        overScrollMode="never"
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.form}>
-          {/* Service Title */}
-          <View style={styles.titleRow}>
-            <Text style={styles.label}>Service Title *</Text>
-            {categoryName && (
-              <View style={styles.categoryBadgeInline}>
-                <Ionicons name="construct" size={11} color={COLORS.primary} />
-                <Text style={styles.categoryBadgeInlineText}>{categoryName}</Text>
+          {/* ========================================================================= */}
+          {/* STEP 1: WHAT SERVICE DO YOU NEED?                                          */}
+          {/* ========================================================================= */}
+          <View style={styles.stepSection}>
+            <View style={styles.stepHeaderRow}>
+              <View style={styles.stepNumberBadge}>
+                <Text style={styles.stepNumberText}>1</Text>
               </View>
-            )}
-          </View>
-          <TextInput
-            style={styles.input}
-            placeholder="e.g. Ceiling Fan Installation / AC Not Cooling"
-            placeholderTextColor={COLORS.textMuted}
-            value={title}
-            onChangeText={setTitle}
-          />
-
-          {/* Description */}
-          <Text style={styles.label}>Problem Description & Requirements *</Text>
-          <TextInput
-            style={[styles.input, styles.textArea]}
-            placeholder="Describe symptoms, noise, model number, room accessibility..."
-            placeholderTextColor={COLORS.textMuted}
-            multiline
-            numberOfLines={3}
-            value={description}
-            onChangeText={setDescription}
-          />
-
-          {/* Urgency & Timeline */}
-          <Text style={styles.label}>Urgency & Timeline</Text>
-          <View style={styles.row}>
-            <TouchableOpacity
-              style={[styles.toggleBtn, urgency === 'normal' && styles.toggleBtnActive]}
-              onPress={() => setUrgency('normal')}
-              activeOpacity={0.7}
-            >
-              <Ionicons
-                name="calendar-outline"
-                size={15}
-                color={urgency === 'normal' ? COLORS.primary : COLORS.textSecondary}
-                style={{ marginRight: 6 }}
-              />
-              <Text style={[styles.toggleText, urgency === 'normal' && styles.toggleTextActive]}>
-                Standard Schedule
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.toggleBtn, urgency === 'emergency' && styles.emergencyToggleActive]}
-              onPress={() => setUrgency('emergency')}
-              activeOpacity={0.7}
-            >
-              <Ionicons
-                name="flash"
-                size={15}
-                color={urgency === 'emergency' ? '#EF4444' : COLORS.textSecondary}
-                style={{ marginRight: 6 }}
-              />
-              <Text style={[styles.toggleText, urgency === 'emergency' && styles.emergencyTextActive]}>
-                Urgent (Today)
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Pricing Preference: Mode B (Request Quotes) vs Mode A (Fixed Budget) */}
-          <Text style={styles.label}>Pricing Preference</Text>
-          <View style={styles.row}>
-            <TouchableOpacity
-              style={[styles.toggleBtn, budgetType === 'quote' && styles.toggleBtnActive]}
-              onPress={() => setBudgetType('quote')}
-              activeOpacity={0.7}
-            >
-              <Ionicons
-                name="chatbubble-ellipses-outline"
-                size={14}
-                color={budgetType === 'quote' ? COLORS.primary : COLORS.textSecondary}
-                style={{ marginRight: 6 }}
-              />
-              <Text style={[styles.toggleText, budgetType === 'quote' && styles.toggleTextActive]}>
-                Request Quotes
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.toggleBtn, budgetType === 'fixed' && styles.toggleBtnActive]}
-              onPress={() => setBudgetType('fixed')}
-              activeOpacity={0.7}
-            >
-              <Ionicons
-                name="pricetag-outline"
-                size={14}
-                color={budgetType === 'fixed' ? COLORS.primary : COLORS.textSecondary}
-                style={{ marginRight: 6 }}
-              />
-              <Text style={[styles.toggleText, budgetType === 'fixed' && styles.toggleTextActive]}>
-                Fixed Budget (₹)
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Mode B Info Box */}
-          {budgetType === 'quote' ? (
-            <View style={styles.quoteExplainerBox}>
-              <Ionicons name="information-circle-outline" size={17} color={COLORS.primary} style={{ marginTop: 1 }} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.quoteExplainerTitle}>Request Quotes from Verified Experts</Text>
-                <Text style={styles.quoteExplainerText}>
-                  Let interested professionals inspect your requirements and submit their best quotations. You can compare estimates before hiring.
-                </Text>
+              <View>
+                <Text style={styles.stepTitle}>What service do you need?</Text>
+                <Text style={styles.stepSubtitle}>Select your category and task</Text>
               </View>
             </View>
-          ) : (
-            /* Mode A: Optional Budget Input */
-            <View style={{ marginTop: 6 }}>
-              <View style={styles.budgetInputContainer}>
-                <Text style={styles.currencyPrefix}>₹</Text>
-                <TextInput
-                  style={styles.budgetInput}
-                  keyboardType="numeric"
-                  value={budgetAmount}
-                  onChangeText={setBudgetAmount}
-                  placeholder="e.g. 500 (or leave blank to request quotes)"
-                  placeholderTextColor={COLORS.textMuted}
-                />
-              </View>
-              <Text style={styles.budgetHint}>
-                Optional. Leave blank to let technicians offer their own quotes.
-              </Text>
-            </View>
-          )}
 
-          {/* Location & Address Section */}
-          <View style={styles.savedAddressSection}>
-            {/* Choose Saved Address Chips (if customer has saved addresses) */}
-            {savedAddresses.length > 0 && (
-              <View style={styles.savedSelectorBox}>
-                <View style={styles.savedSelectorHeader}>
-                  <View style={styles.savedSelectorTitleRow}>
-                    <Ionicons name="bookmark" size={13} color={COLORS.primary} />
-                    <Text style={styles.savedSelectorTitle}>Choose Saved Address</Text>
-                  </View>
+            {/* Category Search Input */}
+            <View style={styles.searchCategoryBox}>
+              <Ionicons name="search" size={16} color={COLORS.textSecondary} style={{ marginRight: 6 }} />
+              <TextInput
+                style={styles.searchCategoryInput}
+                placeholder="Search 30+ service categories (e.g. Electrical, AC, Plumbing...)"
+                placeholderTextColor={COLORS.textMuted}
+                value={categorySearchQuery}
+                onChangeText={setCategorySearchQuery}
+              />
+              {categorySearchQuery.length > 0 && (
+                <TouchableOpacity onPress={() => setCategorySearchQuery('')}>
+                  <Ionicons name="close-circle" size={16} color={COLORS.textMuted} />
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {/* Active Category Display & Chips */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.categoryScroll}
+              contentContainerStyle={styles.categoryScrollContent}
+            >
+              {(categorySearchQuery ? filteredCategories : availableCategories).slice(0, 12).map((cat: any) => {
+                const isSelected = selectedCategorySlug === cat.slug;
+                return (
                   <TouchableOpacity
-                    style={styles.savedSelectorManageLink}
+                    key={cat._id || cat.slug}
+                    style={[styles.categoryChip, isSelected && styles.categoryChipActive]}
                     onPress={() => {
-                      if (navigation.navigate) {
-                        navigation.navigate('ProfileTab');
-                      }
+                      setSelectedCategorySlug(cat.slug);
+                      setSelectedCategoryName(cat.name);
                     }}
                     activeOpacity={0.7}
                   >
-                    <Ionicons name="settings-outline" size={12} color="#64748B" />
-                    <Text style={styles.savedSelectorManageText}>Manage in Profile</Text>
+                    <Text style={[styles.categoryChipText, isSelected && styles.categoryChipTextActive]}>
+                      {cat.name}
+                    </Text>
+                    {isSelected && <Ionicons name="checkmark-circle" size={13} color={COLORS.primary} style={{ marginLeft: 4 }} />}
                   </TouchableOpacity>
-                </View>
+                );
+              })}
 
+              {availableCategories.length > 12 && (
+                <TouchableOpacity
+                  style={styles.allCategoriesPill}
+                  onPress={() => setShowAllCategoriesModal(true)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.allCategoriesPillText}>View All ({availableCategories.length}) ›</Text>
+                </TouchableOpacity>
+              )}
+            </ScrollView>
+
+            {/* Relevant Suggestions for Selected Category */}
+            {currentCategorySuggestions.length > 0 && (
+              <View style={styles.suggestionsContainerBox}>
+                <Text style={styles.suggestionsTitle}>Popular Tasks in {selectedCategoryName}:</Text>
+                <View style={styles.suggestionsPillsWrap}>
+                  {currentCategorySuggestions.map((sug, idx) => {
+                    const isSelectedSug = title === sug;
+                    return (
+                      <TouchableOpacity
+                        key={idx}
+                        style={[styles.taskSuggestionPill, isSelectedSug && styles.taskSuggestionPillActive]}
+                        onPress={() => setTitle(sug)}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={[styles.taskSuggestionText, isSelectedSug && styles.taskSuggestionTextActive]}>
+                          {sug}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            )}
+          </View>
+
+          {/* ========================================================================= */}
+          {/* STEP 2: DESCRIBE THE PROBLEM                                               */}
+          {/* ========================================================================= */}
+          <View style={styles.stepSection}>
+            <View style={styles.stepHeaderRow}>
+              <View style={styles.stepNumberBadge}>
+                <Text style={styles.stepNumberText}>2</Text>
+              </View>
+              <View>
+                <Text style={styles.stepTitle}>Describe the problem</Text>
+                <Text style={styles.stepSubtitle}>Tell us what needs fixing or installing</Text>
+              </View>
+            </View>
+
+            <Text style={styles.fieldLabel}>Service Needed *</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="e.g., Ceiling fan installation or AC not cooling"
+              placeholderTextColor={COLORS.textMuted}
+              value={title}
+              onChangeText={setTitle}
+            />
+
+            <Text style={styles.fieldLabel}>Describe the problem *</Text>
+            <TextInput
+              style={[styles.input, styles.textArea]}
+              placeholder="Tell us what needs fixing, what is wrong, or what you want installed."
+              placeholderTextColor={COLORS.textMuted}
+              multiline
+              numberOfLines={3}
+              value={description}
+              onChangeText={setDescription}
+            />
+
+            {/* Photos Attachment (Optional) */}
+            <View style={styles.photoSection}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <Text style={styles.fieldLabel}>Add Photos (Optional)</Text>
+                <Text style={styles.photoCountText}>{attachedPhotos.length}/4 photos</Text>
+              </View>
+
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                {attachedPhotos.map((photo, idx) => (
+                  <View key={idx} style={styles.photoThumbWrapper}>
+                    <Image source={{ uri: photo.uri }} style={styles.photoThumb} />
+                    <TouchableOpacity
+                      style={styles.removePhotoBtn}
+                      onPress={() => handleRemovePhoto(idx)}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="close" size={12} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+
+                {attachedPhotos.length < 4 && (
+                  <TouchableOpacity
+                    style={styles.addPhotoBtn}
+                    onPress={handlePickPhotos}
+                    disabled={pickingPhoto}
+                    activeOpacity={0.7}
+                  >
+                    {pickingPhoto ? (
+                      <ActivityIndicator size="small" color={COLORS.primary} />
+                    ) : (
+                      <>
+                        <Ionicons name="camera-outline" size={20} color={COLORS.primary} />
+                        <Text style={styles.addPhotoBtnText}>Add Photo</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                )}
+              </ScrollView>
+            </View>
+          </View>
+
+          {/* ========================================================================= */}
+          {/* STEP 3: CHOOSE WHEN YOU NEED THE SERVICE                                  */}
+          {/* ========================================================================= */}
+          <View style={styles.stepSection}>
+            <View style={styles.stepHeaderRow}>
+              <View style={styles.stepNumberBadge}>
+                <Text style={styles.stepNumberText}>3</Text>
+              </View>
+              <View>
+                <Text style={styles.stepTitle}>Choose when you need service</Text>
+                <Text style={styles.stepSubtitle}>Standard scheduled or urgent dispatch</Text>
+              </View>
+            </View>
+
+            <View style={styles.row}>
+              <TouchableOpacity
+                style={[styles.toggleBtn, urgency === 'normal' && styles.toggleBtnActive]}
+                onPress={() => setUrgency('normal')}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name="calendar-outline"
+                  size={16}
+                  color={urgency === 'normal' ? COLORS.primary : COLORS.textSecondary}
+                  style={{ marginRight: 6 }}
+                />
+                <Text style={[styles.toggleText, urgency === 'normal' && styles.toggleTextActive]}>
+                  Standard Schedule
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.toggleBtn, urgency === 'emergency' && styles.emergencyToggleActive]}
+                onPress={() => setUrgency('emergency')}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name="flash"
+                  size={16}
+                  color={urgency === 'emergency' ? '#EF4444' : COLORS.textSecondary}
+                  style={{ marginRight: 6 }}
+                />
+                <Text style={[styles.toggleText, urgency === 'emergency' && styles.emergencyTextActive]}>
+                  Urgent (Today / ASAP)
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {urgency === 'emergency' && (
+              <View style={styles.urgentNoticeBox}>
+                <Ionicons name="information-circle" size={15} color="#DC2626" />
+                <Text style={styles.urgentNoticeText}>
+                  Urgent requests are immediately broadcast as high priority to certified local specialists.
+                </Text>
+              </View>
+            )}
+          </View>
+
+          {/* ========================================================================= */}
+          {/* STEP 4: CHOOSE HOW YOU WANT TO PAY                                        */}
+          {/* ========================================================================= */}
+          <View style={styles.stepSection}>
+            <View style={styles.stepHeaderRow}>
+              <View style={styles.stepNumberBadge}>
+                <Text style={styles.stepNumberText}>4</Text>
+              </View>
+              <View>
+                <Text style={styles.stepTitle}>Choose how you want to pay</Text>
+                <Text style={styles.stepSubtitle}>Get competitive quotes or set a fixed budget</Text>
+              </View>
+            </View>
+
+            <View style={styles.row}>
+              <TouchableOpacity
+                style={[styles.toggleBtn, budgetType === 'quote' && styles.toggleBtnActive]}
+                onPress={() => setBudgetType('quote')}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name="chatbubbles-outline"
+                  size={16}
+                  color={budgetType === 'quote' ? COLORS.primary : COLORS.textSecondary}
+                  style={{ marginRight: 6 }}
+                />
+                <Text style={[styles.toggleText, budgetType === 'quote' && styles.toggleTextActive]}>
+                  Get Quotes (Recommended)
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.toggleBtn, budgetType === 'fixed' && styles.toggleBtnActive]}
+                onPress={() => setBudgetType('fixed')}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name="cash-outline"
+                  size={16}
+                  color={budgetType === 'fixed' ? COLORS.primary : COLORS.textSecondary}
+                  style={{ marginRight: 6 }}
+                />
+                <Text style={[styles.toggleText, budgetType === 'fixed' && styles.toggleTextActive]}>
+                  Fixed Budget (₹)
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {budgetType === 'quote' ? (
+              <View style={styles.quoteExplainerBox}>
+                <Ionicons name="shield-checkmark" size={16} color="#059669" style={{ marginTop: 1 }} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.quoteExplainerTitle}>Receive & Compare Quotes</Text>
+                  <Text style={styles.quoteExplainerText}>
+                    Verified technicians review your problem and provide transparent price estimates. You can compare
+                    profiles, ratings, and quotes before deciding.
+                  </Text>
+                </View>
+              </View>
+            ) : (
+              <View style={{ marginTop: 8 }}>
+                <View style={styles.budgetInputContainer}>
+                  <Text style={styles.currencyPrefix}>₹</Text>
+                  <TextInput
+                    style={styles.budgetInput}
+                    keyboardType="numeric"
+                    value={budgetAmount}
+                    onChangeText={setBudgetAmount}
+                    placeholder="Enter maximum budget amount"
+                    placeholderTextColor={COLORS.textMuted}
+                  />
+                </View>
+                <Text style={styles.budgetHint}>You only pay once you review and approve the completed job.</Text>
+              </View>
+            )}
+          </View>
+
+          {/* ========================================================================= */}
+          {/* STEP 5 & 6: SERVICE ADDRESS & SAVE FOR FUTURE                             */}
+          {/* ========================================================================= */}
+          <View style={styles.stepSection}>
+            <View style={styles.stepHeaderRow}>
+              <View style={styles.stepNumberBadge}>
+                <Text style={styles.stepNumberText}>5</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.stepTitle}>Service address</Text>
+                <Text style={styles.stepSubtitle}>Where should the professional visit?</Text>
+              </View>
+              <TouchableOpacity
+                onPress={handleDetectLocation}
+                disabled={detectingLocation}
+                style={styles.gpsDetectBtn}
+                activeOpacity={0.7}
+              >
+                {detectingLocation ? (
+                  <ActivityIndicator size="small" color={COLORS.primary} />
+                ) : (
+                  <Ionicons name="navigate-circle" size={15} color={COLORS.primary} />
+                )}
+                <Text style={styles.gpsDetectBtnText}>
+                  {detectingLocation ? 'Locating...' : 'Use Current GPS'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Choose Saved Address Chips if any */}
+            {savedAddresses.length > 0 && (
+              <View style={styles.savedSelectorBox}>
+                <Text style={styles.savedSelectorTitle}>Select Saved Address:</Text>
                 <ScrollView
                   horizontal
                   showsHorizontalScrollIndicator={false}
@@ -766,377 +1067,298 @@ export default function CreateJobScreen({ route, navigation }: any) {
                         onPress={() => applySavedAddress(addr)}
                         activeOpacity={0.8}
                       >
-                        <Ionicons
-                          name={iconName}
-                          size={13}
-                          color={isSelected ? '#059669' : '#64748B'}
-                        />
+                        <Ionicons name={iconName} size={13} color={isSelected ? '#059669' : '#64748B'} />
                         <Text style={[styles.savedChipText, isSelected && styles.savedChipTextSelected]}>
                           {addr.label || 'Address'}
                         </Text>
                         {addr.isDefault && (
                           <View style={styles.chipDefaultBadge}>
-                            <Text style={styles.chipDefaultText}>Active</Text>
+                            <Text style={styles.chipDefaultText}>Default</Text>
                           </View>
                         )}
-                        {isSelected && (
-                          <Ionicons name="checkmark-circle" size={13} color="#059669" />
-                        )}
+                        {isSelected && <Ionicons name="checkmark-circle" size={13} color="#059669" />}
                       </TouchableOpacity>
                     );
                   })}
-
-                  <TouchableOpacity
-                    style={styles.addChipBtn}
-                    onPress={() => setShowQuickAddModal(true)}
-                    activeOpacity={0.8}
-                  >
-                    <Ionicons name="add" size={14} color={COLORS.primary} />
-                    <Text style={styles.addChipBtnText}>Add New</Text>
-                  </TouchableOpacity>
                 </ScrollView>
               </View>
             )}
 
-            {/* Manual Entry Form — ALWAYS DIRECTLY VISIBLE ON SCREEN */}
-            <View style={styles.manualEntryContainer}>
-              <View style={styles.locationHeaderRow}>
-                <View>
-                  <Text style={[styles.label, { marginTop: 0, marginBottom: 0 }]}>Service Address</Text>
-                  <Text style={styles.sectionSubtitleMain}>
-                    Enter or verify where service is needed
-                  </Text>
-                </View>
-                <TouchableOpacity
-                  onPress={handleDetectLocation}
-                  disabled={detectingLocation}
-                  style={styles.gpsDetectBtn}
-                  activeOpacity={0.7}
-                >
-                  {detectingLocation ? (
-                    <ActivityIndicator size="small" color={COLORS.primary} />
-                  ) : (
-                    <Ionicons name="navigate-circle" size={15} color={COLORS.primary} />
-                  )}
-                  <Text style={styles.gpsDetectBtnText}>
-                    {detectingLocation ? 'Acquiring GPS...' : 'Auto-Detect GPS'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
+            {/* Address Input Fields */}
+            <Text style={styles.fieldLabel}>House / Flat / Building (Optional)</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="e.g. Flat 302, 3rd Floor, Tower B"
+              placeholderTextColor={COLORS.textMuted}
+              value={houseNumber}
+              onChangeText={(val) => {
+                setSelectedAddressId(null);
+                setHouseNumber(val);
+                setSaveAddressForFuture(true);
+              }}
+            />
 
-              {/* Compact GPS Coordinates Status Pill */}
-              {coordinates ? (
-                <View style={styles.compactGpsPill}>
-                  <Ionicons name="location-sharp" size={12} color="#059669" />
-                  <Text style={styles.compactGpsText}>
-                    GPS coordinates attached{accuracyMeters ? ` (±${accuracyMeters}m)` : ''}
-                  </Text>
-                </View>
-              ) : (
-                <View style={[styles.compactGpsPill, styles.compactGpsPillManual]}>
-                  <Ionicons name="location-outline" size={12} color={COLORS.textMuted} />
-                  <Text style={styles.compactGpsTextManual}>Manual address entry</Text>
-                </View>
+            <Text style={styles.fieldLabel}>Street / Road / Colony</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="e.g. Main Ring Road, Sector B"
+              placeholderTextColor={COLORS.textMuted}
+              value={streetAddress}
+              onChangeText={(val) => {
+                setSelectedAddressId(null);
+                setStreetAddress(val);
+                setSaveAddressForFuture(true);
+              }}
+            />
+
+            <Text style={styles.fieldLabel}>Locality / Area *</Text>
+            <View style={{ position: 'relative', zIndex: 10 }}>
+              <TextInput
+                style={styles.input}
+                placeholder="Search area (e.g. Gomti Nagar, Aliganj, Indira Nagar...)"
+                placeholderTextColor={COLORS.textMuted}
+                value={locality}
+                onChangeText={(val) => {
+                  setSelectedAddressId(null);
+                  handleLocalityChange(val);
+                  setSaveAddressForFuture(true);
+                }}
+                onFocus={() => {
+                  if (localitySuggestions.length > 0) setShowSuggestions(true);
+                }}
+              />
+              {loadingSuggestions && (
+                <ActivityIndicator size="small" color={COLORS.primary} style={styles.localitySpinner} />
               )}
 
-              {/* House / Flat No. and Building Name — optional */}
-              <Text style={styles.subLabel}>House / Flat No. and Building Name</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="e.g. Flat 302, 3rd Floor, Tower B"
-                placeholderTextColor={COLORS.textMuted}
-                value={houseNumber}
-                onChangeText={(val) => {
-                  setSelectedAddressId(null);
-                  setHouseNumber(val);
-                }}
-              />
-
-              {/* Street / Road / Colony — optional */}
-              <Text style={styles.subLabel}>Street / Road / Colony</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="e.g. Main Ring Road, Sector B"
-                placeholderTextColor={COLORS.textMuted}
-                value={streetAddress}
-                onChangeText={(val) => {
-                  setSelectedAddressId(null);
-                  setStreetAddress(val);
-                }}
-              />
-
-              {/* Locality / Sector / Area — required */}
-              <Text style={styles.subLabel}>Locality / Sector / Area *</Text>
-              <View style={{ position: 'relative', zIndex: 10 }}>
-                <View style={styles.localityInputWrapper}>
-                  <TextInput
-                    style={[styles.input, { flex: 1, paddingRight: 32 }]}
-                    placeholder="Search locality (e.g. Gomti Nagar, Aliganj...)"
-                    placeholderTextColor={COLORS.textMuted}
-                    value={locality}
-                    onChangeText={(val) => {
-                      setSelectedAddressId(null);
-                      handleLocalityChange(val);
-                    }}
-                    onFocus={() => {
-                      if (localitySuggestions.length > 0) {
-                        setShowSuggestions(true);
-                      }
-                    }}
-                  />
-                  {loadingSuggestions && (
-                    <ActivityIndicator size="small" color={COLORS.primary} style={styles.localitySpinner} />
-                  )}
+              {/* Locality Autocomplete Dropdown */}
+              {showSuggestions && localitySuggestions.length > 0 && (
+                <View style={styles.suggestionsContainer}>
+                  <View style={styles.suggestionsHeader}>
+                    <Text style={styles.suggestionsHeaderText}>Select Verified Area</Text>
+                    <TouchableOpacity onPress={() => setShowSuggestions(false)}>
+                      <Ionicons name="close-circle" size={16} color={COLORS.textMuted} />
+                    </TouchableOpacity>
+                  </View>
+                  {localitySuggestions.map((item, index) => (
+                    <TouchableOpacity
+                      key={item.localityId || `${item.name}-${index}`}
+                      style={styles.suggestionItem}
+                      onPress={() => {
+                        setSelectedAddressId(null);
+                        handleSelectLocality(item);
+                        setSaveAddressForFuture(true);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="location-outline" size={14} color={COLORS.primary} style={{ marginRight: 6 }} />
+                      <Text style={styles.suggestionName} numberOfLines={1}>
+                        {item.name}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
                 </View>
+              )}
+            </View>
 
-                {/* Locality Autocomplete Dropdown */}
-                {showSuggestions && localitySuggestions.length > 0 && (
-                  <View style={styles.suggestionsContainer}>
-                    <View style={styles.suggestionsHeader}>
-                      <Text style={styles.suggestionsHeaderText}>Select Verified Locality</Text>
-                      <TouchableOpacity onPress={() => setShowSuggestions(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                        <Ionicons name="close-circle" size={16} color={COLORS.textMuted} />
-                      </TouchableOpacity>
+            <View style={[styles.row, { marginTop: 4 }]}>
+              <View style={{ flex: 1, marginRight: 8 }}>
+                <Text style={styles.fieldLabel}>City *</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="e.g. Lucknow"
+                  placeholderTextColor={COLORS.textMuted}
+                  value={city}
+                  onChangeText={(val) => {
+                    setSelectedAddressId(null);
+                    handleCityChange(val);
+                    setSaveAddressForFuture(true);
+                  }}
+                />
+              </View>
+
+              <View style={{ width: 120 }}>
+                <Text style={styles.fieldLabel}>PIN Code</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="6 digits"
+                  placeholderTextColor={COLORS.textMuted}
+                  keyboardType="numeric"
+                  maxLength={6}
+                  value={pincode}
+                  onChangeText={(val) => {
+                    setSelectedAddressId(null);
+                    setPincode(val);
+                    setSaveAddressForFuture(true);
+                  }}
+                />
+              </View>
+            </View>
+
+            {/* Selected Destination Summary */}
+            <View style={styles.destinationBox}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                <Ionicons name="location-sharp" size={15} color={COLORS.primary} />
+                <Text style={styles.destinationHeading}>Selected Destination</Text>
+              </View>
+              <Text style={styles.destinationAddressText}>
+                {[houseNumber, streetAddress, locality, city, pincode].filter(Boolean).join(', ') ||
+                  'Please enter your address above'}
+              </Text>
+            </View>
+
+            {/* Step 6: Save Address for Future Bookings Checkbox */}
+            {!selectedAddressId && (
+              <View style={styles.saveAddressBox}>
+                <TouchableOpacity
+                  style={styles.checkboxRow}
+                  onPress={() => setSaveAddressForFuture(!saveAddressForFuture)}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons
+                    name={saveAddressForFuture ? 'checkbox' : 'square-outline'}
+                    size={20}
+                    color={saveAddressForFuture ? COLORS.primary : COLORS.textSecondary}
+                  />
+                  <Text style={styles.checkboxLabel}>Save this address for future bookings</Text>
+                </TouchableOpacity>
+
+                {saveAddressForFuture && (
+                  <View style={styles.labelPickerBox}>
+                    <Text style={styles.labelPickerHeading}>Address Label:</Text>
+                    <View style={styles.labelButtonsRow}>
+                      {(['Home', 'Work', 'Other'] as const).map((lbl) => (
+                        <TouchableOpacity
+                          key={lbl}
+                          style={[styles.labelChoiceBtn, saveAddressLabel === lbl && styles.labelChoiceBtnActive]}
+                          onPress={() => setSaveAddressLabel(lbl)}
+                        >
+                          <Text style={[styles.labelChoiceText, saveAddressLabel === lbl && styles.labelChoiceTextActive]}>
+                            {lbl}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
                     </View>
-                    {localitySuggestions.map((item, index) => (
-                      <TouchableOpacity
-                        key={item.localityId || `${item.name}-${index}`}
-                        style={styles.suggestionItem}
-                        onPress={() => {
-                          setSelectedAddressId(null);
-                          handleSelectLocality(item);
-                        }}
-                        activeOpacity={0.7}
-                      >
-                        <Ionicons name="location-outline" size={14} color={COLORS.primary} style={{ marginRight: 6 }} />
-                        <Text style={styles.suggestionName} numberOfLines={1}>
-                          {item.name}
-                        </Text>
-                        {item.zoneId && (
-                          <View style={styles.suggestionZoneBadge}>
-                            <Text style={styles.suggestionZoneText}>{item.zoneId}</Text>
-                          </View>
-                        )}
-                      </TouchableOpacity>
-                    ))}
                   </View>
                 )}
               </View>
-
-              {/* City & PIN Code */}
-              <View style={[styles.row, { marginTop: 4 }]}>
-                <View style={{ flex: 1, marginRight: 8 }}>
-                  <Text style={styles.subLabel}>City *</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="e.g. Lucknow, Unnao"
-                    placeholderTextColor={COLORS.textMuted}
-                    value={city}
-                    onChangeText={(val) => {
-                      setSelectedAddressId(null);
-                      handleCityChange(val);
-                    }}
-                  />
-                </View>
-                <View style={{ width: 120 }}>
-                  <Text style={styles.subLabel}>PIN Code</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="6 digits"
-                    placeholderTextColor={COLORS.textMuted}
-                    keyboardType="numeric"
-                    maxLength={6}
-                    value={pincode}
-                    onChangeText={(val) => {
-                      setSelectedAddressId(null);
-                      setPincode(val);
-                    }}
-                  />
-                </View>
-              </View>
-            </View>
+            )}
           </View>
 
-          {/* Selected Address Confirmation Card */}
-          <View style={styles.addressConfirmationBox}>
-            <View style={styles.confirmationHeaderRow}>
-              <View style={styles.confirmationIconPill}>
-                <Ionicons name="location-sharp" size={14} color={COLORS.primary} />
-                <Text style={styles.confirmationTitle}>Selected Service Destination</Text>
+          {/* ========================================================================= */}
+          {/* STEP 7: FINAL REVIEW & SUBMIT                                              */}
+          {/* ========================================================================= */}
+          <View style={styles.stepSection}>
+            <View style={styles.stepHeaderRow}>
+              <View style={styles.stepNumberBadge}>
+                <Text style={styles.stepNumberText}>6</Text>
               </View>
-              {selectedAddressId && (
-                <View style={styles.confirmationLabelBadge}>
-                  <Text style={styles.confirmationLabelText}>
-                    {savedAddresses.find((a) => a._id === selectedAddressId)?.label || 'Saved'}
-                  </Text>
-                </View>
-              )}
+              <View>
+                <Text style={styles.stepTitle}>Review & Submit</Text>
+                <Text style={styles.stepSubtitle}>Verify your request before dispatching</Text>
+              </View>
             </View>
 
-            <Text style={styles.confirmationAddressText} numberOfLines={2}>
-              {[houseNumber, streetAddress, locality, city, pincode].filter(Boolean).join(', ') || 'No address specified'}
-            </Text>
-
-            <View style={styles.confirmationFooterRow}>
-              <View style={styles.confirmationSourcePill}>
-                <Ionicons
-                  name={coordinates ? 'navigate' : 'map-outline'}
-                  size={12}
-                  color={coordinates ? '#059669' : '#64748B'}
-                />
-                <Text style={[styles.confirmationSourceText, coordinates && { color: '#059669' }]}>
-                  {coordinates
-                    ? `GPS Ready (${accuracyMeters ? `±${accuracyMeters}m` : 'Attached'})`
-                    : 'Street & Locality Navigation'}
+            <View style={styles.reviewSummaryBox}>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Service:</Text>
+                <Text style={styles.summaryValue} numberOfLines={1}>
+                  {title.trim() || 'Not specified'}
                 </Text>
               </View>
-
-              {savedAddresses.length > 0 && (
-                <TouchableOpacity
-                  onPress={() => {
-                    if (navigation.navigate) {
-                      navigation.navigate('ProfileTab');
-                    }
-                  }}
-                  style={styles.confirmationChangeBtn}
-                >
-                  <Text style={styles.confirmationChangeText}>Manage Addresses</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          </View>
-
-          {/* WorkLogy Escrow Protection Guarantee Note */}
-          <View style={styles.guaranteeBox}>
-            <Ionicons name="shield-checkmark" size={16} color={COLORS.primary} />
-            <Text style={styles.guaranteeText}>
-              WorkLogy Escrow Protection holds funds securely until you physically inspect and approve completed work.
-            </Text>
-          </View>
-
-          {/* Submit Button */}
-          <TouchableOpacity
-            style={styles.submitBtn}
-            onPress={handleSubmit}
-            disabled={submitting}
-            activeOpacity={0.8}
-          >
-            {submitting ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
-            ) : (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <Text style={styles.submitBtnText}>Submit Service Request</Text>
-                <Feather name="arrow-right" size={16} color="#FFFFFF" />
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Category:</Text>
+                <Text style={styles.summaryValue}>{selectedCategoryName}</Text>
               </View>
-            )}
-          </TouchableOpacity>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Schedule:</Text>
+                <Text style={styles.summaryValue}>
+                  {urgency === 'emergency' ? 'Urgent (Today / ASAP)' : 'Standard Schedule'}
+                </Text>
+              </View>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Pricing:</Text>
+                <Text style={styles.summaryValue}>
+                  {budgetType === 'fixed' && budgetAmount ? `Fixed Budget: ₹${budgetAmount}` : 'Get Quotes (Compare Bids)'}
+                </Text>
+              </View>
+              <View style={[styles.summaryRow, { borderBottomWidth: 0 }]}>
+                <Text style={styles.summaryLabel}>Location:</Text>
+                <Text style={[styles.summaryValue, { flex: 1 }]} numberOfLines={2}>
+                  {[houseNumber, streetAddress, locality, city, pincode].filter(Boolean).join(', ') || 'Not specified'}
+                </Text>
+              </View>
+            </View>
+
+            {/* Escrow Guarantee */}
+            <View style={styles.guaranteeBox}>
+              <Ionicons name="shield-checkmark" size={16} color={COLORS.primary} />
+              <Text style={styles.guaranteeText}>
+                WorkLogy Escrow Protection: Funds are only released after you physically inspect and approve the work.
+              </Text>
+            </View>
+
+            {/* Primary Submit Button */}
+            <TouchableOpacity
+              style={[styles.submitBtn, submitting && { opacity: 0.7 }]}
+              onPress={handleSubmit}
+              disabled={submitting}
+              activeOpacity={0.8}
+            >
+              {submitting ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Text style={styles.submitBtnText}>Post Service Request</Text>
+                  <Feather name="arrow-right" size={17} color="#FFFFFF" />
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
       </ScrollView>
 
-      {/* Quick Add Address Modal */}
-      <Modal visible={showQuickAddModal} animationType="slide" transparent>
+      {/* All Categories Modal */}
+      <Modal visible={showAllCategoriesModal} animationType="slide" transparent>
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={styles.modalOverlay}
         >
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Add New Service Address</Text>
-              <TouchableOpacity onPress={() => setShowQuickAddModal(false)}>
+              <Text style={styles.modalTitle}>Select Service Category</Text>
+              <TouchableOpacity onPress={() => setShowAllCategoriesModal(false)}>
                 <Ionicons name="close" size={24} color={COLORS.textDark} />
               </TouchableOpacity>
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false}>
-              <Text style={styles.subLabel}>Address Label</Text>
-              <View style={styles.labelPickerRow}>
-                {['Home', 'Office', 'Site'].map((lbl) => (
+              {availableCategories.map((cat: any) => {
+                const isSelected = selectedCategorySlug === cat.slug;
+                return (
                   <TouchableOpacity
-                    key={lbl}
-                    style={[styles.labelChoiceBtn, quickLabel === lbl && styles.labelChoiceBtnActive]}
-                    onPress={() => setQuickLabel(lbl)}
+                    key={cat._id || cat.slug}
+                    style={[styles.modalCatRow, isSelected && styles.modalCatRowActive]}
+                    onPress={() => {
+                      setSelectedCategorySlug(cat.slug);
+                      setSelectedCategoryName(cat.name);
+                      setShowAllCategoriesModal(false);
+                    }}
                   >
-                    <Text
-                      style={[styles.labelChoiceText, quickLabel === lbl && styles.labelChoiceTextActive]}
-                    >
-                      {lbl}
-                    </Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.modalCatName, isSelected && styles.modalCatNameActive]}>
+                        {cat.name}
+                      </Text>
+                      {cat.description ? (
+                        <Text style={styles.modalCatDesc} numberOfLines={1}>
+                          {cat.description}
+                        </Text>
+                      ) : null}
+                    </View>
+                    {isSelected && <Ionicons name="checkmark-circle" size={18} color={COLORS.primary} />}
                   </TouchableOpacity>
-                ))}
-              </View>
-
-              <Text style={styles.subLabel}>House / Flat No. & Building Name</Text>
-              <TextInput
-                style={styles.input}
-                value={quickHouse}
-                onChangeText={setQuickHouse}
-                placeholder="e.g. Flat 402, Lotus Court"
-                placeholderTextColor={COLORS.textMuted}
-              />
-
-              <Text style={styles.subLabel}>Street / Road / Colony *</Text>
-              <TextInput
-                style={styles.input}
-                value={quickStreet}
-                onChangeText={setQuickStreet}
-                placeholder="e.g. Main Ring Road, Sector B"
-                placeholderTextColor={COLORS.textMuted}
-              />
-
-              <Text style={styles.subLabel}>Locality / Landmark</Text>
-              <TextInput
-                style={styles.input}
-                value={quickLocality}
-                onChangeText={setQuickLocality}
-                placeholder="e.g. Gomti Nagar, Near Metro Station"
-                placeholderTextColor={COLORS.textMuted}
-              />
-
-              <View style={[styles.row, { marginTop: 0 }]}>
-                <View style={{ flex: 1, marginRight: 8 }}>
-                  <Text style={styles.subLabel}>City *</Text>
-                  <TextInput
-                    style={styles.input}
-                    value={quickCity}
-                    onChangeText={setQuickCity}
-                    placeholder="e.g. Lucknow"
-                    placeholderTextColor={COLORS.textMuted}
-                  />
-                </View>
-
-                <View style={{ width: 120 }}>
-                  <Text style={styles.subLabel}>PIN Code *</Text>
-                  <TextInput
-                    style={styles.input}
-                    value={quickPincode}
-                    onChangeText={setQuickPincode}
-                    placeholder="226010"
-                    placeholderTextColor={COLORS.textMuted}
-                    keyboardType="numeric"
-                  />
-                </View>
-              </View>
-
-              <View style={styles.modalActionRow}>
-                <TouchableOpacity
-                  style={styles.cancelBtn}
-                  onPress={() => setShowQuickAddModal(false)}
-                >
-                  <Text style={styles.cancelBtnText}>Cancel</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.saveBtn}
-                  onPress={handleSaveQuickAddress}
-                  disabled={savingQuickAddress}
-                >
-                  {savingQuickAddress ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                  ) : (
-                    <Text style={styles.saveBtnText}>Save & Use Address</Text>
-                  )}
-                </TouchableOpacity>
-              </View>
+                );
+              })}
             </ScrollView>
           </View>
         </KeyboardAvoidingView>
@@ -1152,61 +1374,228 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     flexGrow: 1,
-    paddingBottom: 24
+    paddingBottom: 32
   },
   form: {
     paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 8
+    paddingTop: 12
   },
-  titleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 4,
-    marginBottom: 4
+  stepSection: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#000',
+    shadowOpacity: 0.03,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2
   },
-  categoryBadgeInline: {
+  stepHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 10,
+    marginBottom: 14,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9'
+  },
+  stepNumberBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     backgroundColor: '#ECFDF5',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#A7F3D0'
   },
-  categoryBadgeInlineText: {
-    fontSize: 10,
+  stepNumberText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: COLORS.primary
+  },
+  stepTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: COLORS.textDark
+  },
+  stepSubtitle: {
+    fontSize: 11,
+    color: COLORS.textSecondary,
+    marginTop: 1
+  },
+  searchCategoryBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    marginBottom: 10
+  },
+  searchCategoryInput: {
+    flex: 1,
+    fontSize: 12,
+    color: COLORS.textDark,
+    padding: 0
+  },
+  categoryScroll: {
+    marginBottom: 10
+  },
+  categoryScrollContent: {
+    gap: 8,
+    paddingVertical: 2
+  },
+  categoryChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#F8FAFC'
+  },
+  categoryChipActive: {
+    borderColor: COLORS.primary,
+    backgroundColor: '#ECFDF5'
+  },
+  categoryChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: COLORS.textSecondary
+  },
+  categoryChipTextActive: {
+    color: COLORS.primary,
+    fontWeight: '800'
+  },
+  allCategoriesPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: COLORS.primary,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center'
+  },
+  allCategoriesPillText: {
+    fontSize: 11.5,
     fontWeight: '700',
     color: COLORS.primary
   },
-  label: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: COLORS.textDark,
-    marginBottom: 4,
-    marginTop: 8
+  suggestionsContainerBox: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+    marginTop: 4
   },
-  subLabel: {
+  suggestionsTitle: {
     fontSize: 11,
-    fontWeight: '600',
+    fontWeight: '700',
     color: COLORS.textSecondary,
-    marginBottom: 3,
-    marginTop: 6
+    marginBottom: 6
   },
-  input: {
+  suggestionsPillsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6
+  },
+  taskSuggestionPill: {
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#CBD5E1',
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 5
+  },
+  taskSuggestionPillActive: {
+    borderColor: COLORS.primary,
+    backgroundColor: '#ECFDF5'
+  },
+  taskSuggestionText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: COLORS.textDark
+  },
+  taskSuggestionTextActive: {
+    color: COLORS.primary,
+    fontWeight: '700'
+  },
+  fieldLabel: {
+    fontSize: 11.5,
+    fontWeight: '800',
+    color: COLORS.textDark,
+    marginBottom: 5,
+    marginTop: 8
+  },
+  input: {
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
     borderRadius: 10,
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 9,
     fontSize: 13,
     color: COLORS.textDark
   },
   textArea: {
-    height: 72,
+    height: 74,
     textAlignVertical: 'top'
+  },
+  photoSection: {
+    marginTop: 8
+  },
+  photoCountText: {
+    fontSize: 11,
+    color: COLORS.textSecondary,
+    fontWeight: '600'
+  },
+  photoThumbWrapper: {
+    position: 'relative',
+    width: 64,
+    height: 64,
+    borderRadius: 10,
+    overflow: 'hidden'
+  },
+  photoThumb: {
+    width: 64,
+    height: 64,
+    borderRadius: 10
+  },
+  removePhotoBtn: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  addPhotoBtn: {
+    width: 64,
+    height: 64,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: '#CBD5E1',
+    borderStyle: 'dashed',
+    backgroundColor: '#F8FAFC',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  addPhotoBtnText: {
+    fontSize: 9.5,
+    fontWeight: '700',
+    color: COLORS.primary,
+    marginTop: 2
   },
   row: {
     flexDirection: 'row',
@@ -1217,10 +1606,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#F8FAFC',
     borderWidth: 1.5,
     borderColor: '#E2E8F0',
-    paddingVertical: 9,
+    paddingVertical: 10,
     borderRadius: 10
   },
   toggleBtnActive: {
@@ -1242,6 +1631,23 @@ const styles = StyleSheet.create({
   emergencyTextActive: {
     color: '#EF4444'
   },
+  urgentNoticeBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: 8,
+    padding: 8,
+    marginTop: 8
+  },
+  urgentNoticeText: {
+    flex: 1,
+    fontSize: 11,
+    color: '#B91C1C',
+    lineHeight: 15
+  },
   quoteExplainerBox: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -1251,7 +1657,7 @@ const styles = StyleSheet.create({
     borderColor: '#BBF7D0',
     borderRadius: 10,
     padding: 10,
-    marginTop: 6
+    marginTop: 8
   },
   quoteExplainerTitle: {
     fontSize: 12,
@@ -1267,9 +1673,9 @@ const styles = StyleSheet.create({
   budgetInputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#F8FAFC',
     borderWidth: 1,
-    borderColor: '#CBD5E1',
+    borderColor: '#E2E8F0',
     borderRadius: 10,
     paddingHorizontal: 12
   },
@@ -1281,23 +1687,16 @@ const styles = StyleSheet.create({
   },
   budgetInput: {
     flex: 1,
-    height: 38,
+    height: 40,
     fontSize: 13,
     fontWeight: '700',
     color: COLORS.textDark
   },
   budgetHint: {
-    fontSize: 10.5,
-    color: COLORS.textMuted,
-    marginTop: 3,
+    fontSize: 11,
+    color: COLORS.textSecondary,
+    marginTop: 4,
     marginLeft: 2
-  },
-  locationHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 12,
-    marginBottom: 4
   },
   gpsDetectBtn: {
     flexDirection: 'row',
@@ -1305,60 +1704,82 @@ const styles = StyleSheet.create({
     gap: 4,
     backgroundColor: '#ECFDF5',
     paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6
+    paddingVertical: 5,
+    borderRadius: 8
   },
   gpsDetectBtnText: {
     fontSize: 11,
     fontWeight: '700',
     color: COLORS.primary
   },
-  compactGpsPill: {
+  savedSelectorBox: {
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 8
+  },
+  savedSelectorTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.textSecondary,
+    marginBottom: 6
+  },
+  savedChipsScroll: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingVertical: 2
+  },
+  savedChip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    backgroundColor: '#ECFDF5',
-    paddingHorizontal: 8,
-    paddingVertical: 3.5,
-    borderRadius: 6,
-    marginBottom: 6,
-    alignSelf: 'flex-start'
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 5
   },
-  compactGpsPillManual: {
-    backgroundColor: '#F1F5F9'
+  savedChipSelected: {
+    borderColor: COLORS.primary,
+    backgroundColor: '#ECFDF5'
   },
-  compactGpsText: {
-    fontSize: 11,
+  savedChipText: {
+    fontSize: 11.5,
     fontWeight: '700',
+    color: COLORS.textDark
+  },
+  savedChipTextSelected: {
     color: '#059669'
   },
-  compactGpsTextManual: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: COLORS.textMuted
+  chipDefaultBadge: {
+    backgroundColor: '#D1FAE5',
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4
   },
-  localityInputWrapper: {
-    position: 'relative',
-    justifyContent: 'center'
+  chipDefaultText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#065F46'
   },
   localitySpinner: {
     position: 'absolute',
-    right: 10
+    right: 12,
+    top: 12
   },
   suggestionsContainer: {
     position: 'absolute',
-    top: 42,
+    top: 44,
     left: 0,
     right: 0,
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#CBD5E1',
     borderRadius: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 6,
-    elevation: 5,
+    elevation: 4,
     zIndex: 999,
     paddingVertical: 4
   },
@@ -1391,16 +1812,100 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: COLORS.textDark
   },
-  suggestionZoneBadge: {
-    backgroundColor: '#E0F2FE',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4
+  destinationBox: {
+    backgroundColor: '#F0FDF4',
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 10
   },
-  suggestionZoneText: {
-    fontSize: 9.5,
+  destinationHeading: {
+    fontSize: 11.5,
+    fontWeight: '800',
+    color: '#065F46'
+  },
+  destinationAddressText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: COLORS.textDark,
+    lineHeight: 16
+  },
+  saveAddressBox: {
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9'
+  },
+  checkboxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
+  checkboxLabel: {
+    fontSize: 12,
     fontWeight: '700',
-    color: '#0284C7'
+    color: COLORS.textDark
+  },
+  labelPickerBox: {
+    marginTop: 8,
+    marginLeft: 28
+  },
+  labelPickerHeading: {
+    fontSize: 11,
+    color: COLORS.textSecondary,
+    marginBottom: 6
+  },
+  labelButtonsRow: {
+    flexDirection: 'row',
+    gap: 8
+  },
+  labelChoiceBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#FFFFFF'
+  },
+  labelChoiceBtnActive: {
+    borderColor: COLORS.primary,
+    backgroundColor: '#ECFDF5'
+  },
+  labelChoiceText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: COLORS.textSecondary
+  },
+  labelChoiceTextActive: {
+    color: COLORS.primary
+  },
+  reviewSummaryBox: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 12,
+    gap: 6
+  },
+  summaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9'
+  },
+  summaryLabel: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: COLORS.textSecondary,
+    width: 80
+  },
+  summaryValue: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.textDark,
+    textAlign: 'right'
   },
   guaranteeBox: {
     flexDirection: 'row',
@@ -1411,7 +1916,7 @@ const styles = StyleSheet.create({
     borderColor: '#A7F3D0',
     borderRadius: 10,
     padding: 10,
-    marginTop: 12
+    marginTop: 10
   },
   guaranteeText: {
     flex: 1,
@@ -1421,7 +1926,7 @@ const styles = StyleSheet.create({
   },
   submitBtn: {
     backgroundColor: COLORS.primary,
-    paddingVertical: 13,
+    paddingVertical: 14,
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1437,194 +1942,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800'
   },
-  // Saved Address Block
-  savedAddressSection: {
-    marginTop: 12,
-    marginBottom: 4
-  },
-  savedAddressHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 10
-  },
-  sectionTitleMain: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: COLORS.textDark
-  },
-  sectionSubtitleMain: {
-    fontSize: 10.5,
-    color: COLORS.textSecondary,
-    marginTop: 1
-  },
-  savedSelectorBox: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    borderRadius: 12,
-    padding: 10,
-    marginBottom: 10
-  },
-  savedSelectorHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8
-  },
-  savedSelectorTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6
-  },
-  savedSelectorTitle: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: COLORS.textDark
-  },
-  savedSelectorManageLink: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    paddingVertical: 2,
-    paddingHorizontal: 4
-  },
-  savedSelectorManageText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#64748B'
-  },
-  savedChipsScroll: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 2
-  },
-  savedChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: '#F8FAFC',
-    borderWidth: 1.5,
-    borderColor: '#E2E8F0',
-    borderRadius: 20,
-    paddingHorizontal: 10,
-    paddingVertical: 6
-  },
-  savedChipSelected: {
-    borderColor: COLORS.primary,
-    backgroundColor: '#F0FDF4'
-  },
-  savedChipText: {
-    fontSize: 11.5,
-    fontWeight: '700',
-    color: COLORS.textDark
-  },
-  savedChipTextSelected: {
-    color: '#059669'
-  },
-  chipDefaultBadge: {
-    backgroundColor: '#D1FAE5',
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 4,
-    marginLeft: 2
-  },
-  chipDefaultText: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: '#065F46'
-  },
-  addChipBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#ECFDF5',
-    borderWidth: 1,
-    borderColor: '#A7F3D0',
-    borderStyle: 'dashed',
-    borderRadius: 20,
-    paddingHorizontal: 10,
-    paddingVertical: 6
-  },
-  addChipBtnText: {
-    fontSize: 11.5,
-    fontWeight: '700',
-    color: COLORS.primary
-  },
-  manualEntryContainer: {
-    marginTop: 2
-  },
-  addressConfirmationBox: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    borderRadius: 12,
-    padding: 12,
-    marginTop: 12,
-    marginBottom: 2
-  },
-  confirmationHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 4
-  },
-  confirmationIconPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4
-  },
-  confirmationTitle: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: COLORS.textDark
-  },
-  confirmationLabelBadge: {
-    backgroundColor: '#E0F2FE',
-    paddingHorizontal: 6,
-    paddingVertical: 1.5,
-    borderRadius: 4
-  },
-  confirmationLabelText: {
-    fontSize: 9.5,
-    fontWeight: '700',
-    color: '#0284C7'
-  },
-  confirmationAddressText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: COLORS.textDark,
-    lineHeight: 16
-  },
-  confirmationFooterRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 8,
-    paddingTop: 6,
-    borderTopWidth: 1,
-    borderTopColor: '#F8FAFC'
-  },
-  confirmationSourcePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4
-  },
-  confirmationSourceText: {
-    fontSize: 10.5,
-    fontWeight: '600',
-    color: '#64748B'
-  },
-  confirmationChangeBtn: {
-    paddingVertical: 2,
-    paddingHorizontal: 6
-  },
-  confirmationChangeText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: COLORS.primary
-  },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -1635,7 +1952,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     padding: 20,
-    maxHeight: '88%'
+    maxHeight: '85%'
   },
   modalHeader: {
     flexDirection: 'row',
@@ -1651,61 +1968,29 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: COLORS.textDark
   },
-  labelPickerRow: {
+  modalCatRow: {
     flexDirection: 'row',
-    gap: 8,
-    marginBottom: 8
-  },
-  labelChoiceBtn: {
-    flex: 1,
-    paddingVertical: 7,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF'
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9'
   },
-  labelChoiceBtnActive: {
-    borderColor: COLORS.primary,
-    backgroundColor: '#ECFDF5'
+  modalCatRowActive: {
+    backgroundColor: '#F0FDF4',
+    paddingHorizontal: 8,
+    borderRadius: 8
   },
-  labelChoiceText: {
-    fontSize: 12,
+  modalCatName: {
+    fontSize: 13,
     fontWeight: '700',
-    color: COLORS.textSecondary
+    color: COLORS.textDark
   },
-  labelChoiceTextActive: {
+  modalCatNameActive: {
     color: COLORS.primary
   },
-  modalActionRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 16,
-    paddingBottom: 8
-  },
-  cancelBtn: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    alignItems: 'center'
-  },
-  cancelBtnText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: COLORS.textSecondary
-  },
-  saveBtn: {
-    flex: 2,
-    paddingVertical: 12,
-    borderRadius: 10,
-    backgroundColor: COLORS.primary,
-    alignItems: 'center'
-  },
-  saveBtnText: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#FFFFFF'
+  modalCatDesc: {
+    fontSize: 11,
+    color: COLORS.textSecondary,
+    marginTop: 2
   }
 });

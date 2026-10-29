@@ -1197,3 +1197,380 @@ A task can only be moved to `[x]` (Completed) when:
     - Verified all 6 E2E integration steps against live MongoDB Atlas (`backend/src/scripts/test_admin_kyc_e2e.mjs`).
     - Zero modifications or regressions to Customer App or Vendor Mobile App.
 
+- [x] **Task 4.28**: Fix Customer-Created Jobs Not Appearing in Vendor App ("WorkLogy Pro") (`backend/src/controllers/auth.controller.js`, `backend/src/controllers/job.controller.js`, `backend/src/controllers/vendor.controller.js`, `backend/src/middleware/rateLimiter.js`, `mobile/vendor-app/src/screens/VendorRegisterScreen.tsx`, `mobile/vendor-app/src/screens/VendorEditProfileScreen.tsx`, `mobile/vendor-app/src/screens/JobsScreen.tsx`, `mobile/vendor-app/src/screens/VendorServiceAreaScreen.tsx`, `mobile/vendor-app/src/navigation/VendorNavigator.tsx`, `mobile/vendor-app/src/api/client.ts`, `mobile/vendor-app/src/context/AuthContext.tsx`):
+  - **Root Cause Identified**:
+    - Complete lifecycle trace of the 3 customer jobs (`6ae0208270d51a1f67ac74d1`, `6ae0201370d51a1f67ac7471`, `6adf53a56002bf263057143e`) confirmed all 3 records were saved in live MongoDB Atlas with status `open`, within vendor's 30km coverage radius (11.28km, 11.29km, and 11.85km away).
+    - The vendor account (`Shahe Aalam`, `shahe@gmail.com`) had an empty `categories: []` array on `VendorProfile`.
+    - `getNearbyJobs` in `job.controller.js` checked `approvedCategoryIds.length === 0` and returned early with `{ jobs: [], configurationStatus: 'missing_categories' }`.
+    - Vendor registration in `VendorRegisterScreen.tsx` maintained category state but omitted it from the payload sent to `client.ts` / `AuthContext.tsx`, and backend `auth.controller.js` initialized `categories: []`.
+    - Vendor edit profile had no category selection UI, preventing vendors from configuring trade categories.
+    - Rate limiter (`backend/src/middleware/rateLimiter.js`) was aggressively rate-limiting mobile apps with HTTP 429 errors.
+    - Vendor Dashboard stats (`getVendorDashboardStats`) performed an unfiltered `Job.countDocuments({ status: 'open' })` (showing 3) while Jobs screen filtered by vendor categories (showing 0), creating a discrepancy.
+  - **Full-Stack Implementation & Fixes**:
+    - **Backend Auth & Profile Controller**: Added category resolution during registration and profile update; auto-synced service listing categories to `VendorProfile.categories`.
+    - **Backend Job Controller**: Added fallback category derivation from vendor skills if `profile.categories` is empty; added safe diagnostic report logging for job eligibility in development; aligned `getVendorDashboardStats` matching count with vendor approved categories and location.
+    - **Backend Rate Limiter**: Added dev/loopback bypass and increased production quota to prevent mobile app 429 lockouts.
+    - **Vendor Mobile App Registration & Edit Profile**: Added category selection UI and integrated `categories` array into API payloads in `VendorRegisterScreen.tsx` and `VendorEditProfileScreen.tsx`.
+    - **Vendor Mobile App JobsScreen & Navigation**: Resolved navigation render thrashing in `VendorNavigator.tsx`; added `isFetchingRef` guard to eliminate race conditions; linked "Configure Categories" and "Set Service Area" banners directly to the respective screens.
+    - **Expo & TypeScript Fixes**: Ran `npx expo install --fix` to resolve dependency version warnings; replaced `NodeJS.Timeout` with React Native compatible typing in `VendorServiceAreaScreen.tsx`.
+  - **Verification**:
+    - Live HTTP GET request to `/api/jobs/nearby?tab=all` with vendor JWT token returned `HTTP 200 OK`, `total: 3`, `configurationStatus: 'ready'`, and all 3 customer jobs with exact distances.
+    - All 3 customer jobs appear cleanly in the "New Requests" tab with matching count of 3.
+    - Backend syntax check (`node --check`) passed cleanly with 0 errors.
+    - Both mobile apps (`mobile/vendor-app` and `mobile/customer-app`) passed TypeScript checks (`npx tsc --noEmit`) cleanly with 0 errors.
+
+- [x] **Task 4.29**: Fix Quotation Amount, Push Notification & Messages Integration (Customer App & Backend) (`backend/src/models/Message.js`, `backend/src/controllers/application.controller.js`, `backend/src/controllers/booking.controller.js`, `backend/src/controllers/customer.controller.js`, `backend/src/services/notification.service.js`, `mobile/customer-app/src/screens/JobDetailScreen.tsx`, `mobile/customer-app/src/screens/MyJobsScreen.tsx`, `mobile/customer-app/src/screens/ChatDetailScreen.tsx`, `mobile/customer-app/src/api/client.ts`, `mobile/customer-app/src/services/pushNotificationService.ts`, `mobile/customer-app/src/services/socketService.ts`, `mobile/customer-app/src/navigation/CustomerNavigator.tsx`, `mobile/customer-app/src/types/index.ts`, `mobile/customer-app/src/utils/formatters.ts`):
+  - **Root Causes Identified**:
+    1. Quotation amount missing in My Service Bookings: `customer.controller.js` `getCustomerBookings` mapped `pricing.amount` to `job.budget?.amount || 0` and never queried `Application` records or computed quotation counts/amounts.
+    2. Booking Details displayed `Total Service Value ₹0` and `Locating Available Local Pros`: `booking.controller.js` `getBookingById` returned `totalAmount: 0` and omitted `quotations: []`; `JobDetailScreen.tsx` unconditionally rendered the waiting card and zero total value whenever `booking.vendor` was null.
+    3. Push Notification missing: `notification.service.js` mapped `pushData.jobId` to the `quotationId` instead of the actual `job._id` and never emitted real-time Socket.IO events to `user_${targetRecipient}`.
+    4. Quotation missing from Customer Messages: `application.controller.js` `applyForJob` never created or synchronized a `Conversation` or quotation `Message` upon quotation submission.
+  - **Full-Stack Implementation**:
+    - **Backend Message Model**: Added `'quotation'` to `messageType` enum and added `quotationData` subdocument (with `quotationId`, `applicationId`, `jobId`, `proposedAmount`, `pricingBasis`, `proposedSchedule`, `estimatedDuration`, `coverLetter`, `status`).
+    - **Backend Application Controller**: Implemented `syncQuotationToChat` ensuring quotation submission creates or reuses the 1-to-1 conversation, posts a structured quotation message, and broadcasts via Socket.IO. Enriched `getJobApplications` with vendor details.
+    - **Backend Booking & Customer Controllers**: Enriched `getCustomerBookings` and `getBookingById` with live `Application` queries, attaching `quotationsCount`, `quotedAmount`, `minQuotedAmount`, and `effectiveStatus: 'quotations_received'`.
+    - **Backend Notification Service**: Added Socket.IO emission to `user_${targetRecipient}` for real-time notifications, updated unread badge counts, and fixed push data payload to include both `jobId` and `quotationId`.
+    - **Mobile Customer App**:
+      - `MyJobsScreen.tsx`: Displays actual quotation count (`1 quotation received`), quoted amount (`Quoted: ₹500`), and a "View Quotes ›" action button.
+      - `JobDetailScreen.tsx`: Replaced misleading `Locating Available Local Pros` with a green "1 Professional Quote Received" status card and full Quotations Received list with quotation details, schedule pills, and Accept/Decline/Chat actions. Dynamically distinguishes Confirmed Service Value, Quoted Amount, and Pending state.
+      - `ChatDetailScreen.tsx`: Added structured Quotation Card renderer for `messageType === 'quotation'`, supporting amount, status badge, scope note, "Accept Quotation & Book 🛡️", "Decline", and "View Request".
+      - `pushNotificationService.ts` & `CustomerNavigator.tsx`: Added routing for `quotation` and `quotation_received` push notifications directly to the service request details screen.
+  - **Verification**:
+    - Live end-to-end API verification against MongoDB Atlas verified `GET /api/bookings/my-bookings`, `GET /api/bookings/:id`, `GET /api/chat/conversations`, and `GET /api/chat/messages/:id` returning real quotation amount (₹500), status `quotations_received`, and chat quotation cards.
+    - `mobile/customer-app` TypeScript check (`npx tsc --noEmit`) passed cleanly with 0 errors.
+    - `mobile/vendor-app` TypeScript check (`npx tsc --noEmit`) passed cleanly with 0 errors.
+    - Backend syntax check (`node --check`) passed cleanly with 0 errors.
+    - Web frontend build (`npm run build`) succeeded with 0 errors.
+
+- [x] **Task 4.30**: Fix Customer Quotations, Multi-Vendor Quotes & Customer-Controlled Assignment (`backend/src/controllers/booking.controller.js`, `backend/src/controllers/application.controller.js`, `backend/src/controllers/customer.controller.js`, `mobile/customer-app/src/screens/JobDetailScreen.tsx`, `mobile/customer-app/src/screens/MyJobsScreen.tsx`, `mobile/customer-app/src/api/client.ts`):
+  - **Root Cause Analysis**:
+    1. Phone on cellular network / failover: In real mobile environments where the device fails over to remote endpoints or receives an un-enriched booking payload, `JobDetailScreen.tsx` previously fell back to the static "Locating Available Local Pros" waiting card and hardcoded ₹0 total amount.
+    2. Missing Multi-Vendor Quotation UX: Customers could not compare multiple quotations side-by-side, sort bids by price or submission date, view full cost breakdowns (labor vs materials), or access the professional's profile directly.
+    3. Missing Explicit Confirmation Guard: Direct quote acceptance lacked a comprehensive booking terms confirmation modal and vendor eligibility/verification guards.
+  - **Full-Stack Implementation**:
+    - **Backend Booking Controller**:
+      - Updated `getBookingById` and `getBookingByJobId` to query active `Application` records, enrich them with live `VendorProfile` data (ratings, reviews, business name), and compute `quotationsCount`, `quotedAmount`, `minQuotedAmount`, and `status: 'quotations_received'`.
+    - **Backend Application Controller**:
+      - Hardened `updateApplicationStatus` to verify vendor profile verification and approval status (`vendorProfile.approvalStatus === 'approved'`), prevent stale re-acceptance, and atomically assign the request to the selected professional (`status: 'assigned'`, `selectedVendor: vendorId`, `booking: bookingId`).
+      - Automatically sets other submitted quotations to `status: 'rejected'` and broadcasts real-time updates via Socket.IO.
+    - **Mobile Customer App**:
+      - `JobDetailScreen.tsx`:
+        - Implemented resilient fallback in `loadBooking()` that unconditionally queries `api.applications.getJobApplications(jobId)` whenever quotes are missing and synchronizes canonical `status = 'quotations_received'`.
+        - Added navigation focus listener (`navigation?.addListener('focus')`) to refresh quotations on screen focus.
+        - Built unified **Quotations Received ({count})** comparison section with multi-vendor sorting pills ("Latest" vs "Lowest Price").
+        - Each quotation card renders: Specialist Name, Avatar/Monogram, "✓ WorkLogy Verified Pro", Star Rating, Review Count, Service Category, Quoted Total Amount in bold emerald green, Pricing Basis, Labor/Materials cost breakdown, Scope / Cover letter snippet, Schedule pill, Estimated Duration pill, Submission Date, and contextual action buttons: "Select Professional 🛡️", "View Profile ›", "Chat with Pro 💬", and "Decline".
+        - Built Customer Selection Confirmation Modal: displays complete professional card, agreed service total, parts breakdown, WorkLogy Escrow Protection guarantee, schedule/scope terms, and an explicit "Confirm & Assign Professional 🛡️" button.
+        - Redesigned Payment & Escrow Protection card: removes misleading `₹0`, showing "Quoted Amount (Awaiting Selection) - Final amount not confirmed" during quotation phase, "Confirmed Service Value" upon assignment, and "Awaiting quotation" when open.
+  - **Verification**:
+    - End-to-end multi-vendor QA verification with real MongoDB Atlas records: created second verified vendor Rajesh Kumar (₹520) alongside Shahe Aalam (₹450) on Job `#3057143E`.
+    - Customer accepted Quote 2 (₹520): atomic assignment returned HTTP 200, created Booking `BK-64968` with `confirmed` status, assigned Rajesh Kumar, generated `startOtp`, and rejected Quote 1.
+    - Concurrency test: attempted re-acceptance of rejected Quote 1 safely rejected with HTTP 400.
+    - Consistency across portals verified: Customer App shows Confirmed Service Value ₹520 with Rajesh Kumar, Vendor App shows confirmed booking for ₹520, and Admin Panel (`/api/bookings/BK-64968`) returns HTTP 200 with Customer Hridesh, Vendor Rajesh Kumar, Amount ₹520, and `escrow_locked` status.
+    - `mobile/customer-app` TypeScript check (`npx tsc --noEmit`): 0 errors.
+    - `mobile/vendor-app` TypeScript check (`npx tsc --noEmit`): 0 errors.
+    - Backend syntax check (`node --check`): 0 errors.
+    - Frontend web build (`npm run build`): 0 errors.
+
+- [x] **Task 4.31**: Fix Arrived at Site Notification & Customer OTP Workflow (`backend/src/services/notification.service.js`, `backend/src/controllers/booking.controller.js`, `backend/src/controllers/customer.controller.js`, `mobile/customer-app/src/screens/JobDetailScreen.tsx`, `mobile/customer-app/src/api/client.ts`, `mobile/customer-app/src/services/socketService.ts`, `mobile/vendor-app/src/screens/VendorJobDetailScreen.tsx`):
+  - **Root Cause Analysis**:
+    1. **Missing Backend Arrival Handler**: `updateBookingStatus` in `booking.controller.js` lacked an explicit branch for `status === 'arrived'`. When the technician tapped "Arrived at Site", it simply updated the status field without activating/generating the secure OTP, sending push notifications, or emitting arrival socket events.
+    2. **Mongoose `select: false` Masking**: `Booking.js` defined `otp`, `codeHash`, and `customerEncryptedOtp` with `select: false`. Standard queries (`Booking.findById`) never loaded `startOtp.otp` or `customerEncryptedOtp`.
+    3. **Response Key Mismatch**: `JobDetailScreen.tsx`, `HomeScreen.tsx`, and `MyJobsScreen.tsx` check `booking.arrivalOtp && !booking.isOtpVerified`. The backend was storing `startOtp.otp` and never mapped it to `arrivalOtp` for the customer.
+    4. **Notification Switch Fallthrough**: `notifyStatusChange` in `notification.service.js` lacked `case 'arrived'`, causing it to fall through to a generic update notification instead of the specified arrival push.
+  - **Full-Stack Implementation**:
+    - **Backend Services & Controllers**:
+      - `notification.service.js`: Added `case 'arrived'` with exact title `"Your technician has arrived"` and body `"Your professional has arrived at the service location. Open WorkLogy to view your service-start OTP."` with push notification support and idempotency deduplication (`status_${bookingId}_arrived`).
+      - `booking.controller.js`:
+        - Implemented explicit `if (status === 'arrived')` workflow: authenticates assigned vendor, generates/activates a cryptographically secure 6-digit OTP (via `generateSecureOtp()`), sets `arrivedAt` timestamp, dispatches persistent and push notifications to customer, emits real-time Socket.IO events (`booking_status_updated`, `technician_arrived`), and strips all plaintext OTP and hashes from the vendor's HTTP response.
+        - Updated `getBookingById`: selects `+startOtp.otp +startOtp.customerEncryptedOtp +startOtp.codeHash`. If requester is the customer or admin, securely decrypts/maps `bookingObj.arrivalOtp` and sets `isOtpVerified`. If requester is the vendor, strictly strips `arrivalOtp`, `otp`, `codeHash`, and `customerEncryptedOtp`.
+        - Updated `verifyStartOtp`: validates assigned vendor, attempt limit (5 max), expiry, and cryptographic hash match. Atomically consumes OTP (`startOtp.isConsumed = true`, `consumedAt`), transitions booking to `in_progress`, updates start timestamp, emits real-time Socket.IO events (`booking_status_updated` and `service_started`) to customer and vendor rooms.
+        - Updated `getCustomerStartOtp`: uses `generateSecureOtp()` with 24h validity and returns `arrivalOtp` alias.
+        - Updated `getCustomerBookings`: selects startOtp fields and maps `arrivalOtp` for active unverified bookings.
+      - `customer.controller.js`:
+        - Updated `getCustomerDashboardSummary` and `getCustomerBookings`: added `on_the_way` and `arrived` to `activeBookingList`, selected startOtp fields, and securely populated `arrivalOtp` for customer.
+    - **Mobile Customer App**:
+      - `client.ts`: Added `getStartOtp` method to `api.bookings`.
+      - `JobDetailScreen.tsx`: Added resilient fallback in `loadBooking()` to fetch `api.bookings.getStartOtp(booking._id)` if `booking.status === 'arrived'` and `arrivalOtp` is missing. Enabled OTP banner to render from either `booking.arrivalOtp` or `booking.startOtp.otp`.
+      - `socketService.ts`: Added listener for `technician_arrived` to trigger instant state sync.
+    - **Mobile Vendor App**:
+      - `VendorJobDetailScreen.tsx`: Allowed marking "Arrived at Customer Site" directly from `confirmed`, `scheduled`, `assigned`, or `on_the_way`. Shows the 6-digit Arrival OTP verification input box when arrived and unverified.
+  - **Verification**:
+    - Ran live end-to-end automated test suite (`test_arrival_otp_e2e.mjs`) against MongoDB Atlas:
+      1. Customer queries `getBookingById` -> returns `arrivalOtp: 832082`, `isOtpVerified: false`, zero hashes exposed (PASS).
+      2. Vendor queries `getBookingById` -> `arrivalOtp: undefined`, `startOtp.otp: undefined`, `startOtp.codeHash: undefined` (PASS).
+      3. Customer queries `getCustomerStartOtp` -> returns 200 with `otp: 832082` (PASS).
+      4. Vendor queries `getCustomerStartOtp` -> rejected with 403 Forbidden (PASS).
+      5. Repeated arrival tap -> idempotent 200 OK, does not generate duplicate OTP, returns safe response without plaintext OTP (PASS).
+      6. Verified MongoDB `Notification` collection -> persistent record exists with title `"Your technician has arrived"`, exact body, and idempotencyKey (PASS).
+      7. Unassigned vendor attempts verification -> rejected with 403 Forbidden (PASS).
+      8. Invalid OTP "000000" submitted -> rejected with 400 Bad Request, attempts decremented (4 remaining) (PASS).
+      9. Correct OTP "832082" submitted -> accepted with 200 OK, booking status transitioned to `in_progress`, `isOtpVerified: true` (PASS).
+      10. Replay / re-use of consumed OTP -> rejected from re-starting (PASS).
+      11. Customer re-queries -> booking reflects `in_progress`, consumed arrival PIN is cleared from view (PASS).
+      12. Escrow & Completion separation -> payment status remained strictly `escrow_locked` (PASS).
+    - `mobile/customer-app` TypeScript check (`npx tsc --noEmit`): 0 errors.
+    - `mobile/vendor-app` TypeScript check (`npx tsc --noEmit`): 0 errors.
+    - Web frontend build (`npm run build`): 0 errors.
+- [x] **Task 4.32**: WorkLogy Vendor App — Unified Jobs Feed with Domain Filters (`mobile/vendor-app/src/screens/JobsScreen.tsx`, `mobile/vendor-app/src/screens/VendorHomeScreen.tsx`, `mobile/vendor-app/src/screens/VendorJobDetailScreen.tsx`, `backend/test_unified_jobs_feed.mjs`):
+  - **Objective**:
+    - Remove separate `Direct Inquiries` and `New Requests` tabs from the Vendor App Jobs marketplace screen.
+    - Replace them with a unified **All Jobs** feed displaying all eligible customer-posted jobs across every supported service domain.
+    - Implement a clean, searchable domain filter control above the All Jobs feed dynamically loading categories from reference data.
+    - Preserve existing WorkLogy UI design, bottom navigation, booking workflows, quotations, and status segregation (`My Quotes`, `Accepted`, `In Progress`, `Completed`, `Cancelled`).
+  - **Implementation**:
+    - **Simplified Jobs Tab Structure**:
+      - Updated `JobTab` union type: `'all' | 'quoted' | 'accepted' | 'in_progress' | 'completed' | 'cancelled'`.
+      - Updated `TAB_DEFINITIONS`:
+        1. **All Jobs** (`key: 'all'`): icon `'briefcase-outline'`, empty title `"No matching jobs found"`, empty subtext `"Try another domain or refresh the feed."`.
+        2. **My Quotes** (`key: 'quoted'`): icon `'document-text-outline'`, empty title `"No Active Quotations"`.
+        3. **Accepted** (`key: 'accepted'`): icon `'checkmark-circle-outline'`.
+        4. **In Progress** (`key: 'in_progress'`): icon `'time-outline'`.
+        5. **Completed** (`key: 'completed'`): icon `'checkbox-outline'`.
+        6. **Cancelled** (`key: 'cancelled'`): icon `'close-circle-outline'`.
+      - Added `normalizeTab()` helper: seamlessly maps legacy navigation params (`'requests'`, `'new'`) to `'all'`.
+    - **Unified Feed Composition & Deduplication**:
+      - In `itemsByTab`: combines open direct customer inquiries (`myBookings.filter(b => b.status === 'pending_acceptance')`) with open marketplace jobs (`openJobs.filter(j => ['open', 'dispatching'].includes(j.status) && !j.selectedVendor)`).
+      - Deduplicated by linked job ID so inquiries and tender posts never show twice.
+    - **Searchable Domain/Category Filters**:
+      - Dynamically loads 30 canonical service domains from backend `/api/categories` and vendor coverage.
+      - Displays compact horizontal scrollable filter strip with "All Domains" pill + category pills with real-time job count badges.
+      - Tapping a domain filters jobs by canonical category ID, slug, and name.
+      - Tapping active domain or "All Domains" clears the filter.
+      - Includes debounced search bar searching across job title, problem description, category name, and locality.
+      - Displays active filter status banner with matching job count and "Clear Filter" action.
+    - **Rich Job Cards**:
+      - Displays service title, category pill, customer note, uploaded photos gallery row with count badge, locality, distance chip, schedule & preferred time slot, budget (fixed vs quote-based), and posted time ("2h ago", "Just now").
+      - Contextual actions: `Send Quote`, `Claim ⚡ / Accept` (for emergency/fixed price), `View Details` (direct inquiries render `Accept` & `Decline`).
+    - **Cross-Screen Integration**:
+      - Updated `VendorHomeScreen.tsx` and `VendorJobDetailScreen.tsx` to route to `initialTab: 'all'` while preserving category-specific entry points.
+  - **Verification**:
+    - Ran live automated E2E test suite (`backend/test_unified_jobs_feed.mjs`) against live backend & MongoDB Atlas:
+      1. Reference categories catalogue fetched (30 domains) (PASS).
+      2. Customer created 3 real jobs in 3 distinct domains: Electrical, AC & HVAC, Plumbing (PASS).
+      3. Vendor queried Unified All Jobs Feed: all 3 multi-domain jobs appeared concurrently in feed (PASS).
+      4. Domain filter Electrical Services: returned ONLY Electrical jobs (PASS).
+      5. Domain filter AC & HVAC Services: returned ONLY AC & HVAC jobs (PASS).
+      6. Domain filter Plumbing Services: returned ONLY Plumbing jobs (PASS).
+      7. Clear filter: restored all 3 jobs across every domain (PASS).
+      8. Search filter: isolated matching keyword job cleanly (PASS).
+      9. Quote submission: proposal submitted with amount and cover letter (PASS).
+      10. My Quotes tab: quotation tracked properly under `/api/applications/vendor` (PASS).
+      11. Tab segregation: open marketplace jobs strictly separated from Assigned / In Progress (PASS).
+    - Mobile Vendor App TypeScript check (`npx tsc --noEmit`): 0 errors.
+    - Mobile Customer App TypeScript check (`npx tsc --noEmit`): 0 errors.
+    - Frontend web production build (`npm run build`): 0 errors.
+
+- [x] **Task 4.33**: WorkLogy Vendor Multi-Domain Registration & Strict Job Feed Filtering (`mobile/vendor-app/src/screens/VendorRegisterScreen.tsx`, `mobile/vendor-app/src/screens/JobsScreen.tsx`, `mobile/vendor-app/src/screens/VendorEditProfileScreen.tsx`, `backend/src/models/VendorProfile.js`, `backend/src/controllers/auth.controller.js`, `backend/src/controllers/vendor.controller.js`, `backend/src/controllers/job.controller.js`, `frontend/src/pages/vendor/Onboarding.jsx`, `frontend/src/components/admin/VendorDetailsModal.jsx`, `frontend/src/pages/admin/Vendors.jsx`, `backend/test_vendor_domains_strict.mjs`):
+  - **Objective**:
+    - Allow vendors to select up to 3 service domains during registration (minimum 1, maximum 3).
+    - Enforce strict domain-based job visibility: a vendor's Jobs Feed must display only jobs matching their selected and approved domains (e.g. AC only -> only AC jobs; AC + Plumbing -> only AC and Plumbing; Electrical, Cleaning and unrelated domains strictly excluded).
+    - Enforce domain boundary constraints (min 1, max 3 distinct active domain IDs) on the backend and database model level.
+    - Prevent query parameter bypasses (`/jobs/open?category=unauthorized_domain` or `/jobs?category=unauthorized_domain` returns 0 jobs).
+    - Restrict the Jobs Screen domain filter strip to display ONLY the vendor's registered domains with "All My Domains" as default.
+    - Maintain category integrity during Customer App job creation by eliminating arbitrary fallback.
+    - Safely migrate legacy vendor profiles to comply with the 3-domain limit.
+  - **Implementation**:
+    - **Backend Models & Validation (`VendorProfile.js`)**:
+      - Added Mongoose array length validator on `VendorProfile.categories` ensuring `uniqueIds.size <= 3`.
+      - Added virtual `serviceDomainIds` getter/setter aliasing `categories` with virtuals enabled on `toJSON`/`toObject`.
+    - **Server-Side Registration & Profile Updates (`auth.controller.js`, `vendor.controller.js`)**:
+      - In `register`: extracts `serviceDomainIds || categories || selectedCategories || category || selectedCategory`.
+      - Validates and deduplicates canonical active `ServiceCategory` ObjectIds BEFORE creating the user document (preventing orphaned records).
+      - Enforces minimum 1 domain and maximum 3 domains (returns 400 Bad Request with explanatory message if `< 1` or `> 3`).
+      - In `updateVendorProfile`: validates and enforces the 1-to-3 domain limit on profile domain modifications.
+    - **Strict Job Feed Filtering (`job.controller.js`)**:
+      - In `getNearbyJobs`: strictly populates `approvedCategoryMap` from canonical `profile.categories` (up to 3 max). Removed arbitrary skill derivations.
+      - If vendor has 0 configured domains, returns `configurationStatus: 'missing_categories'` with 0 unrestricted jobs and prompt to select domains.
+      - Strict query param bypass protection: if query parameter `category` is not in vendor's approved domains, immediately returns 0 jobs.
+      - In `getJobs`: applies vendor domain restriction when invoked with vendor role, blocking direct API bypasses.
+      - In `createJob`: removed arbitrary fallback to random active category (`ServiceCategory.findOne({ isActive: true })`), returning 400 Bad Request if category is invalid or missing.
+    - **Legacy Data Migration (`backend/src/scripts/migrate_vendor_domains.js`)**:
+      - Inspected all vendor records, validated against active service categories, and capped multi-domain profiles to top 3 valid domains.
+    - **Vendor Registration UI (`VendorRegisterScreen.tsx`)**:
+      - Dynamically loads official categories from `api.categories.getAll()`.
+      - Multi-domain selection supporting 1 to 3 domains with real-time counter (`X of 3 domains selected`).
+      - Visually distinct active (emerald `#065F46` + checkmark) and inactive states.
+      - Blocks selecting a 4th domain with explanatory alert.
+      - Preserves selections and submits canonical domain IDs.
+    - **Vendor Edit Profile & Onboarding (`VendorEditProfileScreen.tsx`, `Onboarding.jsx`)**:
+      - Enforced 1 to 3 domain limit in `handleToggleCategory` and `handleCategoryToggle` with domain counter badges.
+    - **Vendor Jobs Screen Domain Filter (`JobsScreen.tsx`)**:
+      - Changed `domainFilterOptions` to include ONLY the vendor's registered/approved domains (`approvedCategoriesList`).
+      - Renamed default filter pill to `All My Domains`.
+    - **Admin Panel Compatibility (`VendorDetailsModal.jsx`, `Vendors.jsx`)**:
+      - Displays vendor registered domains with count badge (`X/3 Domains`), canonical IDs, and approval status in header and overview card.
+  - **Verification**:
+    - Created and executed comprehensive test suite (`backend/test_vendor_domains_strict.mjs`):
+      1. Register vendor with 1 domain (AC only) -> 201 Created (PASS).
+      2. Register vendor with 2 domains (AC + Plumbing) -> 201 Created (PASS).
+      3. Register vendor with 3 domains (AC + Plumbing + Electrical) -> 201 Created (PASS).
+      4. Register vendor with 4 domains -> 400 Bad Request, limit message, 0 orphaned users (PASS).
+      5. Duplicate domain IDs -> normalized to 2 distinct domains (PASS).
+      6. AC-only vendor sees AC jobs, Plumbing & Electrical strictly excluded (PASS).
+      7. Plumbing-only vendor sees Plumbing jobs, AC & Electrical strictly excluded (PASS).
+      8. Dual-domain vendor sees AC & Plumbing jobs, Electrical strictly excluded (PASS).
+      9. Domain filter pills reflect ONLY vendor's approved domains (PASS).
+      10. Direct API query param bypass blocked on `/jobs/open` and `/jobs` (PASS).
+      11. Customer job creation with invalid category rejected with 400 Bad Request (PASS).
+      12. Vendor with 0 domains shows clear setup state (`missing_categories`, 0 jobs) (PASS).
+      Result: 33 Passed, 0 Failed.
+    - Mobile Vendor App TypeScript check (`npx tsc --noEmit`): 0 errors.
+    - Mobile Customer App TypeScript check (`npx tsc --noEmit`): 0 errors.
+    - Frontend web production build (`npm run build`): 0 errors.
+
+- [x] **Task 4.34**: WorkLogy Vendor App — Profile Domain Management & Dynamic Job Filtering (`mobile/vendor-app/src/screens/VendorProfileScreen.tsx`, `mobile/vendor-app/src/screens/VendorDomainsScreen.tsx`, `mobile/vendor-app/src/navigation/VendorNavigator.tsx`, `mobile/vendor-app/src/screens/JobsScreen.tsx`, `backend/src/controllers/job.controller.js`, `backend/test_vendor_profile_domains.mjs`):
+  - **Objective**:
+    - Add a new "My Domains" option to the existing Profile screen near "My Services".
+    - Allow vendors to view, add, or remove up to 3 domains with real-time selection limits and server persistence.
+    - Implement an Active Domain Switcher to effortlessly switch browsing contexts between "All My Domains" and individual domains.
+    - Enforce strict server-side and client-side job filtering ensuring vendors only access jobs matching their eligible, approved domains.
+    - Automatically synchronize and refresh the Jobs Feed when domains are saved or switched.
+  - **Implementation**:
+    - **Profile Screen Integration (`VendorProfileScreen.tsx`)**:
+      - Added professional "My Domains" menu row with subtitle `"Manage your service categories"`, `layers-outline` icon in emerald badge, and real-time count pill (`${profile.categories.length}/3`).
+      - Tapping navigates seamlessly to `VendorDomains`.
+    - **Dedicated Domain Management Screen (`VendorDomainsScreen.tsx`)**:
+      - Status & Overview Banner: displays approval status badge (`Approved ✓` or `Pending Review ⏳`) and selection indicator (`X of 3 Domains Selected`).
+      - Active Browsing Domain Switcher: interactive pills for "All My Domains" and each registered domain, with a 1-tap "Browse Jobs Feed in this Domain ➔" action.
+      - Registered Domains List: lists active domains with status badges and safe removal action (enforcing min 1 domain limit).
+      - Add Service Domains: displays remaining canonical domains from `/categories` with 3-domain limit protection.
+      - Sticky bottom save bar persisting changes through `api.vendors.updateProfile({ categories, serviceDomainIds })`.
+    - **Navigation Stack Wiring (`VendorNavigator.tsx`)**:
+      - Registered `VendorDomainsScreen` with header title `'My Domains'` and added to `SCREENS_WITH_CUSTOM_HEADER`.
+    - **Dynamic Feed Synchronization (`JobsScreen.tsx`)**:
+      - Added dynamic route parameter listener for `route.params.category` and `route.params.activeDomain`, enabling immediate feed switching upon navigating from domain management.
+    - **Backend Rejection & Informative Status (`job.controller.js`)**:
+      - Included structured rejection message `message: 'You are not registered for this service domain.'` when attempting to query unapproved domains.
+  - **Verification**:
+    - Ran live automated E2E test suite (`backend/test_vendor_profile_domains.mjs`):
+      1. Vendor registers with 1 domain (AC) (PASS).
+      2. Fetch profile returns 1 registered domain (PASS).
+      3. Vendor adds 2nd & 3rd domains (AC + Plumbing + Electrical) via profile update (PASS).
+      4. Selecting a 4th domain is rejected with 400 Bad Request and limit message (PASS).
+      5. Active Domain Switcher: "All My Domains" includes AC, Plumbing, Electrical and excludes Cleaning (PASS).
+      6. Active Domain Switcher: AC only feed isolates AC jobs and hides Plumbing (PASS).
+      7. Active Domain Switcher: Plumbing only feed isolates Plumbing jobs and hides AC (PASS).
+      8. Active Domain Switcher: Electrical only feed isolates Electrical jobs (PASS).
+      9. Querying unapproved Cleaning domain returns 0 jobs with unauthorized notice (PASS).
+      10. Removing Electrical domain immediately removes Electrical jobs from feed (PASS).
+      11. Attempting to remove all domains (0 domains) is rejected with 400 Bad Request (PASS).
+      Result: 30 Passed, 0 Failed.
+    - Strict Multi-Domain registration & isolation test suite (`backend/test_vendor_domains_strict.mjs`): 33 Passed, 0 Failed.
+    - Mobile Vendor App TypeScript check (`npx tsc --noEmit`): 0 errors.
+    - Mobile Customer App TypeScript check (`npx tsc --noEmit`): 0 errors.
+- [x] **Task 4.35**: WorkLogy Vendor App — Complete Service Creation Wizard Fix, Domain Restrictions, Auto-Fill & Duplicate Prevention (`mobile/vendor-app/src/screens/VendorNewServiceScreen.tsx`, `mobile/vendor-app/src/screens/VendorServicesScreen.tsx`, `backend/src/controllers/vendor.controller.js`, `backend/src/models/ServiceListing.js`, `mobile/vendor-app/src/types/index.ts`, `backend/test_service_creation_wizard.mjs`):
+  - **Objective**:
+    - Strictly enforce vendor domain restrictions in the Add Service wizard and backend APIs.
+    - Provide accurate 5-step wizard with state preservation and subcategory isolation by selected domain.
+    - Implement "Other" custom service name support with length validation (3-60 chars) and domain association.
+    - Auto-generate professional titles, summaries, and descriptions from selected tasks with manual edit protection.
+    - Remove Service Cover Photo upload from wizard while using category defaults.
+    - Resolve the Review/Publish navigation loop and hardware back button trap.
+    - Prevent duplicate services using idempotency keys, atomic unique indexes, and duplicate checks.
+    - Ensure My Services screen displays real backend data (booking counts, ratings, statuses) without hardcoded values.
+  - **Implementation**:
+    - **Backend Domain Authorization & Idempotency (`vendor.controller.js`, `ServiceListing.js`)**:
+      - Verified vendor's approved categories (`vendorProfile.categories`) in `createServiceListing` and `updateServiceListing`. Rejects unapproved categories with 403 Forbidden.
+      - Enforced subcategory membership under canonical `ServiceCategory`. Validated custom tasks (`isCustom`) to 3–60 chars.
+      - Added idempotency key lookup via `x-idempotency-key` header and model field; returns 200 OK on duplicate retries without inserting extra records.
+      - Added duplicate check and MongoDB partial unique index on `{ vendor: 1, domain: 1, subcategory: 1 }` for active statuses (`published`, `draft`, `pending_approval`), returning 409 Conflict.
+      - Enriched `getMyServices` with real dynamic `bookingCount` via MongoDB `Booking.aggregate`.
+      - Safe migration (`cleanup_duplicate_services.js`) archived existing zero-booking orphaned duplicate listings.
+    - **Mobile Vendor App Wizard Fix (`VendorNewServiceScreen.tsx`)**:
+      - Replaced all-category loading with vendor-approved domains filter. Rendered empty warning state with CTA to "Manage My Domains" if none approved.
+      - Connected subcategory list strictly to `selectedCategory.subcategories` + "Other (Custom)" option.
+      - Implemented deterministic template auto-filler (`generateServiceDefaults`) with edit tracking (`hasEditedTitle`, `hasEditedSummary`, `hasEditedDesc`) and an explicit "Suggest Content" button.
+      - Removed cover photo upload controls from Step 1 and Review.
+      - Fixed navigation loop: on publish success, sets `submitStatus: 'success'`, displays confirmation, and navigates cleanly to `VendorServices` with refresh timestamp.
+      - Fixed back button: decrements steps cleanly and prompts discard confirmation on Step 1 without recursive navigation loops.
+    - **My Services Screen Fix (`VendorServicesScreen.tsx`)**:
+      - Removed hardcoded `42 bookings` fallback, replaced with dynamic `item.bookingCount ?? 0`.
+      - Replaced hardcoded `4.8` rating with dynamic `item.reviewCount ? ... : 'New'`.
+      - Added route refresh listener to re-fetch on navigation from Add Service.
+  - **Verification**:
+    - Automated test suite (`backend/test_service_creation_wizard.mjs`): 22/22 Passed.
+    - Multi-domain registration tests (`backend/test_vendor_domains_strict.mjs`): 33/33 Passed.
+    - Profile domain tests (`backend/test_vendor_profile_domains.mjs`): 30/30 Passed.
+    - Mobile Vendor App TypeScript check (`npx tsc --noEmit`): 0 errors.
+- [x] **Task 4.36**: WorkLogy Vendor App — Remove Direct Inquiries Section from Home Screen (`mobile/vendor-app/src/screens/VendorHomeScreen.tsx`):
+  - Removed the `Direct Inquiries` section from the vendor home dashboard feed.
+  - Screen now transitions seamlessly from Active Booking directly into "Nearby Jobs for You".
+  - Verified with `npx tsc --noEmit` (0 errors).
+- [x] **Task 4.37**: WorkLogy Vendor App — Complete Placeholder & Input Guidance Audit (Production Finalization):
+  - **Audit Scope**: Audited every text input, numeric field, search bar, text area, modal, and empty state across all 15 screens in `mobile/vendor-app`.
+  - **Dynamic Domain-Aware Placeholders (`VendorNewServiceScreen.tsx`)**:
+    - Implemented `getDomainPlaceholders` helper delivering domain-tailored suggestions for AC & HVAC, Electrical, Plumbing, Carpentry, Cleaning, Painting, and General services.
+    - Title, custom subcategory, summary, and description dynamically adapt to the selected domain without wiping user-typed text.
+  - **Inputs & Placeholders Improved Across App**:
+    - `VendorRegisterScreen.tsx`: Full name, business name, email, phone, and password placeholders updated with clear instructions.
+    - `VendorLoginScreen.tsx`: Email and password placeholders enhanced.
+    - `VendorEditProfileScreen.tsx`: Legal full name, business enterprise name, phone, bio, and custom skill modal placeholders updated.
+    - `VendorSettingsScreen.tsx`: Current password, new password, and confirm new password placeholders updated.
+    - `JobsScreen.tsx`: Search bar and quotation breakdown inputs (diagnostic fee, labour, parts, travel, duration, schedule, and warranty notes) updated with ₹ units and realistic examples.
+    - `VendorJobDetailScreen.tsx`: Arrival 6-digit start code OTP, completion sign-off summary, and cancellation note inputs updated.
+    - `VendorServiceAreaScreen.tsx`: Locality search bar and base workshop address modal updated.
+    - `VendorKycScreen.tsx`: Aadhaar, PAN, Voter ID, and Trade License document number inputs enhanced with exact printing guidance.
+    - `VendorMessagesScreen.tsx`: Message search bar updated to specify customer name and service keywords.
+    - `VendorChatDetailScreen.tsx`: Message composer placeholder updated.
+    - `VendorHelpSupportScreen.tsx`: Support ticket subject and description placeholders updated.
+    - `VendorReviewsScreen.tsx`: Review response composer placeholder updated.
+    - `ConfirmedJobsScreen.tsx` & `AvailableJobsScreen.tsx`: Arrival OTP, work sign-off, bid amount, and cover note placeholders updated.
+- [x] **Task 4.38**: WorkLogy Vendor App — Production-Ready Mobile OTP Authentication & Persistent Login Sessions (`backend/src/models/Session.js`, `backend/src/models/OtpChallenge.js`, `backend/src/utils/sms.js`, `backend/src/utils/generateToken.js`, `backend/src/controllers/auth.controller.js`, `backend/src/routes/auth.routes.js`, `backend/src/middleware/auth.middleware.js`, `mobile/vendor-app/src/constants/index.ts`, `mobile/vendor-app/src/api/client.ts`, `mobile/vendor-app/src/context/AuthContext.tsx`, `mobile/vendor-app/src/screens/VendorLoginScreen.tsx`, `mobile/vendor-app/src/navigation/VendorNavigator.tsx`, `backend/test_vendor_otp_auth_e2e.mjs`, `backend/test_dual_auth.mjs`):
+  - **Objective**:
+    - Build a production-grade, cryptographically secure mobile OTP authentication flow for registered Indian mobile numbers (`+91`).
+    - Eliminate repetitive login prompts across app/device restarts by implementing a 90-day persistent session architecture using rotating refresh tokens and server-side session tracking.
+    - Provide background token refresh via single-flight queue and Axios/fetch response interceptors on 15-minute access token expiry.
+    - Maintain full backward compatibility with password login, admin contracts, and Customer App.
+  - **Backend Implementation**:
+    - `Session.js`: Created Mongoose model tracking user ID, role, session token, SHA-256 hashed refresh token, previous refresh token hash (with 30-second concurrency grace period for in-flight requests), device info, active state, and 90-day TTL expiry index.
+    - `OtpChallenge.js`: Created Mongoose model for HMAC-SHA256 hashed 6-digit OTP challenges with 5-minute TTL, purpose binding (`vendor_login`), and 5-attempt brute-force protection.
+    - `sms.js`: Production-ready SMS provider adapter supporting Fast2SMS, Twilio, and simulated delivery in development/test mode with timing-safe comparisons and Indian phone normalization (`+91` / `0` prefix stripping).
+    - `generateToken.js`: Configured short-lived 15-minute access tokens and 90-day rotating refresh tokens.
+    - `auth.middleware.js`: Attaches `req.sessionId` and emits structured `{ success: false, code: 'TOKEN_EXPIRED' }` on JWT expiry.
+    - `auth.controller.js`: Implemented `sendLoginOtp` (with 60s cooldown, 5/hr rate limiting, and vendor existence checks), `verifyLoginOtp` (timing-safe check, single-use consumption, session creation), `refreshTokenSession` (safe rotation with concurrency grace period), and `logoutSession` (explicit server revocation).
+    - Mounted endpoints: `POST /api/auth/otp/send`, `POST /api/auth/otp/verify`, `POST /api/auth/token/refresh`, `POST /api/auth/session/logout`.
+  - **Mobile Vendor App Implementation**:
+    - `client.ts`: Added `getStoredRefreshToken()`, single-flight `refreshSessionToken()` queue to coalesce concurrent 401s, automatic 401 request retry interceptor, and new auth API methods.
+    - `AuthContext.tsx`: Added `sendOtp` and `verifyOtp` methods; updated `restoreSession()` to silently validate/refresh sessions in the background without clearing credentials unless revoked (code `SESSION_REVOKED`).
+    - `VendorLoginScreen.tsx`: Redesigned to match the dark card mockup with segmented tabs: `[ Mobile OTP ]` | `[ Email & Password ]`. Features phone input with 🇮🇳 `+91` country code badge, `Continue with OTP`, 6-digit OTP code entry with 60s countdown resend timer, and pre-fill demo shortcut.
+    - `VendorNavigator.tsx`: Added branded splash screen while `isLoading` resolves, synced navigation history with `user` authentication state, and excluded login/register from tab bars and stack headers.
+  - **Verification**:
+    - Automated Backend E2E Test Suite (`backend/test_vendor_otp_auth_e2e.mjs`): All 12/12 test scenarios passed cleanly (invalid phone rejection, unregistered number rejection, 60s cooldown, incorrect OTP rejection, correct OTP verification, OTP reuse prevention, access token verification, token refresh rotation, rotated token auth, explicit logout revocation, revoked token rejection).
+    - Dual Auth Test Suite (`backend/test_dual_auth.mjs`): Password login, access token auth, silent rotation, mobile OTP verification, and explicit logout all passed.
+- [x] **Task 4.39**: WorkLogy Vendor App — Unified UI Redesign + OTP-Based Multi-Step Registration & Resumption (`mobile/vendor-app/src/theme/colors.ts`, `mobile/vendor-app/src/screens/VendorLoginScreen.tsx`, `mobile/vendor-app/src/screens/VendorRegisterScreen.tsx`, `mobile/vendor-app/src/screens/VendorOtpVerificationScreen.tsx`, `mobile/vendor-app/src/screens/VendorOnboardingProfileScreen.tsx`, `mobile/vendor-app/src/screens/VendorOnboardingDomainsScreen.tsx`, `mobile/vendor-app/src/screens/VendorOnboardingServiceScreen.tsx`, `mobile/vendor-app/src/components/common/OnboardingProgress.tsx`, `mobile/vendor-app/src/navigation/VendorNavigator.tsx`, `mobile/vendor-app/src/context/AuthContext.tsx`, `mobile/vendor-app/src/screens/VendorHomeScreen.tsx`, `backend/src/models/VendorProfile.js`, `backend/src/models/OtpChallenge.js`, `backend/src/controllers/auth.controller.js`, `backend/test_multistep_onboarding_e2e.mjs`):
+  - **Objective**:
+    - Unify the entire authentication and onboarding flow into a consistent, professional WorkLogy light design system (`#08765A` brand green, `#0B8F6A` action green, `#F7F9FA` background, `#FFFFFF` cards, `#17212B` text, `#DDE4E8` borders).
+    - Remove the mismatched dark theme login card and replace the single long registration form with an intuitive 3-step progressive onboarding wizard.
+    - Enforce verified mobile SMS OTP before account creation. Successful OTP verification creates an authenticated session and initiates progressive onboarding without duplicate accounts.
+    - Implement a functional, visible "Skip for now" action on every post-OTP onboarding step.
+    - Persist incomplete onboarding drafts (`onboardingStep: 'profile_pending' | 'domains_pending' | 'first_service_pending' | 'completed'`) and render an interactive Setup Checklist banner on the Vendor Dashboard.
+  - **Implementation**:
+    - **Design System Alignment (`colors.ts`)**: Defined unified light palette tokens with accessible contrast, standardized input heights (50-52px), and clean elevation shadows.
+    - **Screen 1: Login (`VendorLoginScreen.tsx`)**: Rebuilt with crisp light card, WorkLogy brand mark, `Continue with OTP`, 10-digit Indian phone validation (`+91`), clean secondary email/password toggle, and removed exposed dev bypasses.
+    - **Screen 2: Dedicated OTP Verification (`VendorOtpVerificationScreen.tsx`)**: Unified OTP verification screen with 6-digit spaced code entry, 60s cooldown timer, resend action, masked phone display, and smart routing to the last incomplete onboarding step or home feed.
+    - **New Partner Registration (`VendorRegisterScreen.tsx`)**: Streamlined mobile entry screen requesting `purpose: 'register'` OTP, rejecting existing accounts with 409 Conflict.
+    - **Step 1: Profile & Business (`VendorOnboardingProfileScreen.tsx`)**: Collects Full Name / Lead Technician, Business/Workshop name, and optional email with `Save & Continue` and `Skip for now`.
+    - **Step 2: Choose Domains (`VendorOnboardingDomainsScreen.tsx`)**: Selects up to 3 domains from canonical categories with live counter, `Save & Continue`, `Skip for now`, and back navigation.
+    - **Step 3: Post First Service (`VendorOnboardingServiceScreen.tsx`)**: Domain-restricted subcategory picker with custom `Other` task, auto-suggested titles/descriptions with edit tracking, trade experience, and fixed visit pricing with `Save & Publish` and `Skip for now`.
+    - **Dashboard Setup Checklist (`VendorHomeScreen.tsx`)**: Displays a percentage-progress checklist card with direct resume shortcuts whenever onboarding is incomplete.
+    - **Backend Integration (`auth.controller.js`, `VendorProfile.js`, `OtpChallenge.js`)**: Added `onboardingStep` schema field, supported `vendor_register` challenge purpose, timing-safe OTP verification, and idempotent service creation.
+  - **Verification**:
+    - Automated Multi-Step Onboarding Test Suite (`backend/test_multistep_onboarding_e2e.mjs`): 10/10 tests passed (duplicate phone rejection, new phone OTP issue, incorrect OTP rejection, account creation, profile update, domain validation/limits, service creation, duplicate idempotency, completion status, returning user login).
+- [x] **Task 4.40**: Vendor App — Mask Temporary Emails & Provide "Fill Email" Action Prompts Across All Screens (`mobile/vendor-app/src/utils/formatters.ts`, `mobile/vendor-app/src/screens/VendorSettingsScreen.tsx`, `mobile/vendor-app/src/screens/VendorEditProfileScreen.tsx`, `mobile/vendor-app/src/screens/VendorOnboardingProfileScreen.tsx`, `mobile/vendor-app/src/screens/VendorHomeScreen.tsx`, `backend/src/controllers/vendor.controller.js`):
+  - **Objective**:
+    - Ensure that internal backend-generated placeholder emails (e.g., `temp_7572076103_...@worklogy.local`) are never exposed or shown to the vendor as their actual email.
+    - Whenever a temporary email is detected, keep the email field empty/blank and actively prompt the vendor to fill/add their real personal or business email address.
+    - Provide intuitive "Fill Email" buttons and modals across Settings, Profile, Onboarding, and the Dashboard Setup Checklist, with real-time MongoDB persistence and duplicate email prevention.
+  - **Implementation**:
+    - **Shared Utility (`formatters.ts`)**: Added `isTemporaryEmail(email)` (detects `@worklogy.local`, `temp_`, etc.) and `getDisplayEmail(email)`.
+    - **Settings & Account Security (`VendorSettingsScreen.tsx`)**: Replaced raw email display with dynamic check: if temporary, displays "Not added" alongside an active `+ Fill Email` button and helper notice ("Add your email to receive invoices and account security alerts"). Added an "Add / Update Account Email" modal with format validation, error alerts, and real-time state synchronization via `updateLocalUser`.
+    - **Edit Profile (`VendorEditProfileScreen.tsx`)**: Made email input editable (`editable={true}`), initialized as empty string when temporary, displayed "Please fill your email" prompt badge, and included email in the update payload.
+    - **Onboarding Profile Step 1 (`VendorOnboardingProfileScreen.tsx`)**: Initialized email as blank when temporary, added helper text prompting email entry, and synchronized saved email to local auth state.
+    - **Dashboard Setup Checklist (`VendorHomeScreen.tsx`)**: Added `hasEmail` check; if vendor has a temporary email, adds "Fill Email for Invoices & Booking Receipts" to the dashboard checklist card.
+    - **Backend Integration (`vendor.controller.js`)**: Updated `updateVendorProfile` to validate, check for duplicate email conflicts across other accounts, and persist real email directly to the `User` model in MongoDB Atlas.
+  - **Verification**:
+    - End-to-end automated email update script: verified updating temporary email to a real email (`verified_partner_...@gmail.com`), verified MongoDB persistence, and verified duplicate email rejection with 400 Bad Request.
+    - TypeScript compilation (`npx tsc --noEmit`): 0 errors in both `mobile/vendor-app` and `mobile/customer-app`.
+
+
+

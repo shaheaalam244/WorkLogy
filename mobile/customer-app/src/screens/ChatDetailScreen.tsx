@@ -23,7 +23,7 @@ import { api } from '../api/client';
 import { socketService } from '../services/socketService';
 import { dataSyncService } from '../services/dataSyncService';
 import { COLORS, SOCKET_EVENTS } from '../constants';
-import { formatTime, formatChatDateSeparator, getStatusColor, formatStatusText } from '../utils/formatters';
+import { formatCurrency, formatTime, formatChatDateSeparator, getStatusColor, formatStatusText } from '../utils/formatters';
 import type { ChatMessage } from '../types';
 
 const STATUSBAR_HEIGHT = Platform.OS === 'android' ? (StatusBar.currentHeight || 24) : (Platform.OS === 'ios' ? 44 : 0);
@@ -68,6 +68,8 @@ export default function ChatDetailScreen({ route, navigation }: any) {
   const [error, setError] = useState<string | null>(null);
   const [isSessionExpired, setIsSessionExpired] = useState<boolean>(false);
   const [showNewMessageIndicator, setShowNewMessageIndicator] = useState<boolean>(false);
+  const [acceptingQuoteId, setAcceptingQuoteId] = useState<string | null>(null);
+  const [rejectingQuoteId, setRejectingQuoteId] = useState<string | null>(null);
 
   const flatListRef = useRef<FlatList>(null);
   const isMountedRef = useRef(true);
@@ -407,6 +409,29 @@ export default function ChatDetailScreen({ route, navigation }: any) {
           setIsOnline(data.isOnline);
         }
       });
+
+      // Realtime quotation status update
+      socket.on('quotation_status_updated', (data: { applicationId: string; status: string }) => {
+        if (!isSubscribed) return;
+        setMessages((prev) =>
+          prev.map((m): ChatMessage => {
+            if (
+              m.quotationData &&
+              (String(m.quotationData.applicationId) === String(data.applicationId) ||
+               String(m.quotationData.quotationId) === String(data.applicationId))
+            ) {
+              return {
+                ...m,
+                quotationData: {
+                  ...m.quotationData,
+                  status: data.status
+                }
+              };
+            }
+            return m;
+          })
+        );
+      });
     };
 
     setupChatSocket();
@@ -420,6 +445,7 @@ export default function ChatDetailScreen({ route, navigation }: any) {
         socket.off(SOCKET_EVENTS.RECEIVE_MESSAGE);
         socket.off('messages_read');
         socket.off('user_presence');
+        socket.off('quotation_status_updated');
       }
     };
   }, [conversationId, otherUser?._id, user?._id]);
@@ -514,6 +540,58 @@ export default function ChatDetailScreen({ route, navigation }: any) {
     }
   };
 
+  const handleAcceptQuotationFromChat = async (msg: ChatMessage) => {
+    const appId = msg.quotationData?.applicationId || msg.quotationData?.quotationId;
+    if (!appId || acceptingQuoteId) return;
+
+    try {
+      setAcceptingQuoteId(String(appId));
+      const res = await api.applications.acceptQuotation(String(appId));
+      if (res.success) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m._id === msg._id && m.quotationData
+              ? { ...m, quotationData: { ...m.quotationData, status: 'accepted' } }
+              : m
+          )
+        );
+        dataSyncService.notify('BOOKINGS_CHANGED', {});
+        const targetJobId = msg.quotationData?.jobId || activeJob?._id || bookingId;
+        navigation.navigate('JobDetail', {
+          jobId: targetJobId,
+          bookingId: res.booking?._id || targetJobId
+        });
+      }
+    } catch (err: any) {
+      console.warn('Failed to accept quotation:', err);
+    } finally {
+      setAcceptingQuoteId(null);
+    }
+  };
+
+  const handleRejectQuotationFromChat = async (msg: ChatMessage) => {
+    const appId = msg.quotationData?.applicationId || msg.quotationData?.quotationId;
+    if (!appId || rejectingQuoteId) return;
+
+    try {
+      setRejectingQuoteId(String(appId));
+      const res = await api.applications.rejectQuotation(String(appId));
+      if (res.success) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m._id === msg._id && m.quotationData
+              ? { ...m, quotationData: { ...m.quotationData, status: 'rejected' } }
+              : m
+          )
+        );
+      }
+    } catch (err: any) {
+      console.warn('Failed to decline quotation:', err);
+    } finally {
+      setRejectingQuoteId(null);
+    }
+  };
+
   // 5. Render Message Item with Date Separator & Delivery Indicators
   const renderMessageItem = ({ item, index }: { item: ChatMessage; index: number }) => {
     const senderId = typeof item.sender === 'object' ? item.sender._id : item.sender;
@@ -532,6 +610,173 @@ export default function ChatDetailScreen({ route, navigation }: any) {
           showDateSeparator = true;
         }
       }
+    }
+
+    // Render Structured Quotation Card
+    if (item.messageType === 'quotation' && item.quotationData) {
+      const qStatus = item.quotationData.status || 'submitted';
+      const isAccepted = qStatus === 'accepted';
+      const isRejected = qStatus === 'rejected';
+      const isPending = !isAccepted && !isRejected;
+      const targetAppId = item.quotationData.applicationId || item.quotationData.quotationId;
+      const isAcceptingThis = acceptingQuoteId === String(targetAppId);
+      const isRejectingThis = rejectingQuoteId === String(targetAppId);
+
+      return (
+        <View key={item._id || index}>
+          {showDateSeparator && (
+            <View style={styles.dateSeparatorWrapper}>
+              <View style={styles.dateSeparatorLine} />
+              <View style={styles.dateSeparatorPill}>
+                <Text style={styles.dateSeparatorText}>
+                  {formatChatDateSeparator(item.createdAt)}
+                </Text>
+              </View>
+              <View style={styles.dateSeparatorLine} />
+            </View>
+          )}
+
+          <View style={[styles.bubbleWrapper, styles.bubbleWrapperLeft, { marginVertical: 6 }]}>
+            <View style={styles.quotationCardWrapper}>
+              {/* Header Badge */}
+              <View style={styles.quoteCardTopHeader}>
+                <View style={styles.quoteCardTitleRow}>
+                  <Text style={styles.quoteBadgeIcon}>📋</Text>
+                  <Text style={styles.quoteCardHeading}>Service Quotation</Text>
+                </View>
+                <View
+                  style={[
+                    styles.quoteStatusPill,
+                    isAccepted
+                      ? styles.quoteStatusAccepted
+                      : isRejected
+                      ? styles.quoteStatusRejected
+                      : styles.quoteStatusPending
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.quoteStatusPillText,
+                      isAccepted
+                        ? styles.quoteStatusTextAccepted
+                        : isRejected
+                        ? styles.quoteStatusTextRejected
+                        : styles.quoteStatusTextPending
+                    ]}
+                  >
+                    {isAccepted ? 'Accepted' : isRejected ? 'Declined' : 'Pending Review'}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Price Banner */}
+              <View style={styles.quotePriceBanner}>
+                <Text style={styles.quotePriceLabel}>Quoted Amount</Text>
+                <Text style={styles.quotePriceValue}>{formatCurrency(item.quotationData.proposedAmount || 0)}</Text>
+                <Text style={styles.quoteBasisText}>
+                  {item.quotationData.pricingBasis === 'hourly' ? 'Hourly Rate' : 'Fixed Price Quote'}
+                </Text>
+              </View>
+
+              {/* Schedule and Duration Pills */}
+              <View style={styles.quotePillRow}>
+                <View style={styles.quoteInfoPill}>
+                  <Ionicons name="calendar-outline" size={13} color="#06684F" />
+                  <Text style={styles.quoteInfoPillText}>
+                    {item.quotationData.proposedSchedule || 'Flexible Schedule'}
+                  </Text>
+                </View>
+                <View style={styles.quoteInfoPill}>
+                  <Ionicons name="time-outline" size={13} color="#06684F" />
+                  <Text style={styles.quoteInfoPillText}>
+                    {item.quotationData.estimatedDuration || '1-2 hours'}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Scope / Cover letter */}
+              {item.quotationData.coverLetter ? (
+                <View style={styles.quoteNoteBox}>
+                  <Text style={styles.quoteNoteLabel}>Specialist Scope & Note:</Text>
+                  <Text style={styles.quoteNoteContent}>"{item.quotationData.coverLetter}"</Text>
+                </View>
+              ) : null}
+
+              {/* Actions */}
+              {isPending && !isMe ? (
+                <View style={styles.quoteActionsContainer}>
+                  <TouchableOpacity
+                    style={[styles.quoteAcceptButton, isAcceptingThis && { opacity: 0.7 }]}
+                    onPress={() => handleAcceptQuotationFromChat(item)}
+                    disabled={isAcceptingThis || isRejectingThis}
+                    activeOpacity={0.85}
+                  >
+                    {isAcceptingThis ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Text style={styles.quoteAcceptButtonText}>Accept Quotation & Book 🛡️</Text>
+                    )}
+                  </TouchableOpacity>
+
+                  <View style={{ flexDirection: 'row', marginTop: 8, gap: 8 }}>
+                    <TouchableOpacity
+                      style={styles.quoteViewJobBtn}
+                      onPress={() => {
+                        const targetJobId = item.quotationData?.jobId || activeJob?._id || bookingId;
+                        if (targetJobId) {
+                          navigation.navigate('JobDetail', { jobId: targetJobId });
+                        }
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.quoteViewJobBtnText}>View Request</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.quoteDeclineButton}
+                      onPress={() => handleRejectQuotationFromChat(item)}
+                      disabled={isAcceptingThis || isRejectingThis}
+                      activeOpacity={0.8}
+                    >
+                      {isRejectingThis ? (
+                        <ActivityIndicator size="small" color="#64748B" />
+                      ) : (
+                        <Text style={styles.quoteDeclineButtonText}>Decline</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ) : isAccepted ? (
+                <View style={styles.quoteAcceptedBanner}>
+                  <Text style={styles.quoteAcceptedBannerText}>
+                    ✓ Quotation accepted! Service booking is confirmed with Escrow Protection.
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.quoteViewBookingLink}
+                    onPress={() => {
+                      const targetJobId = item.quotationData?.jobId || activeJob?._id || bookingId;
+                      if (targetJobId) {
+                        navigation.navigate('JobDetail', { jobId: targetJobId });
+                      }
+                    }}
+                  >
+                    <Text style={styles.quoteViewBookingLinkText}>View Booking Details ›</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : isRejected ? (
+                <View style={styles.quoteRejectedBanner}>
+                  <Text style={styles.quoteRejectedBannerText}>✕ This quotation was declined.</Text>
+                </View>
+              ) : null}
+
+              {/* Card Footer with Timestamp */}
+              <View style={styles.quoteCardFooter}>
+                <Text style={styles.quoteTimestampText}>{formatTime(item.createdAt)}</Text>
+              </View>
+            </View>
+          </View>
+        </View>
+      );
     }
 
     return (
@@ -1391,5 +1636,221 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 12,
     fontWeight: '700'
+  },
+
+  // Quotation Card Styles
+  quotationCardWrapper: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1.5,
+    borderColor: '#86EFAC',
+    width: '100%',
+    maxWidth: 320,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3
+  },
+  quoteCardTopHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10
+  },
+  quoteCardTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6
+  },
+  quoteBadgeIcon: {
+    fontSize: 16
+  },
+  quoteCardHeading: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0F172A'
+  },
+  quoteStatusPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12
+  },
+  quoteStatusAccepted: {
+    backgroundColor: '#DCFCE7'
+  },
+  quoteStatusRejected: {
+    backgroundColor: '#FEE2E2'
+  },
+  quoteStatusPending: {
+    backgroundColor: '#FEF3C7'
+  },
+  quoteStatusPillText: {
+    fontSize: 10,
+    fontWeight: '800'
+  },
+  quoteStatusTextAccepted: {
+    color: '#166534'
+  },
+  quoteStatusTextRejected: {
+    color: '#991B1B'
+  },
+  quoteStatusTextPending: {
+    color: '#92400E'
+  },
+  quotePriceBanner: {
+    backgroundColor: '#F0FDF4',
+    borderRadius: 12,
+    padding: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+    marginBottom: 10
+  },
+  quotePriceLabel: {
+    fontSize: 11,
+    color: '#166534',
+    fontWeight: '600'
+  },
+  quotePriceValue: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#06684F',
+    marginVertical: 2
+  },
+  quoteBasisText: {
+    fontSize: 10,
+    color: '#047857',
+    fontWeight: '700',
+    textTransform: 'uppercase'
+  },
+  quotePillRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 8
+  },
+  quoteInfoPill: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    backgroundColor: '#F8FAFC',
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0'
+  },
+  quoteInfoPillText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#475569'
+  },
+  quoteNoteBox: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 10,
+    borderLeftWidth: 3,
+    borderLeftColor: '#06684F'
+  },
+  quoteNoteLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748B',
+    marginBottom: 2
+  },
+  quoteNoteContent: {
+    fontSize: 11,
+    color: '#334155',
+    fontStyle: 'italic',
+    lineHeight: 15
+  },
+  quoteActionsContainer: {
+    marginTop: 4
+  },
+  quoteAcceptButton: {
+    backgroundColor: '#06684F',
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  quoteAcceptButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800'
+  },
+  quoteViewJobBtn: {
+    flex: 1,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: 8,
+    paddingVertical: 8,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  quoteViewJobBtnText: {
+    color: '#1D4ED8',
+    fontSize: 11,
+    fontWeight: '700'
+  },
+  quoteDeclineButton: {
+    backgroundColor: '#F1F5F9',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  quoteDeclineButtonText: {
+    color: '#64748B',
+    fontSize: 11,
+    fontWeight: '700'
+  },
+  quoteAcceptedBanner: {
+    backgroundColor: '#F0FDF4',
+    borderRadius: 10,
+    padding: 10,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#86EFAC'
+  },
+  quoteAcceptedBannerText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#166534',
+    textAlign: 'center'
+  },
+  quoteViewBookingLink: {
+    marginTop: 6
+  },
+  quoteViewBookingLinkText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#06684F'
+  },
+  quoteRejectedBanner: {
+    backgroundColor: '#FEF2F2',
+    borderRadius: 10,
+    padding: 10,
+    alignItems: 'center'
+  },
+  quoteRejectedBannerText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#991B1B'
+  },
+  quoteCardFooter: {
+    marginTop: 8,
+    alignItems: 'flex-end'
+  },
+  quoteTimestampText: {
+    fontSize: 9,
+    color: '#94A3B8',
+    fontWeight: '500'
   }
 });

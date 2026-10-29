@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,7 +9,9 @@ import {
   Linking,
   ActivityIndicator,
   Platform,
-  StatusBar
+  StatusBar,
+  Image,
+  Modal
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -38,21 +40,72 @@ export default function JobDetailScreen({ route, navigation }: any) {
   );
 
   const [booking, setBooking] = useState<Booking | null>(null);
+  const [quotations, setQuotations] = useState<any[]>([]);
+  const [acceptingQuoteId, setAcceptingQuoteId] = useState<string | null>(null);
+  const [rejectingQuoteId, setRejectingQuoteId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
 
-  useEffect(() => {
-    loadBooking();
-  }, [targetId]);
+  // Customer selection confirmation modal state
+  const [confirmModalVisible, setConfirmModalVisible] = useState(false);
+  const [selectedQuoteForConfirmation, setSelectedQuoteForConfirmation] = useState<any | null>(null);
+  const [sortBy, setSortBy] = useState<'date' | 'price_asc' | 'price_desc'>('date');
+  const [savingAddress, setSavingAddress] = useState(false);
+  const [addressSavedToProfile, setAddressSavedToProfile] = useState(false);
+
+  const handleSaveBookingAddressToProfile = async () => {
+    if (!booking?.address) return;
+    try {
+      setSavingAddress(true);
+      const addr: any = booking.address;
+      await api.customer.addAddress({
+        label: 'Home',
+        houseNumber: addr.houseNumber || '',
+        street: addr.street || addr.address || 'Service Location',
+        locality: addr.locality || '',
+        city: addr.city || 'Lucknow',
+        state: addr.state || 'Uttar Pradesh',
+        zipCode: addr.pincode || addr.zipCode || '226010',
+        coordinates: addr.coordinates || { lat: 0, lng: 0 }
+      });
+      setAddressSavedToProfile(true);
+      dataSyncService.notify('PROFILE_CHANGED');
+      Alert.alert(
+        'Address Saved 🎉',
+        'This service address has been saved to your Customer Profile. You can select it with 1-tap for future bookings.'
+      );
+    } catch (err: any) {
+      Alert.alert('Save Failed', err.message || 'Could not save address to profile.');
+    } finally {
+      setSavingAddress(false);
+    }
+  };
 
   useEffect(() => {
-    const unsubscribe = dataSyncService.subscribe('BOOKINGS_CHANGED', () => {
+    loadBooking();
+    const unsubNav = navigation?.addListener?.('focus', () => {
       loadBooking();
     });
     return () => {
-      unsubscribe();
+      if (typeof unsubNav === 'function') unsubNav();
     };
-  }, [targetId]);
+  }, [targetId, navigation]);
+
+  useEffect(() => {
+    const unsubBookings = dataSyncService.subscribe('BOOKINGS_CHANGED', (payload: any) => {
+      if (payload?.hasReview && (payload?.bookingId === targetId || payload?.bookingId === booking?._id)) {
+        setBooking((prev) => (prev ? { ...prev, hasReview: true, review: payload.reviewId || prev.review } : prev));
+      }
+      loadBooking();
+    });
+    const unsubQuotes = dataSyncService.subscribe('QUOTES_CHANGED', () => {
+      loadBooking();
+    });
+    return () => {
+      unsubBookings();
+      unsubQuotes();
+    };
+  }, [targetId, booking?._id]);
 
   const normalizeJobToBooking = (job: any): Booking => {
     return {
@@ -79,6 +132,8 @@ export default function JobDetailScreen({ route, navigation }: any) {
       },
       totalAmount: job.budget?.amount || job.finalPrice?.amount || job.totalAmount || 0,
       problemDescription: job.description || job.problemDescription || '',
+      hasReview: Boolean(job.hasReview),
+      review: job.review || null,
       isJobRequest: true,
       customer: job.customer,
       vendor: job.selectedVendor ? {
@@ -101,29 +156,86 @@ export default function JobDetailScreen({ route, navigation }: any) {
     }
     try {
       setLoading(true);
+      let loadedBooking: any = null;
+      let loadedQuotes: any[] = [];
+
       const res = await api.bookings.getBookingById(targetId);
       if (res?.booking) {
-        setBooking(res.booking);
+        loadedBooking = res.booking;
+        loadedQuotes = res.quotations || res.booking.quotations || [];
       } else if ((res as any)?.job) {
-        setBooking(normalizeJobToBooking((res as any).job));
+        loadedBooking = normalizeJobToBooking((res as any).job);
+        loadedQuotes = (res as any).quotations || [];
       } else {
         // Fallback to direct job endpoint
         try {
           const jobRes = await api.jobs.getJobById(targetId);
           if (jobRes?.job) {
-            setBooking(normalizeJobToBooking(jobRes.job));
+            loadedBooking = normalizeJobToBooking(jobRes.job);
           }
         } catch {
           // not found
         }
       }
+
+      // If quotations were empty or booking has no assigned vendor, unconditionally query applications
+      const actualJobId = loadedBooking?.jobId || (loadedBooking?.job?._id || loadedBooking?.job) || loadedBooking?._id || targetId;
+      if ((!loadedQuotes || loadedQuotes.length === 0) && actualJobId && !loadedBooking?.vendor) {
+        try {
+          const appsRes = await api.applications.getJobApplications(actualJobId);
+          if (appsRes?.applications && Array.isArray(appsRes.applications) && appsRes.applications.length > 0) {
+            loadedQuotes = appsRes.applications;
+          }
+        } catch {
+          // Ignore background quote load error
+        }
+      }
+
+      if (loadedBooking) {
+        // Canonical status sync: if unassigned but quotations exist, reflect quotations_received
+        if (!loadedBooking.vendor && loadedQuotes.length > 0) {
+          loadedBooking.status = 'quotations_received';
+          loadedBooking.displayStatus = 'Quotations Received';
+          loadedBooking.quotationsCount = loadedQuotes.length;
+          loadedBooking.quotedAmount = loadedQuotes[0].proposedAmount;
+        }
+
+        // Resilient arrival OTP retrieval for customer when arrived or on the way
+        if (!loadedBooking.arrivalOtp && !loadedBooking.isOtpVerified && ['arrived', 'on_the_way', 'confirmed', 'scheduled'].includes(loadedBooking.status)) {
+          try {
+            const otpRes = await api.bookings.getStartOtp(loadedBooking._id || targetId);
+            if (otpRes?.otp && !otpRes.isConsumed) {
+              loadedBooking.arrivalOtp = otpRes.otp;
+            }
+          } catch {
+            // Non-fatal fallback
+          }
+        }
+
+        setBooking(loadedBooking);
+        setQuotations(loadedQuotes);
+      }
     } catch (err) {
       console.warn('Failed to load booking details from booking endpoint:', err);
-      // Fallback: If booking ID was actually a job ID
       try {
         const jobRes = await api.jobs.getJobById(targetId);
         if (jobRes?.job) {
-          setBooking(normalizeJobToBooking(jobRes.job));
+          const b = normalizeJobToBooking(jobRes.job);
+          let qList: any[] = [];
+          try {
+            const appsRes = await api.applications.getJobApplications(jobRes.job._id);
+            if (appsRes?.applications && Array.isArray(appsRes.applications)) {
+              qList = appsRes.applications;
+            }
+          } catch {}
+          if (qList.length > 0) {
+            b.status = 'quotations_received';
+            b.displayStatus = 'Quotations Received';
+            b.quotationsCount = qList.length;
+            b.quotedAmount = qList[0].proposedAmount;
+          }
+          setBooking(b);
+          setQuotations(qList);
           return;
         }
       } catch {
@@ -132,6 +244,105 @@ export default function JobDetailScreen({ route, navigation }: any) {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleOpenSelectConfirmation = (quote: any) => {
+    setSelectedQuoteForConfirmation(quote);
+    setConfirmModalVisible(true);
+  };
+
+  const handleConfirmAssignment = async () => {
+    if (!selectedQuoteForConfirmation || acceptingQuoteId) return;
+    const quoteId = selectedQuoteForConfirmation._id || selectedQuoteForConfirmation.id || selectedQuoteForConfirmation.applicationId;
+    if (!quoteId) return;
+
+    try {
+      setAcceptingQuoteId(quoteId);
+      const res = await api.applications.acceptQuotation(quoteId);
+      if (res.success) {
+        setConfirmModalVisible(false);
+        const assignedVendor = res.booking?.vendor || selectedQuoteForConfirmation.vendor;
+        const vDisplayName = selectedQuoteForConfirmation.vendorName || assignedVendor?.name || 'The specialist';
+
+        if (res.booking) {
+          setBooking(res.booking);
+        }
+        setQuotations([]);
+
+        dataSyncService.notify('BOOKINGS_CHANGED', { bookingId: res.booking?._id || targetId });
+        dataSyncService.notify('QUOTES_CHANGED', {});
+
+        Alert.alert(
+          'Professional Assigned! 🎉',
+          `You have confirmed ${vDisplayName} for ${formatCurrency(selectedQuoteForConfirmation.proposedAmount)}. WorkLogy Escrow Protection is active.`,
+          [{ text: 'View Booking', onPress: () => loadBooking() }]
+        );
+      } else {
+        Alert.alert('Unable to Assign', res.message || 'Please try again later.');
+        loadBooking();
+      }
+    } catch (err: any) {
+      if (err?.status === 409 || err?.message?.includes('already')) {
+        Alert.alert('Request Updated', 'This service request has already been assigned or updated. Refreshing latest state...');
+        loadBooking();
+      } else {
+        Alert.alert('Assignment Error', err.message || 'Failed to assign professional.');
+      }
+    } finally {
+      setAcceptingQuoteId(null);
+    }
+  };
+
+  const handleRejectQuote = async (quote: any) => {
+    const quoteId = quote._id || quote.id || quote.applicationId;
+    if (!quoteId || rejectingQuoteId) return;
+
+    Alert.alert(
+      'Decline Quotation',
+      'Are you sure you want to decline this professional quote?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Decline',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setRejectingQuoteId(quoteId);
+              const res = await api.applications.rejectQuotation(quoteId);
+              if (res.success) {
+                setQuotations((prev) => prev.filter((q) => (q._id || q.id) !== quoteId));
+                dataSyncService.notify('QUOTES_CHANGED', {});
+              }
+            } catch (err: any) {
+              Alert.alert('Error', err.message || 'Failed to decline quotation.');
+            } finally {
+              setRejectingQuoteId(null);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleChatWithVendor = (quote: any) => {
+    const vendorId =
+      quote.vendor?._id ||
+      quote.vendor?.user?._id ||
+      quote.vendor?.user ||
+      quote.vendor ||
+      quote.vendorId;
+
+    navigation.navigate('ChatDetail', {
+      recipientId: vendorId,
+      otherUser: {
+        _id: vendorId,
+        name: quote.vendorName || quote.vendor?.name || 'Service Professional',
+        avatar: quote.vendorAvatar || quote.vendor?.avatar,
+        phone: quote.vendorPhone || quote.vendor?.phone
+      },
+      jobId: booking?._id || targetId,
+      title: quote.vendorName || 'Professional Chat'
+    });
   };
 
   const handleCancel = () => {
@@ -246,7 +457,8 @@ export default function JobDetailScreen({ route, navigation }: any) {
   const isEmergency = booking.jobId?.isEmergency || booking.serviceTitle?.toLowerCase().includes('emergency');
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 60 }}>
+    <View style={styles.screenWrapper}>
+      <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 60 }}>
       {/* Header */}
       <View style={[styles.header, { paddingTop: topInset + 10 }]}>
         <View style={styles.headerTop}>
@@ -276,13 +488,13 @@ export default function JobDetailScreen({ route, navigation }: any) {
       )}
 
       {/* Arrival Security OTP Banner */}
-      {booking.arrivalOtp && !booking.isOtpVerified && (
+      {(booking.arrivalOtp || (booking as any)?.startOtp?.otp) && !booking.isOtpVerified && (
         <View style={styles.otpCard}>
           <View style={styles.otpHeader}>
             <Text style={styles.otpIcon}>🔐</Text>
             <Text style={styles.otpTitle}>PHYSICAL ARRIVAL VERIFICATION PIN</Text>
           </View>
-          <Text style={styles.otpNumber}>{booking.arrivalOtp}</Text>
+          <Text style={styles.otpNumber}>{booking.arrivalOtp || (booking as any)?.startOtp?.otp}</Text>
           <Text style={styles.otpDesc}>
             Only share this PIN when the technician physically arrives at your door. This unlocks the service in-progress status.
           </Text>
@@ -330,23 +542,234 @@ export default function JobDetailScreen({ route, navigation }: any) {
             </View>
           </View>
         </View>
+      ) : quotations.length > 0 ? (
+        <View style={styles.quotesReceivedCard}>
+          <View style={styles.quotesHeaderRow}>
+            <View style={styles.quotesIconBubble}>
+              <Text style={{ fontSize: 24 }}>📋</Text>
+            </View>
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={styles.quotesReceivedTitle}>
+                {quotations.length === 1 ? '1 Professional Quote Received' : `${quotations.length} Professional Quotes Received`}
+              </Text>
+              <Text style={styles.quotesReceivedDesc}>
+                Review proposals from verified local specialists below. Compare rates and select your preferred professional to confirm with WorkLogy Escrow Protection.
+              </Text>
+            </View>
+          </View>
+        </View>
       ) : (
         <View style={styles.waitingCard}>
           <Text style={styles.waitingEmoji}>📡</Text>
           <Text style={styles.waitingTitle}>Locating Available Local Pros</Text>
           <Text style={styles.waitingDesc}>
-            Your request has been broadcasted. You will receive an instant assignment notification as soon as a technician accepts.
+            Your request has been broadcasted. You will receive quotes from verified local technicians shortly.
           </Text>
+        </View>
+      )}
+
+      {/* Quotations Received List */}
+      {quotations.length > 0 && !booking.vendor && (
+        <View style={styles.section}>
+          <View style={styles.quotesSectionHeader}>
+            <Text style={styles.sectionTitle}>
+              Quotations Received ({quotations.length})
+            </Text>
+            {quotations.length > 1 && (
+              <View style={styles.sortPillsRow}>
+                <TouchableOpacity
+                  style={[styles.sortPill, sortBy === 'date' && styles.sortPillActive]}
+                  onPress={() => setSortBy('date')}
+                >
+                  <Text style={[styles.sortPillText, sortBy === 'date' && styles.sortPillTextActive]}>Latest</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.sortPill, sortBy === 'price_asc' && styles.sortPillActive]}
+                  onPress={() => setSortBy('price_asc')}
+                >
+                  <Text style={[styles.sortPillText, sortBy === 'price_asc' && styles.sortPillTextActive]}>Lowest Price</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+
+          {(() => {
+            const sortedQuotes = [...quotations].sort((a, b) => {
+              if (sortBy === 'price_asc') return (a.proposedAmount || 0) - (b.proposedAmount || 0);
+              if (sortBy === 'price_desc') return (b.proposedAmount || 0) - (a.proposedAmount || 0);
+              return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+            });
+
+            return sortedQuotes.map((quote, idx) => {
+              const vName = quote.vendorName || quote.vendor?.businessName || quote.vendor?.name || 'Verified Specialist';
+              const vAvatar = quote.vendorAvatar || quote.vendor?.avatar;
+              const vRating = quote.vendorRating || 4.9;
+              const vReviews = quote.vendorProfile?.reviewCount || 0;
+              const isAccepting = acceptingQuoteId === (quote._id || quote.id);
+              const isRejecting = rejectingQuoteId === (quote._id || quote.id);
+              const targetVendorId = quote.vendor?._id || quote.vendor?.id || quote.vendor?.user?._id || quote.vendor;
+
+              return (
+                <View key={quote._id || idx} style={styles.quoteCard}>
+                  {/* Vendor Header */}
+                  <View style={styles.quoteCardHeader}>
+                    <TouchableOpacity
+                      style={styles.quoteVendorAvatar}
+                      onPress={() => {
+                        if (targetVendorId) {
+                          navigation.navigate('ProfessionalProfile', { vendorId: targetVendorId, vendor: quote.vendor });
+                        }
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      {vAvatar ? (
+                        <Image source={{ uri: vAvatar }} style={styles.quoteAvatarImg} />
+                      ) : (
+                        <Text style={styles.quoteAvatarText}>{vName.charAt(0).toUpperCase()}</Text>
+                      )}
+                    </TouchableOpacity>
+                    <View style={{ flex: 1, marginLeft: 10 }}>
+                      <Text style={styles.quoteVendorName}>{vName}</Text>
+                      <Text style={styles.quoteVendorSub}>
+                        ✓ WorkLogy Verified Pro • ⭐ {vRating}{vReviews > 0 ? ` (${vReviews} reviews)` : ''}
+                      </Text>
+                      <Text style={styles.quoteCategoryTag}>
+                        {booking.category || 'Home Services'}
+                      </Text>
+                    </View>
+                    <View style={styles.quoteAmountBadge}>
+                      <Text style={styles.quoteAmountText}>{formatCurrency(quote.proposedAmount)}</Text>
+                      <Text style={styles.quoteAmountType}>{quote.pricingBasis || 'Fixed Quote'}</Text>
+                    </View>
+                  </View>
+
+                  {/* Scope & Schedule */}
+                  <View style={styles.quoteDetailsBox}>
+                    {quote.coverLetter ? (
+                      <Text style={styles.quoteCoverLetter}>"{quote.coverLetter}"</Text>
+                    ) : null}
+
+                    {quote.materialCharges > 0 && (
+                      <View style={styles.quoteBreakdownBox}>
+                        <Text style={styles.quoteBreakdownText}>
+                          Labor & Service: {formatCurrency(quote.proposedAmount - quote.materialCharges)}
+                        </Text>
+                        <Text style={styles.quoteBreakdownDot}>•</Text>
+                        <Text style={styles.quoteBreakdownText}>
+                          Materials: {formatCurrency(quote.materialCharges)}
+                        </Text>
+                      </View>
+                    )}
+
+                    <View style={styles.quotePillsRow}>
+                      <View style={styles.quotePill}>
+                        <Ionicons name="calendar-outline" size={13} color="#06684F" />
+                        <Text style={styles.quotePillText}>{quote.proposedSchedule || 'Flexible Schedule'}</Text>
+                      </View>
+                      <View style={styles.quotePill}>
+                        <Ionicons name="time-outline" size={13} color="#06684F" />
+                        <Text style={styles.quotePillText}>{quote.estimatedDuration || '1-2 hours'}</Text>
+                      </View>
+                      <View style={styles.quotePill}>
+                        <Ionicons name="time" size={13} color="#64748B" />
+                        <Text style={[styles.quotePillText, { color: '#64748B' }]}>
+                          Sent {formatDate(quote.createdAt)}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+
+                  {/* Actions */}
+                  <View style={styles.quoteActionRow}>
+                    <TouchableOpacity
+                      style={[styles.quoteAcceptBtn, isAccepting && { opacity: 0.7 }]}
+                      onPress={() => handleOpenSelectConfirmation(quote)}
+                      disabled={isAccepting || isRejecting}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.quoteAcceptBtnText}>Select Professional 🛡️</Text>
+                    </TouchableOpacity>
+
+                    <View style={{ flexDirection: 'row', marginTop: 8, gap: 8 }}>
+                      <TouchableOpacity
+                        style={styles.quoteProfileBtn}
+                        onPress={() => {
+                          if (targetVendorId) {
+                            navigation.navigate('ProfessionalProfile', { vendorId: targetVendorId, vendor: quote.vendor });
+                          }
+                        }}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.quoteProfileBtnText}>View Profile ›</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.quoteChatBtn}
+                        onPress={() => handleChatWithVendor(quote)}
+                        disabled={isAccepting || isRejecting}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.quoteChatBtnText}>Chat with Pro 💬</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.quoteDeclineBtn}
+                        onPress={() => handleRejectQuote(quote)}
+                        disabled={isAccepting || isRejecting}
+                        activeOpacity={0.8}
+                      >
+                        {isRejecting ? (
+                          <ActivityIndicator size="small" color="#64748B" />
+                        ) : (
+                          <Text style={styles.quoteDeclineBtnText}>Decline</Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </View>
+              );
+            });
+          })()}
         </View>
       )}
 
       {/* Service Location */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Service Location</Text>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <Text style={styles.sectionTitle}>Service Location</Text>
+          {booking.address && (booking.address.street || booking.address.city) && (
+            <TouchableOpacity
+              style={styles.saveAddressToProfileBtn}
+              onPress={handleSaveBookingAddressToProfile}
+              disabled={savingAddress || addressSavedToProfile}
+              activeOpacity={0.7}
+            >
+              {savingAddress ? (
+                <ActivityIndicator size="small" color={COLORS.primary} />
+              ) : addressSavedToProfile ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                  <Ionicons name="checkmark-circle" size={13} color="#059669" />
+                  <Text style={styles.saveAddressSavedText}>Saved to Profile</Text>
+                </View>
+              ) : (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                  <Ionicons name="bookmark-outline" size={13} color={COLORS.primary} />
+                  <Text style={styles.saveAddressBtnText}>Save Address to Profile</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          )}
+        </View>
         <View style={styles.infoCard}>
-          <Text style={styles.addressStreet}>{booking.address?.street || 'Address on file'}</Text>
+          <Text style={styles.addressStreet}>{booking.address?.street || (booking.address as any)?.address || 'Address on file'}</Text>
           <Text style={styles.addressCity}>
-            {booking.address?.city} {booking.address?.pincode ? `- ${booking.address.pincode}` : ''}
+            {[
+              (booking.address as any)?.locality,
+              booking.address?.city,
+              booking.address?.pincode || (booking.address as any)?.zipCode
+            ]
+              .filter(Boolean)
+              .join(', ')}
           </Text>
         </View>
       </View>
@@ -355,15 +778,54 @@ export default function JobDetailScreen({ route, navigation }: any) {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Payment & Escrow Protection</Text>
         <View style={styles.infoCard}>
-          <View style={styles.priceRow}>
-            <Text style={styles.priceLabel}>Total Service Value</Text>
-            <Text style={styles.priceValue}>{formatCurrency(booking.totalAmount)}</Text>
-          </View>
-          <View style={styles.escrowNotice}>
-            <Text style={styles.escrowText}>
-              🛡️ Payment Status: {booking.pricing?.paymentStatus?.replace(/_/g, ' ') || 'Held in Escrow'}. Funds are released to the professional only after you confirm satisfactory work completion.
-            </Text>
-          </View>
+          {booking.vendor ? (
+            <>
+              <View style={styles.priceRow}>
+                <Text style={styles.priceLabel}>Confirmed Service Value</Text>
+                <Text style={styles.priceValue}>{formatCurrency(booking.totalAmount)}</Text>
+              </View>
+              <View style={styles.escrowNotice}>
+                <Text style={styles.escrowText}>
+                  🛡️ Payment Status: {booking.pricing?.paymentStatus?.replace(/_/g, ' ') || 'Held in Escrow'}. Funds are released to the professional only after you confirm satisfactory work completion with your completion PIN.
+                </Text>
+              </View>
+            </>
+          ) : quotations.length > 0 ? (
+            <>
+              <View style={styles.priceRow}>
+                <View>
+                  <Text style={styles.priceLabel}>Quoted Amount (Awaiting Selection)</Text>
+                  <Text style={{ fontSize: 11, color: '#059669', fontWeight: '600', marginTop: 2 }}>
+                    Final amount not confirmed
+                  </Text>
+                </View>
+                <Text style={[styles.priceValue, { color: '#06684F' }]}>
+                  {quotations.length === 1
+                    ? formatCurrency(quotations[0].proposedAmount)
+                    : `From ${formatCurrency(Math.min(...quotations.map((q: any) => q.proposedAmount)))}`}
+                </Text>
+              </View>
+              <View style={styles.escrowNotice}>
+                <Text style={styles.escrowText}>
+                  🛡️ {quotations.length === 1 ? '1 quotation' : `${quotations.length} quotations`} received. Final amount is confirmed once you select and confirm a professional quotation. WorkLogy Escrow Protection will hold payment securely upon assignment.
+                </Text>
+              </View>
+            </>
+          ) : (
+            <>
+              <View style={styles.priceRow}>
+                <Text style={styles.priceLabel}>Total Service Value</Text>
+                <Text style={[styles.priceValue, { color: '#64748B', fontSize: 14 }]}>
+                  Awaiting quotation
+                </Text>
+              </View>
+              <View style={styles.escrowNotice}>
+                <Text style={styles.escrowText}>
+                  🛡️ Quote-based service request. Once local specialists review your requirements and submit bids, you can compare quotes and confirm the best rate.
+                </Text>
+              </View>
+            </>
+          )}
         </View>
       </View>
 
@@ -377,6 +839,9 @@ export default function JobDetailScreen({ route, navigation }: any) {
               const targetVendorId = booking.vendor?._id || booking.vendor?.id || booking.vendor?.user?._id || booking.vendor;
               navigation.navigate('ReviewModal', {
                 bookingId: booking._id,
+                jobId: booking.jobId || (booking as any).job?._id || (booking as any).job,
+                bookingReference: booking.bookingReference,
+                serviceTitle: booking.serviceTitle,
                 vendorName,
                 vendorId: targetVendorId
               });
@@ -405,7 +870,7 @@ export default function JobDetailScreen({ route, navigation }: any) {
       )}
 
       {/* Cancellation Action */}
-      {['pending', 'pending_acceptance', 'open', 'confirmed', 'scheduled'].includes(booking.status) && (
+      {['pending', 'pending_acceptance', 'open', 'quotations_received', 'confirmed', 'scheduled'].includes(booking.status) && (
         <View style={styles.section}>
           <TouchableOpacity
             style={[styles.cancelBookingBtn, cancelling && { opacity: 0.6 }]}
@@ -423,6 +888,149 @@ export default function JobDetailScreen({ route, navigation }: any) {
 
       <View style={{ height: 40 }} />
     </ScrollView>
+
+    {/* Customer Selection Confirmation Modal */}
+    <Modal
+      visible={confirmModalVisible && Boolean(selectedQuoteForConfirmation)}
+      transparent
+      animationType="slide"
+      onRequestClose={() => {
+        if (!acceptingQuoteId) setConfirmModalVisible(false);
+      }}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalCard}>
+          <View style={styles.modalHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.modalTitle}>Confirm Professional 🛡️</Text>
+              <Text style={styles.modalSubtitle}>Review quote details before final assignment</Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => setConfirmModalVisible(false)}
+              disabled={Boolean(acceptingQuoteId)}
+              style={styles.modalCloseBtn}
+            >
+              <Ionicons name="close" size={20} color="#64748B" />
+            </TouchableOpacity>
+          </View>
+
+          {selectedQuoteForConfirmation && (
+            <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+              {/* Specialist Profile Card */}
+              <View style={styles.modalVendorCard}>
+                <View style={styles.modalVendorAvatar}>
+                  {selectedQuoteForConfirmation.vendorAvatar ? (
+                    <Image
+                      source={{ uri: selectedQuoteForConfirmation.vendorAvatar }}
+                      style={styles.modalAvatarImg}
+                    />
+                  ) : (
+                    <Text style={styles.modalAvatarText}>
+                      {(selectedQuoteForConfirmation.vendorName || 'P').charAt(0).toUpperCase()}
+                    </Text>
+                  )}
+                </View>
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Text style={styles.modalVendorName}>
+                    {selectedQuoteForConfirmation.vendorName || selectedQuoteForConfirmation.vendor?.name || 'Service Professional'}
+                  </Text>
+                  <Text style={styles.modalVendorSub}>
+                    ✓ WorkLogy Verified Pro • ⭐ {selectedQuoteForConfirmation.vendorRating || 4.9}
+                  </Text>
+                  <Text style={styles.modalCategoryText}>
+                    {booking.category || 'Home Services'}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Quoted Rate Summary */}
+              <View style={styles.modalPriceBox}>
+                <View style={styles.modalPriceRow}>
+                  <Text style={styles.modalPriceLabel}>Agreed Service Total</Text>
+                  <Text style={styles.modalPriceValue}>
+                    {formatCurrency(selectedQuoteForConfirmation.proposedAmount)}
+                  </Text>
+                </View>
+                {selectedQuoteForConfirmation.materialCharges > 0 && (
+                  <View style={styles.modalBreakdownRow}>
+                    <Text style={styles.modalBreakdownText}>
+                      Labor & Diagnostics: {formatCurrency(selectedQuoteForConfirmation.proposedAmount - selectedQuoteForConfirmation.materialCharges)}
+                    </Text>
+                    <Text style={styles.modalBreakdownText}>
+                      Parts/Materials: {formatCurrency(selectedQuoteForConfirmation.materialCharges)}
+                    </Text>
+                  </View>
+                )}
+                <View style={styles.modalEscrowBadge}>
+                  <Ionicons name="shield-checkmark" size={14} color="#06684F" />
+                  <Text style={styles.modalEscrowText}>
+                    100% Escrow Protected: Funds released only after satisfactory service
+                  </Text>
+                </View>
+              </View>
+
+              {/* Scope & Schedule */}
+              <View style={styles.modalInfoSection}>
+                <Text style={styles.modalSectionLabel}>Service Scope & Proposal</Text>
+                {selectedQuoteForConfirmation.coverLetter ? (
+                  <Text style={styles.modalCoverLetter}>
+                    "{selectedQuoteForConfirmation.coverLetter}"
+                  </Text>
+                ) : null}
+
+                <View style={styles.modalPillsRow}>
+                  <View style={styles.modalPill}>
+                    <Ionicons name="calendar-outline" size={13} color="#06684F" />
+                    <Text style={styles.modalPillText}>
+                      {selectedQuoteForConfirmation.proposedSchedule || 'Flexible Schedule'}
+                    </Text>
+                  </View>
+                  <View style={styles.modalPill}>
+                    <Ionicons name="time-outline" size={13} color="#06684F" />
+                    <Text style={styles.modalPillText}>
+                      {selectedQuoteForConfirmation.estimatedDuration || '1-2 hours'}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Terms Agreement Note */}
+              <View style={styles.modalTermsBox}>
+                <Text style={styles.modalTermsText}>
+                  By confirming, you assign this service request exclusively to this professional under WorkLogy booking terms. Other active quotations will be politely declined.
+                </Text>
+              </View>
+            </ScrollView>
+          )}
+
+          {/* Modal Actions */}
+          <View style={styles.modalActionRow}>
+            <TouchableOpacity
+              style={[styles.modalConfirmBtn, acceptingQuoteId && { opacity: 0.7 }]}
+              onPress={handleConfirmAssignment}
+              disabled={Boolean(acceptingQuoteId)}
+              activeOpacity={0.85}
+            >
+              {acceptingQuoteId ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Text style={styles.modalConfirmBtnText}>Confirm & Assign Professional 🛡️</Text>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.modalCancelBtn}
+              onPress={() => setConfirmModalVisible(false)}
+              disabled={Boolean(acceptingQuoteId)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.modalCancelBtnText}>Review Other Quotes</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  </View>
   );
 }
 
@@ -733,6 +1341,185 @@ const styles = StyleSheet.create({
     marginTop: 4,
     lineHeight: 16
   },
+  quotesReceivedCard: {
+    marginHorizontal: 16,
+    marginTop: 14,
+    backgroundColor: '#F0FDF4',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1.5,
+    borderColor: '#86EFAC'
+  },
+  quotesHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center'
+  },
+  quotesIconBubble: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#DCFCE7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#BBF7D0'
+  },
+  quotesReceivedTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#166534'
+  },
+  quotesReceivedDesc: {
+    fontSize: 11,
+    color: '#15803D',
+    marginTop: 3,
+    lineHeight: 16
+  },
+  quoteCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 12,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2
+  },
+  quoteCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center'
+  },
+  quoteVendorAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#06684F',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden'
+  },
+  quoteAvatarImg: {
+    width: 44,
+    height: 44,
+    borderRadius: 22
+  },
+  quoteAvatarText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '800'
+  },
+  quoteVendorName: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: COLORS.textDark
+  },
+  quoteVendorSub: {
+    fontSize: 11,
+    color: '#059669',
+    fontWeight: '600',
+    marginTop: 2
+  },
+  quoteAmountBadge: {
+    alignItems: 'flex-end',
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#A7F3D0'
+  },
+  quoteAmountText: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#06684F'
+  },
+  quoteAmountType: {
+    fontSize: 9,
+    color: '#047857',
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    marginTop: 1
+  },
+  quoteDetailsBox: {
+    marginTop: 12,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 10,
+    padding: 10
+  },
+  quoteCoverLetter: {
+    fontSize: 12,
+    color: '#334155',
+    fontStyle: 'italic',
+    lineHeight: 16,
+    marginBottom: 8
+  },
+  quotePillsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8
+  },
+  quotePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E2E8F0'
+  },
+  quotePillText: {
+    fontSize: 11,
+    color: '#475569',
+    fontWeight: '600'
+  },
+  quoteActionRow: {
+    marginTop: 12
+  },
+  quoteAcceptBtn: {
+    backgroundColor: '#06684F',
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  quoteAcceptBtnText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '800'
+  },
+  quoteChatBtn: {
+    flex: 1,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: 10,
+    paddingVertical: 9,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  quoteChatBtnText: {
+    color: '#1D4ED8',
+    fontSize: 12,
+    fontWeight: '700'
+  },
+  quoteDeclineBtn: {
+    backgroundColor: '#F1F5F9',
+    borderRadius: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  quoteDeclineBtnText: {
+    color: '#64748B',
+    fontSize: 12,
+    fontWeight: '700'
+  },
   infoCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 14,
@@ -817,5 +1604,320 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
     color: '#06684F'
+  },
+  screenWrapper: {
+    flex: 1,
+    backgroundColor: '#F8FAFC'
+  },
+  quotesSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8
+  },
+  sortPillsRow: {
+    flexDirection: 'row',
+    gap: 6
+  },
+  sortPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#E2E8F0'
+  },
+  sortPillActive: {
+    backgroundColor: '#ECFDF5',
+    borderColor: '#A7F3D0'
+  },
+  sortPillText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#64748B'
+  },
+  sortPillTextActive: {
+    color: '#06684F',
+    fontWeight: '800'
+  },
+  quoteCategoryTag: {
+    fontSize: 10,
+    color: '#64748B',
+    marginTop: 2
+  },
+  quoteBreakdownBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 6,
+    marginBottom: 8
+  },
+  quoteBreakdownText: {
+    fontSize: 11,
+    color: '#475569',
+    fontWeight: '600'
+  },
+  quoteBreakdownDot: {
+    fontSize: 11,
+    color: '#94A3B8'
+  },
+  quoteProfileBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 10,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  quoteProfileBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#06684F'
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+    justifyContent: 'flex-end'
+  },
+  modalCard: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: Platform.OS === 'ios' ? 36 : 24,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 8
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9'
+  },
+  modalTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: COLORS.textDark
+  },
+  modalSubtitle: {
+    fontSize: 12,
+    color: '#64748B',
+    marginTop: 2
+  },
+  modalCloseBtn: {
+    padding: 6,
+    borderRadius: 20,
+    backgroundColor: '#F1F5F9'
+  },
+  modalVendorCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    padding: 12,
+    marginTop: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0'
+  },
+  modalVendorAvatar: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#06684F',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden'
+  },
+  modalAvatarImg: {
+    width: 46,
+    height: 46,
+    borderRadius: 23
+  },
+  modalAvatarText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '800'
+  },
+  modalVendorName: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: COLORS.textDark
+  },
+  modalVendorSub: {
+    fontSize: 11,
+    color: '#059669',
+    fontWeight: '600',
+    marginTop: 2
+  },
+  modalCategoryText: {
+    fontSize: 10,
+    color: '#64748B',
+    marginTop: 2
+  },
+  modalPriceBox: {
+    marginTop: 12,
+    backgroundColor: '#ECFDF5',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1.5,
+    borderColor: '#A7F3D0'
+  },
+  modalPriceRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+  },
+  modalPriceLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#065F46'
+  },
+  modalPriceValue: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#06684F'
+  },
+  modalBreakdownRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#A7F3D0'
+  },
+  modalBreakdownText: {
+    fontSize: 11,
+    color: '#047857',
+    fontWeight: '600'
+  },
+  modalEscrowBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 10,
+    backgroundColor: '#DCFCE7',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 8
+  },
+  modalEscrowText: {
+    fontSize: 10,
+    color: '#166534',
+    fontWeight: '700',
+    flex: 1
+  },
+  modalInfoSection: {
+    marginTop: 12,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0'
+  },
+  modalSectionLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#475569',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 6
+  },
+  modalCoverLetter: {
+    fontSize: 12,
+    color: '#334155',
+    fontStyle: 'italic',
+    lineHeight: 17,
+    marginBottom: 10
+  },
+  modalPillsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8
+  },
+  modalPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E2E8F0'
+  },
+  modalPillText: {
+    fontSize: 11,
+    color: '#475569',
+    fontWeight: '600'
+  },
+  modalTermsBox: {
+    marginTop: 12,
+    padding: 10,
+    backgroundColor: '#FFFBEB',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#FDE68A'
+  },
+  modalTermsText: {
+    fontSize: 11,
+    color: '#92400E',
+    lineHeight: 15
+  },
+  modalActionRow: {
+    marginTop: 16,
+    gap: 8
+  },
+  modalConfirmBtn: {
+    backgroundColor: '#06684F',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  modalConfirmBtnText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800'
+  },
+  modalCancelBtn: {
+    backgroundColor: '#F1F5F9',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  modalCancelBtnText: {
+    color: '#64748B',
+    fontSize: 13,
+    fontWeight: '700'
+  },
+  saveAddressToProfileBtn: {
+    backgroundColor: '#F0FDF4',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#BBF7D0'
+  },
+  saveAddressBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.primary
+  },
+  saveAddressSavedText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#059669'
   }
 });

@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback, createContext, useContext } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext } from 'react';
+
 import {
   View,
   Text,
@@ -23,6 +24,7 @@ import NotificationsScreen from '../screens/NotificationsScreen';
 import VendorLoginScreen from '../screens/VendorLoginScreen';
 import VendorRegisterScreen from '../screens/VendorRegisterScreen';
 import VendorServicesScreen from '../screens/VendorServicesScreen';
+import VendorDomainsScreen from '../screens/VendorDomainsScreen';
 import VendorNewServiceScreen from '../screens/VendorNewServiceScreen';
 import VendorEditProfileScreen from '../screens/VendorEditProfileScreen';
 import VendorKycScreen from '../screens/VendorKycScreen';
@@ -31,6 +33,12 @@ import VendorScheduleScreen from '../screens/VendorScheduleScreen';
 import VendorServiceAreaScreen from '../screens/VendorServiceAreaScreen';
 import VendorHelpSupportScreen from '../screens/VendorHelpSupportScreen';
 import VendorSettingsScreen from '../screens/VendorSettingsScreen';
+import VendorOtpVerificationScreen from '../screens/VendorOtpVerificationScreen';
+import VendorOnboardingProfileScreen from '../screens/VendorOnboardingProfileScreen';
+import VendorOnboardingDomainsScreen from '../screens/VendorOnboardingDomainsScreen';
+import VendorOnboardingServiceScreen from '../screens/VendorOnboardingServiceScreen';
+import * as SplashScreen from 'expo-splash-screen';
+import { WorklogySplashScreen } from '../components/WorklogySplashScreen';
 import { COLORS } from '../theme/colors';
 import { api } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
@@ -46,6 +54,7 @@ const TAB_ROUTES = ['VendorHomeTab', 'JobsTab', 'MessagesTab', 'ProfileTab'];
 const SCREENS_WITH_CUSTOM_HEADER = [
   'ChatDetail',
   'VendorServices',
+  'VendorDomains',
   'VendorNewService',
   'MessagesTab',
   'VendorMessages',
@@ -57,7 +66,22 @@ const SCREENS_WITH_CUSTOM_HEADER = [
   'VendorHelpSupport',
   'VendorSettings',
   'Earnings',
-  'EarningsTab'
+  'EarningsTab',
+  'VendorLogin',
+  'VendorRegister',
+  'VendorOtpVerification',
+  'VendorOnboardingProfile',
+  'VendorOnboardingDomains',
+  'VendorOnboardingService'
+];
+
+const AUTH_AND_ONBOARDING_ROUTES = [
+  'VendorLogin',
+  'VendorRegister',
+  'VendorOtpVerification',
+  'VendorOnboardingProfile',
+  'VendorOnboardingDomains',
+  'VendorOnboardingService'
 ];
 
 export function VendorAppContainer() {
@@ -68,18 +92,47 @@ export function VendorAppContainer() {
   );
   const bottomInset = insets.bottom;
 
-  const { user } = useAuth();
+  const { user, isLoading } = useAuth();
   const [history, setHistory] = useState<RouteEntry[]>([{ name: 'VendorHomeTab', params: {} }]);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState<number>(0);
   const [showActionModal, setShowActionModal] = useState<boolean>(false);
+  const [splashFinished, setSplashFinished] = useState<boolean>(false);
 
   const historyRef = useRef<RouteEntry[]>(history);
   historyRef.current = history;
 
+  // Sync navigation stack when authentication state is determined
+  useEffect(() => {
+    if (!isLoading) {
+      if (!user) {
+        setHistory((prev) => {
+          const current = prev[prev.length - 1]?.name;
+          const isAllowedUnauth = ['VendorLogin', 'VendorRegister', 'VendorOtpVerification'].includes(current);
+          if (!isAllowedUnauth) {
+            const next = [{ name: 'VendorLogin', params: {} }];
+            historyRef.current = next;
+            return next;
+          }
+          return prev;
+        });
+      } else {
+        setHistory((prev) => {
+          const current = prev[prev.length - 1]?.name;
+          if (current === 'VendorLogin' || current === 'VendorRegister') {
+            const next = [{ name: 'VendorHomeTab', params: {} }];
+            historyRef.current = next;
+            return next;
+          }
+          return prev;
+        });
+      }
+    }
+  }, [user, isLoading]);
+
   const backHandlersRef = useRef<Array<() => boolean>>([]);
   const lastBackPressRef = useRef<number>(0);
 
-  const currentEntry = history[history.length - 1] || { name: 'VendorHomeTab', params: {} };
+  const currentEntry = history[history.length - 1] || { name: user ? 'VendorHomeTab' : 'VendorLogin', params: {} };
   const currentRoute = currentEntry.name;
   const routeParams = currentEntry.params || {};
 
@@ -314,23 +367,44 @@ export function VendorAppContainer() {
     setHistory(reset);
   }, []);
 
-  const navigation: AppNavigation = {
-    navigate,
-    goBack,
-    canGoBack,
-    replace,
-    resetTo,
-    registerBackHandler,
-    currentRoute,
-    routeParams
-  };
+  const navigation: AppNavigation = useMemo(
+    () => ({
+      navigate,
+      goBack,
+      canGoBack,
+      replace,
+      resetTo,
+      registerBackHandler,
+      currentRoute,
+      routeParams
+    }),
+    [navigate, goBack, canGoBack, replace, resetTo, registerBackHandler, currentRoute, routeParams]
+  );
+
+  const navigationRef = useRef<AppNavigation>(navigation);
+  navigationRef.current = navigation;
 
   useEffect(() => {
-    pushNotificationService.initialize(navigation);
+    // Provide a stable delegation wrapper so notification taps route correctly
+    pushNotificationService.initialize({
+      navigate: (screen: string, params?: any) => navigationRef.current.navigate(screen, params),
+      goBack: (force?: boolean) => navigationRef.current.goBack(force),
+      canGoBack: () => navigationRef.current.canGoBack(),
+      replace: (screen: string, params?: any) => navigationRef.current.replace(screen, params),
+      resetTo: (screen: string, params?: any) => navigationRef.current.resetTo(screen, params),
+      registerBackHandler: (handler: () => boolean) => navigationRef.current.registerBackHandler(handler),
+      get currentRoute() {
+        return navigationRef.current.currentRoute;
+      },
+      get routeParams() {
+        return navigationRef.current.routeParams;
+      }
+    } as AppNavigation);
+
     if (user?._id) {
-      pushNotificationService.registerForPushNotifications();
+      pushNotificationService.registerForPushNotifications().catch(() => {});
     }
-  }, [user?._id, navigation]);
+  }, [user?._id]);
 
   const isTabScreen = TAB_ROUTES.includes(currentRoute);
   const showNavHeader = !isTabScreen && !SCREENS_WITH_CUSTOM_HEADER.includes(currentRoute);
@@ -358,6 +432,8 @@ export function VendorAppContainer() {
         return <VendorChatDetailScreen navigation={navigation} route={route} />;
       case 'VendorServices':
         return <VendorServicesScreen navigation={navigation} route={route} />;
+      case 'VendorDomains':
+        return <VendorDomainsScreen navigation={navigation} route={route} />;
       case 'VendorNewService':
         return <VendorNewServiceScreen navigation={navigation} route={route} />;
       case 'VendorEditProfile':
@@ -378,6 +454,14 @@ export function VendorAppContainer() {
         return <VendorLoginScreen navigation={navigation} route={route} />;
       case 'VendorRegister':
         return <VendorRegisterScreen navigation={navigation} route={route} />;
+      case 'VendorOtpVerification':
+        return <VendorOtpVerificationScreen navigation={navigation} route={route} />;
+      case 'VendorOnboardingProfile':
+        return <VendorOnboardingProfileScreen navigation={navigation} route={route} />;
+      case 'VendorOnboardingDomains':
+        return <VendorOnboardingDomainsScreen navigation={navigation} route={route} />;
+      case 'VendorOnboardingService':
+        return <VendorOnboardingServiceScreen navigation={navigation} route={route} />;
       default:
         return <VendorHomeScreen navigation={navigation} route={route} />;
     }
@@ -393,17 +477,19 @@ export function VendorAppContainer() {
         return 'Customer Communication';
       case 'VendorServices':
         return 'My Services';
+      case 'VendorDomains':
+        return 'My Domains';
       case 'VendorNewService':
         return 'Create Service Offering';
       case 'EarningsTab':
       case 'Earnings':
         return 'Earnings & Payments';
       case 'VendorLogin':
-        return 'Sign In to WorkLogy Pro';
+        return 'Sign In to WorkLogy';
       case 'VendorRegister':
         return 'Register as Professional';
       default:
-        return 'WorkLogy Pro';
+        return 'WorkLogy';
     }
   };
 
@@ -425,7 +511,7 @@ export function VendorAppContainer() {
         <View style={styles.screenBody}>{renderScreen()}</View>
 
         {/* ── FIXED BOTTOM NAVIGATION BAR (5 ITEMS: Home, Jobs, [Post Service], Messages, Profile) ── */}
-        {isTabScreen && (
+        {isTabScreen && !!user && (
           <View
             style={[
               styles.bottomBarContainer,
@@ -653,12 +739,24 @@ export function VendorAppContainer() {
             </TouchableOpacity>
           </TouchableOpacity>
         </Modal>
+
+        {/* ── AUTHORITATIVE PRODUCTION SPLASH SCREEN ── */}
+        {!splashFinished && (
+          <WorklogySplashScreen
+            isReady={!isLoading}
+            onFinish={() => setSplashFinished(true)}
+          />
+        )}
       </View>
     </NavigationContext.Provider>
   );
 }
 
 const styles = StyleSheet.create({
+  splashPlaceholder: {
+    flex: 1,
+    backgroundColor: '#FFFFFF'
+  },
   container: {
     flex: 1,
     backgroundColor: COLORS.background

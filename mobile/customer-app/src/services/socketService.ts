@@ -33,6 +33,7 @@ class SocketService {
     socket.on('booking_cancelled', handleBookingSync);
     socket.on('booking_status_updated', handleBookingSync);
     socket.on('booking_updated', handleBookingSync);
+    socket.on('technician_arrived', handleBookingSync);
     socket.on('job_cancelled', handleBookingSync);
     socket.on('job_assigned', handleBookingSync);
     socket.on('job_status_updated', handleBookingSync);
@@ -42,6 +43,10 @@ class SocketService {
     socket.on('new_quotation', () => {
       dataSyncService.notify('QUOTES_CHANGED');
       handleBookingSync({});
+    });
+    socket.on('job_quotation_received', (data: any) => {
+      dataSyncService.notify('QUOTES_CHANGED', data);
+      handleBookingSync(data);
     });
 
     socket.on('new_notification', handleNotificationSync);
@@ -136,6 +141,7 @@ class SocketService {
       this.socket.disconnect();
       this.socket = null;
       this.currentUrl = '';
+      this.syncListenersAttached = false;
     }
   }
 

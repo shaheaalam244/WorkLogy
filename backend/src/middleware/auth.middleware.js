@@ -38,11 +38,22 @@ export const protect = async (req, res, next) => {
       });
     }
     req.user = user;
+    if (decoded.sessionId) {
+      req.sessionId = decoded.sessionId;
+    }
     next();
   } catch (err) {
+    if (err.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        success: false,
+        code: 'TOKEN_EXPIRED',
+        message: 'Authentication token has expired'
+      });
+    }
     return res.status(401).json({
       success: false,
-      message: 'Invalid or expired authentication token'
+      code: 'INVALID_TOKEN',
+      message: 'Invalid authentication token'
     });
   }
 };

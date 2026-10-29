@@ -69,26 +69,26 @@ export default function EarningsScreen({ navigation }: any) {
   };
 
   // Metrics resolution
-  const totalEarnings = earnings?.totalEarnings ?? dashboardStats?.totalEarnings ?? 18250;
-  const completedEarnings = earnings?.settledToBank ?? earnings?.totalPaidOut ?? 12800;
-  const pendingEarnings = earnings?.pendingEscrow ?? dashboardStats?.pendingEscrow ?? 3450;
-  const totalOrdersAmount = earnings?.totalOrdersAmount ?? 2000;
+  const totalEarnings = earnings?.totalEarnings ?? dashboardStats?.totalEarnings ?? 0;
+  const completedEarnings = earnings?.settledToBank ?? earnings?.totalPaidOut ?? 0;
+  const pendingEarnings = earnings?.pendingEscrow ?? dashboardStats?.pendingEscrow ?? 0;
+  const totalOrdersAmount = earnings?.totalOrdersAmount ?? 0;
 
   // Chart data
   const defaultWeeklyChart = [
-    { day: 'Mon', amount: 3200 },
-    { day: 'Tue', amount: 5400 },
-    { day: 'Wed', amount: 4100 },
-    { day: 'Thu', amount: 6200 },
-    { day: 'Fri', amount: 7600 },
-    { day: 'Sat', amount: 5800 },
-    { day: 'Sun', amount: 8200 }
+    { day: 'Mon', amount: 0 },
+    { day: 'Tue', amount: 0 },
+    { day: 'Wed', amount: 0 },
+    { day: 'Thu', amount: 0 },
+    { day: 'Fri', amount: 0 },
+    { day: 'Sat', amount: 0 },
+    { day: 'Sun', amount: 0 }
   ];
 
   const chartData = (dashboardStats?.weeklyChartData && dashboardStats.weeklyChartData.length === 7)
     ? dashboardStats.weeklyChartData
     : defaultWeeklyChart;
-  const maxChartVal = Math.max(...chartData.map((d: any) => d.amount || 0), 8000);
+  const maxChartVal = Math.max(...chartData.map((d: any) => d.amount || 0), 1000);
 
   return (
     <View style={styles.screenWrapper}>

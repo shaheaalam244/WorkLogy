@@ -204,7 +204,7 @@ export const resolveDocumentUrl = (url) => {
   if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) {
     return url;
   }
-  const base = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001/api').replace(/\/api\/?$/, '');
+  const base = (import.meta.env.VITE_API_BASE_URL || 'http://76.13.246.224:5001/api').replace(/\/api\/?$/, '');
   return `${base}${url.startsWith('/') ? '' : '/'}${url}`;
 };
 

@@ -99,7 +99,7 @@ export default function VendorProfileScreen({ navigation }: any) {
   };
 
   const handleLogout = () => {
-    Alert.alert('Confirm Logout', 'Are you sure you want to sign out of WorkLogy Pro?', [
+    Alert.alert('Confirm Logout', 'Are you sure you want to sign out of WorkLogy?', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Sign Out',
@@ -113,12 +113,12 @@ export default function VendorProfileScreen({ navigation }: any) {
   };
 
   // Derive display values from live data
-  const displayName = profile?.businessName || user?.name || 'Mohammad Aalam';
-  const rating = profile?.rating ?? dashboardStats?.rating ?? 4.9;
-  const reviewCount = profile?.reviewCount ?? profile?.reviewsCount ?? dashboardStats?.reviewCount ?? 128;
-  const expYears = profile?.experienceYears || 2;
-  const completedJobs = profile?.completedJobsCount ?? dashboardStats?.completedJobsCount ?? 150;
-  const satisfactionRate = dashboardStats?.satisfactionRate ?? 98;
+  const displayName = profile?.businessName || user?.name || 'Professional Partner';
+  const rating = profile?.rating ?? dashboardStats?.rating ?? 0;
+  const reviewCount = profile?.reviewCount ?? profile?.reviewsCount ?? dashboardStats?.reviewCount ?? 0;
+  const expYears = profile?.experienceYears || 0;
+  const completedJobs = profile?.completedJobsCount ?? dashboardStats?.completedJobsCount ?? 0;
+  const satisfactionRate = dashboardStats?.satisfactionRate ?? 100;
 
   const isVerified =
     profile?.isVerified === true ||
@@ -264,6 +264,29 @@ export default function VendorProfileScreen({ navigation }: any) {
             <View style={styles.menuContentCol}>
               <Text style={styles.menuTitle}>My Services</Text>
               <Text style={styles.menuSubtitle}>Manage your service listings</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+          </TouchableOpacity>
+
+          <View style={styles.menuDivider} />
+
+          {/* 1b. My Domains */}
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => navigation.navigate('VendorDomains')}
+            activeOpacity={0.75}
+          >
+            <View style={[styles.menuIconBox, { backgroundColor: '#ECFDF5' }]}>
+              <Ionicons name="layers-outline" size={18} color="#059669" />
+            </View>
+            <View style={styles.menuContentCol}>
+              <Text style={styles.menuTitle}>My Domains</Text>
+              <Text style={styles.menuSubtitle}>Manage your service categories</Text>
+            </View>
+            <View style={styles.domainBadge}>
+              <Text style={styles.domainBadgeText}>
+                {profile?.categories?.length || 0}/3
+              </Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
           </TouchableOpacity>
@@ -662,5 +685,19 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: '#F1F5F9',
     marginLeft: 48
+  },
+  domainBadge: {
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    marginRight: 6
+  },
+  domainBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#065F46'
   }
 });

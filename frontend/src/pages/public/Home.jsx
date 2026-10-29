@@ -125,10 +125,12 @@ export default function Home() {
   const [jobs, setJobs] = useState([]);
   const [vendors, setVendors] = useState([]);
   const [reviews, setReviews] = useState([]);
+  const [publishedServices, setPublishedServices] = useState([]);
   const [loadingJobs, setLoadingJobs] = useState(true);
   const [loadingCategories, setLoadingCategories] = useState(true);
   const [loadingVendors, setLoadingVendors] = useState(true);
   const [loadingReviews, setLoadingReviews] = useState(true);
+  const [loadingServices, setLoadingServices] = useState(true);
 
   // Filter & Search states
   const [searchKeyword, setSearchKeyword] = useState('');
@@ -174,70 +176,6 @@ export default function Home() {
     return sortedPopularCategories.slice(0, 11);
   }, [sortedPopularCategories, showAllHomeCategories]);
 
-  // Frequently requested popular services for Section 3-E
-  const POPULAR_SERVICES_LIST = useMemo(() => [
-    {
-      id: 'ac-jet-service',
-      name: 'AC Jet Servicing & Cooling Inspection',
-      category: 'AC & HVAC Services',
-      slug: 'ac-hvac-services',
-      price: 499,
-      duration: '45-60 mins',
-      image: CATEGORY_IMAGES['ac-hvac-services']?.image,
-      description: 'Deep high-pressure coil wash, indoor filter sanitization, drain tray clearance, and refrigerant gas pressure check.'
-    },
-    {
-      id: 'switchboard-mcb-repair',
-      name: 'Switchboard & MCB Tripping Troubleshooting',
-      category: 'Electrical Services',
-      slug: 'electrical-services',
-      price: 249,
-      duration: '30-45 mins',
-      image: CATEGORY_IMAGES['electrical-services']?.image,
-      description: 'Precision fault diagnosis, short-circuit troubleshooting, socket & switch replacement, and main fuse board safety check.'
-    },
-    {
-      id: 'kitchen-sink-leakage',
-      name: 'Kitchen Sink & Pipe Leakage Repair',
-      category: 'Plumbing Services',
-      slug: 'plumbing-services',
-      price: 299,
-      duration: '45 mins',
-      image: CATEGORY_IMAGES['plumbing-services']?.image,
-      description: 'Instant leak stoppage, waste coupling replacement, bottle trap cleaning, and sanitary silicone sealing.'
-    },
-    {
-      id: 'sofa-fabric-deep-clean',
-      name: 'Sofa Fabric & Cushion Deep Sanitization',
-      category: 'Home Cleaning',
-      slug: 'home-cleaning',
-      price: 699,
-      duration: '60-90 mins',
-      image: CATEGORY_IMAGES['home-cleaning']?.image,
-      description: 'High-suction extraction, organic anti-allergen shampooing, and spot stain removal for fabric and leather sofas.'
-    },
-    {
-      id: 'wall-putty-emulsion-painting',
-      name: 'Interior Accent Wall & Room Painting',
-      category: 'Painting Services',
-      slug: 'painting-services',
-      price: 1299,
-      duration: '2-3 hours',
-      image: CATEGORY_IMAGES['painting-services']?.image,
-      description: 'Surface putty smoothing, crack filling, anti-fungal primer coat, and 2 coats of washable premium wall emulsion.'
-    },
-    {
-      id: 'door-hinge-cabinet-repair',
-      name: 'Door Lock, Hinge & Furniture Alignment',
-      category: 'Carpentry & Furniture',
-      slug: 'carpentry-furniture',
-      price: 349,
-      duration: '45 mins',
-      image: CATEGORY_IMAGES['carpentry-furniture']?.image,
-      description: 'Hydraulic soft-close hinge fitting, deadbolt lock repair, wardrobe drawer sliding adjustment, and door planing.'
-    }
-  ], []);
-
   // Modals & User Interaction states
   const [postJobModalOpen, setPostJobModalOpen] = useState(false);
   const [selectedJob, setSelectedJob] = useState(null);
@@ -266,6 +204,7 @@ export default function Home() {
     fetchCategories();
     fetchVendors();
     fetchRecentReviews();
+    fetchPublishedServices();
   }, []);
 
   useEffect(() => {
@@ -399,6 +338,23 @@ export default function Home() {
       console.warn('Failed to load recent reviews:', err);
     } finally {
       setLoadingReviews(false);
+    }
+  };
+
+  const fetchPublishedServices = async () => {
+    setLoadingServices(true);
+    try {
+      const res = await vendorAPI.getPublicServices({ limit: 6 });
+      if (res?.success && Array.isArray(res.services)) {
+        setPublishedServices(res.services);
+      } else {
+        setPublishedServices([]);
+      }
+    } catch (err) {
+      console.warn('Failed to load published services:', err);
+      setPublishedServices([]);
+    } finally {
+      setLoadingServices(false);
     }
   };
 
@@ -663,55 +619,99 @@ export default function Home() {
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {POPULAR_SERVICES_LIST.map((srv) => (
-            <div
-              key={srv.id}
-              className="bg-white border border-slate-200 hover:border-[#06684F] rounded-2xl overflow-hidden shadow-xs hover:shadow-md transition flex flex-col justify-between group"
-            >
-              <div className="relative aspect-video w-full overflow-hidden bg-slate-100 shrink-0">
-                <img
-                  src={srv.image || FALLBACK_SERVICE_IMAGE}
-                  alt={srv.name}
-                  loading="lazy"
-                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 ease-out"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent pointer-events-none" />
-                <span className="absolute top-3 left-3 px-2.5 py-1 rounded-full bg-white/95 backdrop-blur-xs text-[10px] font-bold text-slate-800 shadow-2xs border border-white/60">
-                  {srv.category}
-                </span>
-                <span className="absolute bottom-3 right-3 px-2.5 py-1 rounded-full bg-slate-900/90 text-white text-[10px] font-bold shadow-2xs flex items-center gap-1">
-                  <Clock className="w-3 h-3 text-emerald-400" />
-                  <span>{srv.duration}</span>
-                </span>
+          {loadingServices ? (
+            Array.from({ length: 3 }).map((_, idx) => (
+              <div key={idx} className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs animate-pulse p-4">
+                <div className="aspect-video bg-slate-200 rounded-xl mb-4" />
+                <div className="h-4 bg-slate-200 rounded w-3/4 mb-2" />
+                <div className="h-3 bg-slate-200 rounded w-1/2 mb-4" />
+                <div className="h-8 bg-slate-100 rounded-xl" />
               </div>
-
-              <div className="p-5 flex-1 flex flex-col justify-between">
-                <div>
-                  <h3 className="font-bold text-base text-[#111827] group-hover:text-[#06684F] transition-colors leading-snug">
-                    {srv.name}
-                  </h3>
-                  <p className="text-xs text-slate-500 mt-2 line-clamp-2 leading-relaxed">
-                    {srv.description}
-                  </p>
-                </div>
-
-                <div className="mt-5 pt-4 border-t border-slate-100 flex items-center justify-between gap-3">
-                  <div>
-                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">Starts from</span>
-                    <span className="text-base font-black text-[#06684F]">{formatCurrency(srv.price)}</span>
-                  </div>
-
-                  <Link
-                    to={`/customer/book?service=${encodeURIComponent(srv.name)}&category=${encodeURIComponent(srv.category)}&price=${srv.price}`}
-                    className="px-4 py-2 bg-[#06684F] hover:bg-[#055742] text-white font-bold text-xs rounded-xl shadow-xs transition active:scale-95 flex items-center gap-1.5"
-                  >
-                    <span>Book Service</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </Link>
-                </div>
+            ))
+          ) : publishedServices.length === 0 ? (
+            <div className="col-span-full bg-white border border-slate-200/80 rounded-2xl p-8 sm:p-12 text-center max-w-2xl mx-auto shadow-xs">
+              <div className="w-14 h-14 mx-auto rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-[#06684F] mb-4">
+                <Sparkles className="w-7 h-7" />
+              </div>
+              <h3 className="text-lg font-bold text-slate-900">No Listed Services Yet</h3>
+              <p className="text-xs sm:text-sm text-slate-500 mt-2 max-w-md mx-auto leading-relaxed">
+                All demo service listings have been cleared for clean manual testing. Explore our verified categories or post a customized service request to receive bids from professionals.
+              </p>
+              <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+                <Link
+                  to="/categories"
+                  className="px-5 py-2.5 bg-[#06684F] hover:bg-[#055742] text-white text-xs font-bold rounded-xl shadow-xs transition active:scale-95 inline-flex items-center gap-2"
+                >
+                  <span>Browse 30 Categories</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => setPostJobModalOpen(true)}
+                  className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl transition active:scale-95 inline-flex items-center gap-2"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Post Service Request</span>
+                </button>
               </div>
             </div>
-          ))}
+          ) : (
+            publishedServices.map((srv) => {
+              const categoryName = srv.category?.name || srv.domain || 'General Service';
+              const price = srv.pricing?.amount || srv.pricing?.basePrice || 0;
+              const duration = srv.durationEstimate || 'Standard';
+              const image = srv.media?.[0]?.url || CATEGORY_IMAGES[srv.category?.slug]?.image || FALLBACK_SERVICE_IMAGE;
+              return (
+                <div
+                  key={srv._id || srv.id}
+                  className="bg-white border border-slate-200 hover:border-[#06684F] rounded-2xl overflow-hidden shadow-xs hover:shadow-md transition flex flex-col justify-between group"
+                >
+                  <div className="relative aspect-video w-full overflow-hidden bg-slate-100 shrink-0">
+                    <img
+                      src={image}
+                      alt={srv.title}
+                      loading="lazy"
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 ease-out"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent pointer-events-none" />
+                    <span className="absolute top-3 left-3 px-2.5 py-1 rounded-full bg-white/95 backdrop-blur-xs text-[10px] font-bold text-slate-800 shadow-2xs border border-white/60">
+                      {categoryName}
+                    </span>
+                    <span className="absolute bottom-3 right-3 px-2.5 py-1 rounded-full bg-slate-900/90 text-white text-[10px] font-bold shadow-2xs flex items-center gap-1">
+                      <Clock className="w-3 h-3 text-emerald-400" />
+                      <span>{duration}</span>
+                    </span>
+                  </div>
+
+                  <div className="p-5 flex-1 flex flex-col justify-between">
+                    <div>
+                      <h3 className="font-bold text-base text-[#111827] group-hover:text-[#06684F] transition-colors leading-snug">
+                        {srv.title}
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-2 line-clamp-2 leading-relaxed">
+                        {srv.shortSummary || srv.description}
+                      </p>
+                    </div>
+
+                    <div className="mt-5 pt-4 border-t border-slate-100 flex items-center justify-between gap-3">
+                      <div>
+                        <span className="text-[10px] text-slate-400 uppercase font-semibold block">Starts from</span>
+                        <span className="text-base font-black text-[#06684F]">{formatCurrency(price)}</span>
+                      </div>
+
+                      <Link
+                        to={`/customer/book?service=${encodeURIComponent(srv.title)}&category=${encodeURIComponent(categoryName)}&price=${price}&serviceId=${srv._id}`}
+                        className="px-4 py-2 bg-[#06684F] hover:bg-[#055742] text-white font-bold text-xs rounded-xl shadow-xs transition active:scale-95 flex items-center gap-1.5"
+                      >
+                        <span>Book Service</span>
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </Link>
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
         </div>
       </section>
 

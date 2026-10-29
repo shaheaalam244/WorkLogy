@@ -399,7 +399,7 @@ export default function VendorHelpSupportScreen({ navigation: navProp }: any) {
               <Text style={[styles.inputLabel, { marginTop: 14 }]}>Subject</Text>
               <TextInput
                 style={styles.input}
-                placeholder="e.g., Payout delayed for Booking #BK-9421"
+                placeholder="Enter ticket subject, e.g. Payout inquiry for Booking #BK-9421"
                 placeholderTextColor="#94A3B8"
                 value={subject}
                 onChangeText={setSubject}
@@ -408,7 +408,7 @@ export default function VendorHelpSupportScreen({ navigation: navProp }: any) {
               <Text style={[styles.inputLabel, { marginTop: 14 }]}>Detailed Description</Text>
               <TextInput
                 style={[styles.input, styles.textArea]}
-                placeholder="Describe the issue, including relevant booking IDs, customer details, or errors..."
+                placeholder="Describe your issue in detail, including booking ID, customer name, and error message..."
                 placeholderTextColor="#94A3B8"
                 value={description}
                 onChangeText={setDescription}

@@ -83,10 +83,22 @@ export default function VendorOnboarding() {
   }, []);
 
   const handleCategoryToggle = (catName) => {
+    setError(null);
     const current = formData.selectedCategories;
     const exists = current.includes(catName);
-    const updated = exists ? current.filter(c => c !== catName) : [...current, catName];
-    setFormData({ ...formData, selectedCategories: updated });
+    if (exists) {
+      if (current.length <= 1) {
+        setError('At least 1 service domain must be selected.');
+        return;
+      }
+      setFormData({ ...formData, selectedCategories: current.filter(c => c !== catName) });
+    } else {
+      if (current.length >= 3) {
+        setError('You can select a maximum of 3 service domains. Please deselect an existing domain to add another.');
+        return;
+      }
+      setFormData({ ...formData, selectedCategories: [...current, catName] });
+    }
   };
 
   const handleNext = async () => {
@@ -195,8 +207,17 @@ export default function VendorOnboarding() {
       {/* Step 2: Trades & Specializations */}
       {step === 2 && (
         <div className="space-y-4">
-          <h3 className="text-base font-bold text-slate-900">Step 2: Trades & Specializations</h3>
-          <p className="text-xs text-slate-600">Select all trade domains you are licensed and equipped to perform:</p>
+          <div className="flex items-center justify-between">
+            <h3 className="text-base font-bold text-slate-900">Step 2: Trades & Specializations</h3>
+            <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${
+              formData.selectedCategories.length === 3
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                : 'bg-slate-100 text-slate-700 border-slate-200'
+            }`}>
+              {formData.selectedCategories.length} of 3 domains selected
+            </span>
+          </div>
+          <p className="text-xs text-slate-600">Select 1 to 3 trade domains you are equipped to perform (jobs feed will be tailored to your selections):</p>
           
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-72 overflow-y-auto pr-1">
             {categories.map((cat) => {

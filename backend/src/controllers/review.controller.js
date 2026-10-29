@@ -13,8 +13,9 @@ import { notificationService } from '../services/notification.service.js';
  */
 export const createReview = async (req, res, next) => {
   try {
-    let bookingId = req.params.bookingId || req.body.bookingId;
-    const { rating, comment, vendorId } = req.body;
+    let bookingId = req.params.bookingId || req.body.bookingId || req.body.booking;
+    const { rating, comment } = req.body;
+    const vendorId = req.body.vendorId || req.body.vendor;
 
     if (!rating) {
       return res.status(400).json({ success: false, message: 'Please provide a star rating.' });
@@ -28,8 +29,21 @@ export const createReview = async (req, res, next) => {
       });
     }
 
-    // If bookingId was not provided but vendorId was, find the customer's unreviewed completed booking
-    if (!bookingId && vendorId) {
+    let booking = null;
+
+    // 1. If bookingId was provided, resolve authoritative Booking record
+    if (bookingId && mongoose.Types.ObjectId.isValid(bookingId)) {
+      booking = await Booking.findById(bookingId);
+      if (!booking) {
+        // Fallback: check if the provided ID is a Job ID referencing a booking
+        booking = await Booking.findOne({ job: bookingId });
+      }
+    } else if (bookingId && typeof bookingId === 'string') {
+      booking = await Booking.findOne({ bookingReference: bookingId });
+    }
+
+    // 2. If booking was not resolved directly, but vendorId was provided, find eligible unreviewed completed booking
+    if (!booking && vendorId) {
       let targetVendorUserId = vendorId;
       if (mongoose.Types.ObjectId.isValid(vendorId)) {
         const vp = await VendorProfile.findById(vendorId);
@@ -45,28 +59,40 @@ export const createReview = async (req, res, next) => {
       for (const candidate of completedCandidates) {
         const existing = await Review.findOne({ booking: candidate._id });
         if (!existing) {
-          bookingId = candidate._id;
+          booking = candidate;
           break;
+        }
+      }
+
+      // If still not resolved, check completed Jobs with this vendor
+      if (!booking) {
+        const completedJobs = await Job.find({
+          customer: req.user.id,
+          selectedVendor: targetVendorUserId,
+          status: 'completed'
+        }).sort({ updatedAt: -1 });
+
+        for (const cj of completedJobs) {
+          const bFromJob = await Booking.findOne({ job: cj._id });
+          if (bFromJob) {
+            const existing = await Review.findOne({ booking: bFromJob._id });
+            if (!existing) {
+              booking = bFromJob;
+              break;
+            }
+          }
         }
       }
     }
 
-    if (!bookingId) {
+    if (!booking) {
       return res.status(400).json({
         success: false,
         message: 'Booking reference is required to submit a verified review. No unreviewed completed booking was found with this professional.'
       });
     }
 
-    if (!mongoose.Types.ObjectId.isValid(bookingId)) {
-      return res.status(400).json({ success: false, message: 'Invalid booking ID.' });
-    }
-
-    // 1. Fetch authoritative booking record
-    const booking = await Booking.findById(bookingId);
-    if (!booking) {
-      return res.status(404).json({ success: false, message: 'Booking not found.' });
-    }
+    bookingId = booking._id;
 
     // 2. Authorization: Request must come from the authenticated customer who owns the booking
     if (booking.customer.toString() !== req.user.id && req.user.role !== 'admin') {
@@ -98,10 +124,20 @@ export const createReview = async (req, res, next) => {
     // 6. Application-level duplicate review protection
     const existingReview = await Review.findOne({ booking: booking._id });
     if (existingReview) {
+      if (!booking.hasReview) {
+        booking.hasReview = true;
+        booking.review = existingReview._id;
+        await booking.save();
+      }
+      if (booking.job) {
+        await Job.findByIdAndUpdate(booking.job, { hasReview: true });
+      }
       return res.status(409).json({
         success: false,
         code: 'REVIEW_ALREADY_EXISTS',
-        message: 'A review has already been submitted for this booking. Only one review is allowed per booking.'
+        message: 'A review has already been submitted for this booking. Only one review is allowed per booking.',
+        reviewId: existingReview._id,
+        review: existingReview
       });
     }
 
@@ -129,10 +165,23 @@ export const createReview = async (req, res, next) => {
       });
     } catch (dbErr) {
       if (dbErr.code === 11000) {
+        const existing = await Review.findOne({ booking: booking._id });
+        if (existing) {
+          if (!booking.hasReview) {
+            booking.hasReview = true;
+            booking.review = existing._id;
+            await booking.save();
+          }
+          if (booking.job) {
+            await Job.findByIdAndUpdate(booking.job, { hasReview: true });
+          }
+        }
         return res.status(409).json({
           success: false,
           code: 'REVIEW_ALREADY_EXISTS',
-          message: 'A review has already been submitted for this booking.'
+          message: 'A review has already been submitted for this booking.',
+          reviewId: existing?._id,
+          review: existing
         });
       }
       throw dbErr;
@@ -142,6 +191,10 @@ export const createReview = async (req, res, next) => {
     booking.hasReview = true;
     booking.review = review._id;
     await booking.save();
+
+    if (booking.job) {
+      await Job.findByIdAndUpdate(booking.job, { hasReview: true });
+    }
 
     // 10. Recalculate vendor's real rating aggregate from approved public reviews
     await recalculateVendorRating(targetVendorUserId);

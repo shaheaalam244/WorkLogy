@@ -1,6 +1,7 @@
 import Notification from '../models/Notification.js';
 import User from '../models/User.js';
 import { getIO } from '../config/socket.js';
+import { createNotification } from '../services/notification.service.js';
 import {
   registerPushTokenForUser,
   deregisterPushTokenForUser,
@@ -281,25 +282,41 @@ export const deregisterPushToken = async (req, res, next) => {
  */
 export const sendTestPush = async (req, res, next) => {
   try {
-    const { title, body } = req.body || {};
-    const result = await sendPushNotification({
-      recipientUserIds: [req.user.id],
-      title: title || 'WorkLogy Pro Alert 🔔',
-      body: body || 'Real-time push notifications are active on this device!',
-      data: {
-        type: 'general',
-        test: true
-      },
-      channelId: 'general',
-      priority: 'high'
+    const { title, body, targetEmail, targetUserId, type } = req.body || {};
+    let recipientId = req.user.id;
+
+    if (targetUserId) {
+      recipientId = targetUserId;
+    } else if (targetEmail) {
+      const targetUser = await User.findOne({ email: targetEmail.toLowerCase() });
+      if (targetUser) {
+        recipientId = targetUser._id.toString();
+      }
+    }
+
+    const notifTitle = title || 'WorkLogy Alert 🔔';
+    const notifMessage = body || 'WorkLogy real-time notification integration is active and working perfectly!';
+    const notifType = type || 'booking_confirmed';
+
+    const notifResult = await createNotification({
+      recipientId,
+      type: notifType,
+      title: notifTitle,
+      message: notifMessage,
+      link: '/customer/bookings',
+      sendPush: true
+    });
+
+    const unreadCount = await Notification.countDocuments({
+      recipient: recipientId,
+      isRead: false
     });
 
     res.status(200).json({
       success: true,
-      sentCount: result.sentCount || 0,
-      totalAttempted: result.totalAttempted || 0,
-      message: result.sentCount > 0 ? 'Test push notification dispatched!' : 'No active push tokens registered for this user.',
-      tickets: result.tickets || []
+      message: 'Test notification created and dispatched!',
+      notification: notifResult?.notification,
+      unreadCount
     });
   } catch (error) {
     next(error);

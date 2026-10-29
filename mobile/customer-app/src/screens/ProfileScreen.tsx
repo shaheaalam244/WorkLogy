@@ -132,36 +132,41 @@ export default function ProfileScreen({ navigation }: any) {
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   useEffect(() => {
-    loadInitialData();
+    if (user?._id) {
+      loadInitialData();
+    }
   }, [user?._id]);
 
   useEffect(() => {
     const unsubBookings = dataSyncService.subscribe('BOOKINGS_CHANGED', () => {
-      loadBookingStats();
+      if (user?._id) loadBookingStats();
     });
     const unsubProfile = dataSyncService.subscribe('PROFILE_CHANGED', () => {
-      loadInitialData();
+      if (user?._id) loadInitialData();
     });
     return () => {
       unsubBookings();
       unsubProfile();
     };
-  }, []);
+  }, [user?._id]);
 
   const loadInitialData = async () => {
-    loadAddresses();
-    loadTransactions();
-    loadPushSoundPreference();
-    loadNotificationPreferences();
-    loadBookingStats();
-    checkDeviceNotificationPermission();
+    if (!user?._id) return;
+    await Promise.allSettled([
+      loadAddresses(),
+      loadTransactions(),
+      loadPushSoundPreference(),
+      loadNotificationPreferences(),
+      loadBookingStats(),
+      checkDeviceNotificationPermission()
+    ]);
   };
 
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
     try {
       await refreshProfile();
-      await loadInitialData();
+      if (user?._id) await loadInitialData();
     } catch {
       // background refresh error handled
     } finally {
@@ -190,6 +195,7 @@ export default function ProfileScreen({ navigation }: any) {
   };
 
   const loadAddresses = async () => {
+    if (!user?._id) return;
     try {
       setLoadingAddresses(true);
       const res = await api.customer.getProfile();
@@ -218,6 +224,7 @@ export default function ProfileScreen({ navigation }: any) {
   };
 
   const loadBookingStats = async () => {
+    if (!user?._id) return;
     try {
       const statsRes = await api.customer.getStats();
       if (statsRes?.success && typeof statsRes.activeJobsCount === 'number') {
@@ -241,6 +248,7 @@ export default function ProfileScreen({ navigation }: any) {
   };
 
   const loadTransactions = async () => {
+    if (!user?._id) return;
     try {
       setLoadingTransactions(true);
       const res = await api.customer.getTransactions();
@@ -256,6 +264,7 @@ export default function ProfileScreen({ navigation }: any) {
   };
 
   const loadNotificationPreferences = async () => {
+    if (!user?._id) return;
     try {
       setLoadingNotifs(true);
       const res = await api.notifications.getPreferences();
@@ -270,6 +279,7 @@ export default function ProfileScreen({ navigation }: any) {
   };
 
   const loadTickets = async () => {
+    if (!user?._id) return;
     try {
       setLoadingTickets(true);
       const res = await api.support.getMyTickets();

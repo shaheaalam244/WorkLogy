@@ -20,11 +20,12 @@ import { useAuth } from '../context/AuthContext';
 import { api } from '../api/client';
 import { COLORS } from '../theme/colors';
 import { pushNotificationService } from '../services/pushNotificationService';
+import { isTemporaryEmail } from '../utils/formatters';
 
 export default function VendorSettingsScreen({ navigation: navProp }: any) {
   const contextNav = useNavigation();
   const navigation = navProp || contextNav;
-  const { user, logout } = useAuth();
+  const { user, logout, updateLocalUser } = useAuth();
   const insets = useSafeAreaInsets();
   const topInset = Math.max(insets.top, Platform.OS === 'android' ? 24 : 0);
 
@@ -53,6 +54,12 @@ export default function VendorSettingsScreen({ navigation: navProp }: any) {
   const [updatingPassword, setUpdatingPassword] = useState(false);
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
+
+  // Email Modal State
+  const [emailModalVisible, setEmailModalVisible] = useState(false);
+  const [emailInput, setEmailInput] = useState('');
+  const [savingEmail, setSavingEmail] = useState(false);
+  const [emailError, setEmailError] = useState<string | null>(null);
 
   // Biometrics
   const [biometricsEnabled, setBiometricsEnabled] = useState(true);
@@ -168,9 +175,44 @@ export default function VendorSettingsScreen({ navigation: navProp }: any) {
     }
   };
 
+  const handleSaveEmail = async () => {
+    const clean = emailInput.trim().toLowerCase();
+    if (!clean) {
+      setEmailError('Please enter your email address.');
+      return;
+    }
+    const emailRegex = /\S+@\S+\.\S+/;
+    if (!emailRegex.test(clean)) {
+      setEmailError('Please enter a valid email address (e.g. name@example.com).');
+      return;
+    }
+    if (clean.endsWith('@worklogy.local') || clean.startsWith('temp_')) {
+      setEmailError('Please enter your actual personal or business email address.');
+      return;
+    }
+
+    try {
+      setSavingEmail(true);
+      setEmailError(null);
+      const res = await api.vendor.updateProfile({ email: clean });
+      if (res?.success) {
+        updateLocalUser({ email: clean });
+        setEmailModalVisible(false);
+        setEmailInput('');
+        Alert.alert('Email Saved 🎉', 'Your account email has been updated successfully.');
+      } else {
+        setEmailError((res as any)?.message || 'Failed to update email address.');
+      }
+    } catch (err: any) {
+      setEmailError(err?.message || 'Could not update email. Please try again.');
+    } finally {
+      setSavingEmail(false);
+    }
+  };
+
   const handleLogout = () => {
     Alert.alert(
-      'Sign Out of WorkLogy Pro',
+      'Sign Out of WorkLogy',
       'Are you sure you want to log out? Your business listings and records will remain safely preserved in MongoDB.',
       [
         { text: 'Cancel', style: 'cancel' },
@@ -235,7 +277,44 @@ export default function VendorSettingsScreen({ navigation: navProp }: any) {
             </View>
             <View style={styles.infoTextCol}>
               <Text style={styles.infoLabel}>Account Email</Text>
-              <Text style={styles.infoValue}>{user?.email || 'aalamtech@example.com'}</Text>
+              {!isTemporaryEmail(user?.email) ? (
+                <View style={styles.emailDisplayRow}>
+                  <Text style={styles.infoValue}>{user?.email}</Text>
+                  <TouchableOpacity
+                    style={styles.changeEmailPill}
+                    onPress={() => {
+                      setEmailInput(user?.email || '');
+                      setEmailError(null);
+                      setEmailModalVisible(true);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="pencil" size={12} color="#06684F" />
+                    <Text style={styles.changeEmailText}>Edit</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <View style={styles.emptyEmailBox}>
+                  <View style={styles.emptyEmailRow}>
+                    <Text style={styles.emptyEmailText}>Not added</Text>
+                    <TouchableOpacity
+                      style={styles.fillEmailPill}
+                      onPress={() => {
+                        setEmailInput('');
+                        setEmailError(null);
+                        setEmailModalVisible(true);
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons name="add" size={13} color="#FFFFFF" />
+                      <Text style={styles.fillEmailPillText}>Fill Email</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <Text style={styles.emptyEmailNotice}>
+                    Add your email to receive invoices and account security alerts.
+                  </Text>
+                </View>
+              )}
             </View>
           </View>
 
@@ -544,7 +623,7 @@ export default function VendorSettingsScreen({ navigation: navProp }: any) {
         {/* ── 5. LOGOUT BUTTON ── */}
         <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout} activeOpacity={0.85}>
           <Ionicons name="log-out-outline" size={20} color="#DC2626" />
-          <Text style={styles.logoutBtnText}>Sign Out of WorkLogy Pro</Text>
+          <Text style={styles.logoutBtnText}>Sign Out of WorkLogy</Text>
         </TouchableOpacity>
 
         <View style={{ height: 40 }} />
@@ -566,7 +645,7 @@ export default function VendorSettingsScreen({ navigation: navProp }: any) {
               <View style={styles.passwordInputContainer}>
                 <TextInput
                   style={styles.passwordInput}
-                  placeholder="Enter current password"
+                  placeholder="Enter your current password"
                   placeholderTextColor="#94A3B8"
                   secureTextEntry={!showCurrentPassword}
                   value={currentPassword}
@@ -588,7 +667,7 @@ export default function VendorSettingsScreen({ navigation: navProp }: any) {
               <View style={styles.passwordInputContainer}>
                 <TextInput
                   style={styles.passwordInput}
-                  placeholder="Minimum 6 characters"
+                  placeholder="Enter your new password (minimum 6 characters)"
                   placeholderTextColor="#94A3B8"
                   secureTextEntry={!showNewPassword}
                   value={newPassword}
@@ -607,7 +686,7 @@ export default function VendorSettingsScreen({ navigation: navProp }: any) {
               <View style={styles.passwordInputContainer}>
                 <TextInput
                   style={styles.passwordInput}
-                  placeholder="Re-enter new password"
+                  placeholder="Re-type your new password to confirm"
                   placeholderTextColor="#94A3B8"
                   secureTextEntry={!showNewPassword}
                   value={confirmPassword}
@@ -628,6 +707,76 @@ export default function VendorSettingsScreen({ navigation: navProp }: any) {
                 )}
               </TouchableOpacity>
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── UPDATE / ADD EMAIL MODAL ── */}
+      <Modal
+        visible={emailModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setEmailModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.modalTitle}>
+                  {!isTemporaryEmail(user?.email) ? 'Update Account Email' : 'Add Account Email'}
+                </Text>
+                <Text style={styles.modalSub}>
+                  Enter your email to receive invoices, booking updates, and security alerts.
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setEmailModalVisible(false)}
+                style={styles.modalCloseBtn}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close" size={20} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={{ padding: 16 }}>
+              <Text style={styles.inputLabel}>Email Address</Text>
+              <View style={styles.emailInputWrapper}>
+                <Ionicons name="mail-outline" size={18} color="#94A3B8" style={{ marginRight: 8 }} />
+                <TextInput
+                  style={styles.emailTextInput}
+                  placeholder="Enter email, e.g. name@example.com"
+                  placeholderTextColor="#94A3B8"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  value={emailInput}
+                  onChangeText={(val) => {
+                    setEmailInput(val);
+                    if (emailError) setEmailError(null);
+                  }}
+                />
+              </View>
+
+              {emailError ? (
+                <View style={styles.modalErrorBox}>
+                  <Ionicons name="alert-circle" size={14} color="#EF4444" style={{ marginRight: 6 }} />
+                  <Text style={styles.modalErrorText}>{emailError}</Text>
+                </View>
+              ) : null}
+
+              <TouchableOpacity
+                style={[styles.savePasswordBtn, savingEmail && { opacity: 0.65 }]}
+                onPress={handleSaveEmail}
+                disabled={savingEmail}
+                activeOpacity={0.85}
+              >
+                {savingEmail ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.savePasswordBtnText}>Save Email Address</Text>
+                )}
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -831,6 +980,14 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#0F172A'
   },
+  modalSub: {
+    fontSize: 12,
+    color: '#64748B',
+    marginTop: 2
+  },
+  modalCloseBtn: {
+    padding: 6
+  },
   inputLabel: {
     fontSize: 12,
     fontWeight: '700',
@@ -867,5 +1024,93 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '800'
+  },
+  emailDisplayRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 2
+  },
+  changeEmailPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#A7F3D0'
+  },
+  changeEmailText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#06684F',
+    marginLeft: 3
+  },
+  emptyEmailBox: {
+    marginTop: 3
+  },
+  emptyEmailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between'
+  },
+  emptyEmailText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#94A3B8'
+  },
+  fillEmailPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.primaryAction,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8
+  },
+  fillEmailPillText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    marginLeft: 2
+  },
+  emptyEmailNotice: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 4,
+    lineHeight: 15
+  },
+  emailInputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    height: 46,
+    backgroundColor: '#FFFFFF',
+    marginTop: 6,
+    marginBottom: 12
+  },
+  emailTextInput: {
+    flex: 1,
+    fontSize: 14,
+    color: '#0F172A'
+  },
+  modalErrorBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+    borderRadius: 8,
+    padding: 8,
+    marginBottom: 12
+  },
+  modalErrorText: {
+    fontSize: 12,
+    color: '#DC2626',
+    flex: 1,
+    fontWeight: '600'
   }
 });

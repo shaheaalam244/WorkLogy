@@ -151,12 +151,36 @@ const ServiceListingSchema = new mongoose.Schema(
       min: 0,
       max: 5
     },
-    reviewCount: {
+    bookingCount: {
       type: Number,
       default: 0
+    },
+    isCustom: {
+      type: Boolean,
+      default: false
+    },
+    customSubcategory: {
+      type: String,
+      trim: true,
+      default: ''
+    },
+    idempotencyKey: {
+      type: String,
+      sparse: true,
+      index: true
     }
   },
   { timestamps: true }
 );
 
+ServiceListingSchema.index(
+  { vendor: 1, domain: 1, subcategory: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: { $in: ['published', 'draft', 'pending_approval'] } }
+  }
+);
+ServiceListingSchema.index({ vendor: 1, idempotencyKey: 1 });
+
 export default mongoose.models.ServiceListing || mongoose.model('ServiceListing', ServiceListingSchema);
+

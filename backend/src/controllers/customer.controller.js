@@ -6,7 +6,7 @@ import Transaction from '../models/Transaction.js';
 import CustomerProfile from '../models/CustomerProfile.js';
 import Notification from '../models/Notification.js';
 import Review from '../models/Review.js';
-import { hashOtp } from '../utils/otp.js';
+import { hashOtp, decryptCustomerOtp } from '../utils/otp.js';
 import { getIO } from '../config/socket.js';
 import { cancelJob } from './job.controller.js';
 import { notifyCancellation } from '../services/notification.service.js';
@@ -29,6 +29,7 @@ export const getCustomerDashboardSummary = async (req, res, next) => {
 
       // 2. Fetch customer's bookings
       Booking.find({ customer: customerId })
+        .select('+startOtp.otp +startOtp.customerEncryptedOtp')
         .populate('vendor', 'name email phone avatar businessName rating')
         .populate({
           path: 'job',
@@ -85,9 +86,9 @@ export const getCustomerDashboardSummary = async (req, res, next) => {
     });
 
     // Deduplicated Ongoing / Active Orders
-    // An order is active if status is in: assigned, confirmed, scheduled, in_progress, completion_pending
+    // An order is active if status is in: assigned, confirmed, scheduled, on_the_way, arrived, in_progress, completion_pending
     const activeBookingList = customerBookings.filter(b =>
-      ['awaiting_confirmation', 'assigned', 'confirmed', 'scheduled', 'in_progress', 'completion_pending'].includes(b.status)
+      ['awaiting_confirmation', 'assigned', 'confirmed', 'scheduled', 'on_the_way', 'arrived', 'in_progress', 'completion_pending'].includes(b.status)
     );
 
     // Any job that is in_progress / assigned but NOT in customerBookings
@@ -100,7 +101,7 @@ export const getCustomerDashboardSummary = async (req, res, next) => {
       ...activeBookingList.map(b => {
         // Map 4-stage stepper
         // Stage 1: Request Posted (open)
-        // Stage 2: Vendor Assigned (awaiting_confirmation, assigned, confirmed, scheduled)
+        // Stage 2: Vendor Assigned (awaiting_confirmation, assigned, confirmed, scheduled, on_the_way, arrived)
         // Stage 3: Work in Progress (in_progress, completion_pending)
         // Stage 4: Completed (completed)
         let stage = 2;
@@ -111,6 +112,7 @@ export const getCustomerDashboardSummary = async (req, res, next) => {
         }
 
         const isPriced = typeof b.pricing?.amount === 'number' && b.pricing.amount > 0;
+        const customerPin = b.startOtp?.otp || (b.startOtp?.customerEncryptedOtp ? decryptCustomerOtp(b.startOtp.customerEncryptedOtp) : null);
         return {
           _id: b._id,
           orderType: 'booking',
@@ -136,7 +138,8 @@ export const getCustomerDashboardSummary = async (req, res, next) => {
             paymentStatus: b.pricing?.paymentStatus || 'escrow_locked',
             isPaid: Boolean(b.pricing?.isPaid)
           },
-          startOtp: b.startOtp?.otp || null,
+          startOtp: customerPin,
+          arrivalOtp: customerPin,
           address: b.address || b.job?.location,
           jobId: b.job?._id || b.job,
           bookingId: b._id
@@ -375,6 +378,7 @@ export const getCustomerBookings = async (req, res, next) => {
     }
 
     const bookings = await Booking.find(query)
+      .select('+startOtp.otp +startOtp.customerEncryptedOtp')
       .populate('vendor', 'name email phone avatar businessName rating')
       .populate({
         path: 'job',
@@ -413,9 +417,30 @@ export const getCustomerBookings = async (req, res, next) => {
         .populate('category', 'name icon')
         .sort({ createdAt: -1 });
 
+      const openJobIds = openJobs.map(j => j._id);
+      const applications = await Application.find({
+        job: { $in: openJobIds },
+        status: { $ne: 'withdrawn' }
+      })
+        .select('job proposedAmount status createdAt vendor')
+        .lean();
+
+      const appsByJob = new Map();
+      applications.forEach(a => {
+        const jId = a.job.toString();
+        if (!appsByJob.has(jId)) appsByJob.set(jId, []);
+        appsByJob.get(jId).push(a);
+      });
+
       openJobsAsOrders = openJobs.map(j => {
+        const jApps = appsByJob.get(j._id.toString()) || [];
+        const quotesCount = Math.max(j.applicantsCount || 0, jApps.length);
+        const hasQuotes = quotesCount > 0;
+        const quotedAmount = jApps.length > 0 ? jApps[0].proposedAmount : 0;
+        const minQuotedAmount = jApps.length > 0 ? Math.min(...jApps.map(a => a.proposedAmount)) : 0;
+
         let displayStatus = 'Awaiting Bids';
-        if ((j.applicantsCount || 0) > 0) {
+        if (hasQuotes) {
           displayStatus = 'Quotations Received';
         } else if (j.status === 'cancelled') {
           displayStatus = 'Cancelled Request';
@@ -431,17 +456,23 @@ export const getCustomerBookings = async (req, res, next) => {
           serviceTitle: j.title,
           category: j.category?.name || 'Home Services',
           serviceType: j.serviceType || 'repair',
-          status: (j.applicantsCount || 0) > 0 ? 'quotations_received' : j.status,
+          status: hasQuotes ? 'quotations_received' : j.status,
           displayStatus,
-          applicantsCount: j.applicantsCount || 0,
+          applicantsCount: quotesCount,
+          quotationsCount: quotesCount,
+          quotedAmount,
+          minQuotedAmount,
           scheduledDate: j.preferredDate ? new Date(j.preferredDate) : j.createdAt,
           timeSlot: j.preferredTime || 'Flexible',
           address: j.location,
           pricing: {
             amount: j.budget?.amount || 0,
             budgetType: j.budget?.type || 'quote',
+            quotedAmount,
+            minQuotedAmount,
             paymentStatus: 'pending'
           },
+          totalAmount: quotedAmount,
           problemDescription: j.description,
           urgency: j.urgency,
           createdAt: j.createdAt,
@@ -465,6 +496,27 @@ export const getCustomerBookings = async (req, res, next) => {
       bObj.bookingType = bObj.bookingType || (bObj.job ? 'open_request' : 'direct_professional');
       bObj.isJobRequest = false;
       bObj.jobId = bObj.job?._id ? bObj.job._id.toString() : (bObj.job ? bObj.job.toString() : null);
+
+      const isOtpVerified = Boolean(
+        bObj.startOtp?.isConsumed ||
+        bObj.arrivalEvidence?.verified ||
+        ['in_progress', 'completion_pending', 'completed'].includes(bObj.status)
+      );
+      bObj.isOtpVerified = isOtpVerified;
+
+      if (!isOtpVerified && ['arrived', 'on_the_way', 'confirmed', 'scheduled', 'assigned'].includes(bObj.status)) {
+        const customerPin = bObj.startOtp?.otp || (bObj.startOtp?.customerEncryptedOtp ? decryptCustomerOtp(bObj.startOtp.customerEncryptedOtp) : null);
+        if (customerPin) {
+          bObj.arrivalOtp = customerPin;
+          if (bObj.startOtp) bObj.startOtp.otp = customerPin;
+        }
+      }
+
+      if (bObj.startOtp) {
+        delete bObj.startOtp.codeHash;
+        delete bObj.startOtp.customerEncryptedOtp;
+      }
+
       if (!bObj.review && reviewByBookingMap.has(b._id.toString())) {
         bObj.review = reviewByBookingMap.get(b._id.toString());
         bObj.hasReview = true;

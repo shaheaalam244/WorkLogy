@@ -4,12 +4,12 @@
     "slug": "worklogy-vendor-app",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./src/assets/icon.png",
+    "icon": "./src/assets/worklogy-app-icon-v2.png",
     "userInterfaceStyle": "light",
     "splash": {
-      "image": "./src/assets/splash.png",
+      "image": "./src/assets/native-splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#064E3B"
+      "backgroundColor": "#FFFFFF"
     },
     "ios": {
       "supportsTablet": true,
@@ -18,8 +18,13 @@
     "android": {
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
-        "foregroundImage": "./src/assets/adaptive-icon.png",
-        "backgroundColor": "#064E3B"
+        "foregroundImage": "./src/assets/worklogy-adaptive-icon-v2.png",
+        "backgroundColor": "#FFFFFF"
+      },
+      "splash": {
+        "image": "./src/assets/native-splash.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#FFFFFF"
       },
       "package": "in.worklogy.vendor"
     },
@@ -30,11 +35,13 @@
       [
         "expo-notifications",
         {
-          "icon": "./src/assets/icon.png",
-          "color": "#064E3B",
+          "icon": "./src/assets/worklogy-app-icon-v2.png",
+          "color": "#2563EB",
           "defaultChannel": "general"
         }
-      ]
+      ],
+      "expo-secure-store",
+      "expo-splash-screen"
     ]
   }
 }

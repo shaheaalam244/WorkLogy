@@ -28,7 +28,7 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 type FilterTab = 'all' | 'published' | 'draft' | 'paused';
 
-export default function VendorServicesScreen({ navigation }: any) {
+export default function VendorServicesScreen({ navigation, route }: any) {
   const insets = useSafeAreaInsets();
   const topInset = Math.max(
     insets.top,
@@ -46,7 +46,7 @@ export default function VendorServicesScreen({ navigation }: any) {
 
   useEffect(() => {
     loadServices();
-  }, [user]);
+  }, [user, route?.params?.refresh, route?.params?.timestamp]);
 
   const loadServices = async () => {
     try {
@@ -217,11 +217,13 @@ export default function VendorServicesScreen({ navigation }: any) {
             <View style={styles.cardStatsRow}>
               <View style={styles.cardStatItem}>
                 <Ionicons name="briefcase-outline" size={12} color="#64748B" />
-                <Text style={styles.cardStatText}>{(item as any).bookingCount ?? 42} bookings</Text>
+                <Text style={styles.cardStatText}>{(item as any).bookingCount ?? 0} bookings</Text>
               </View>
               <View style={styles.cardStatItem}>
                 <Ionicons name="star" size={12} color="#F59E0B" />
-                <Text style={styles.cardStatText}>{item.rating ? item.rating.toFixed(1) : '4.8'}</Text>
+                <Text style={styles.cardStatText}>
+                  {item.reviewCount ? `${(item.rating || 5).toFixed(1)} (${item.reviewCount})` : item.rating ? item.rating.toFixed(1) : 'New'}
+                </Text>
               </View>
             </View>
           </View>
@@ -355,7 +357,7 @@ export default function VendorServicesScreen({ navigation }: any) {
           </View>
           <Text style={styles.emptyTitle}>Sign In Required</Text>
           <Text style={styles.emptySubtitle}>
-            Please sign in to your WorkLogy Pro contractor account to list your trade skills, manage pricing, and receive direct customer bookings.
+            Please sign in to your WorkLogy contractor account to list your trade skills, manage pricing, and receive direct customer bookings.
           </Text>
 
           <TouchableOpacity

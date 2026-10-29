@@ -146,9 +146,20 @@ export default function VendorDetailsModal({
                 <VerifiedBadge status={verifiedBadge.status || 'not_submitted'} size="sm" />
               </div>
 
-              <p className="text-xs sm:text-sm font-semibold text-purple-200 mt-1">
-                {business} · <span className="text-slate-300">{categoriesStr}</span>
-              </p>
+              <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                <span className="text-xs sm:text-sm font-semibold text-purple-200">{business}</span>
+                <span className="text-xs text-slate-400">·</span>
+                {vendor.categories?.length > 0 ? (
+                  vendor.categories.map((cat, i) => (
+                    <span key={i} className="px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-200 text-xs font-semibold border border-purple-400/30">
+                      {cat.name || cat}
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-xs text-amber-300 font-bold">No domains registered</span>
+                )}
+                <span className="text-[11px] text-purple-300 font-medium">({vendor.categories?.length || 0}/3 Domains)</span>
+              </div>
 
               <div className="flex items-center gap-4 text-xs text-slate-400 mt-1.5 flex-wrap">
                 <span className="inline-flex items-center gap-1">
@@ -294,6 +305,39 @@ export default function VendorDetailsModal({
                 >
                   Review Documents ➔
                 </button>
+              </div>
+
+              {/* Registered Service Domains (1 to 3) */}
+              <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-2xs space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                    Registered Service Domains ({vendor.categories?.length || 0} of 3 Selected)
+                  </h4>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+                    Canonical ID Linked
+                  </span>
+                </div>
+                {vendor.categories?.length > 0 ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    {vendor.categories.map((cat, idx) => (
+                      <div key={idx} className="p-3 rounded-xl bg-purple-50/60 border border-purple-200 flex flex-col justify-between">
+                        <div className="flex items-center justify-between gap-1 mb-1">
+                          <span className="text-xs font-bold text-purple-950">{cat.name || cat}</span>
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800">
+                            Active
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-slate-500 font-mono truncate">
+                          ID: {cat._id || cat}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-amber-700 bg-amber-50 p-2.5 rounded-xl border border-amber-200 font-semibold">
+                    ⚠️ No service domains configured. This vendor cannot receive job tenders until at least 1 domain is selected.
+                  </p>
+                )}
               </div>
 
               {/* Essential Contact & Base Info */}

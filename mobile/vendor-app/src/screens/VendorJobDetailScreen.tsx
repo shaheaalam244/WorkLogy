@@ -576,7 +576,7 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
             </TouchableOpacity>
           )}
 
-          {booking.status === 'on_the_way' && (
+          {['confirmed', 'scheduled', 'assigned', 'on_the_way'].includes(booking.status) && (
             <TouchableOpacity
               style={[styles.workflowBtn, { backgroundColor: '#7C3AED' }]}
               onPress={() => handleUpdateStatus('arrived')}
@@ -692,7 +692,7 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
             <TouchableOpacity
               style={[styles.workflowBtn, { backgroundColor: '#1E40AF' }]}
               onPress={() => {
-                navigation.navigate('JobsTab', { initialTab: 'new' });
+                navigation.navigate('JobsTab', { initialTab: 'all' });
               }}
               activeOpacity={0.85}
             >
@@ -724,7 +724,7 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
               maxLength={6}
               value={otpModal.code}
               onChangeText={(t) => setOtpModal({ ...otpModal, code: t })}
-              placeholder="0 0 0 0 0 0"
+              placeholder="Enter 6-digit start code"
               placeholderTextColor="#9CA3AF"
             />
             <TouchableOpacity
@@ -761,7 +761,7 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
               numberOfLines={3}
               value={completeModal.notes}
               onChangeText={(t) => setCompleteModal({ ...completeModal, notes: t })}
-              placeholder="Work summary, repairs made, warranty notes..."
+              placeholder="Summarize work completed, components replaced, and any customer instructions..."
               placeholderTextColor="#9CA3AF"
             />
             <TouchableOpacity
@@ -828,7 +828,7 @@ export default function VendorJobDetailScreen({ route, navigation }: any) {
               numberOfLines={2}
               value={cancelModal.customNote}
               onChangeText={(t) => setCancelModal((prev) => ({ ...prev, customNote: t }))}
-              placeholder="Additional explanation or context (optional)..."
+              placeholder="Explain why you need to cancel this booking (optional)..."
               placeholderTextColor="#9CA3AF"
             />
 

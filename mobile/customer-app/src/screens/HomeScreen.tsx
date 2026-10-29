@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -28,6 +28,8 @@ import type { ServiceCategory, Booking, ServiceAddress } from '../types';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const BANNER_WIDTH = SCREEN_WIDTH - 32;
+
+const WORKLOGY_HEADER_LOGO = require('../assets/worklogybgremove.png');
 
 // ── 9 Canonical Categories for 3x3 Grid (Matching Screenshot 5) ──
 const GRID_CATEGORIES = [
@@ -111,61 +113,6 @@ interface VerifiedVendor {
   isAvailable?: boolean;
 }
 
-const VERIFIED_FALLBACK_PROS: VerifiedVendor[] = [
-  {
-    _id: '6ad8929d4bd0f2c1cd3f31ac',
-    businessName: 'Vikram Power Solutions',
-    name: 'Vikram Electrician',
-    user: { name: 'Vikram Electrician', phone: '9876500003' },
-    categories: [{ name: 'Electrical Services', slug: 'electrical-services' }],
-    rating: 5.0,
-    reviewCount: 38,
-    experienceYears: 6,
-    city: 'Lucknow',
-    hourlyRate: 299,
-    isAvailable: true
-  },
-  {
-    _id: '6ad8929d4bd0f2c1cd3f31a5',
-    businessName: 'Suresh Expert Pipes',
-    name: 'Suresh Plumber',
-    user: { name: 'Suresh Plumber', phone: '9876500002' },
-    categories: [{ name: 'Plumbing Services', slug: 'plumbing-services' }],
-    rating: 4.9,
-    reviewCount: 52,
-    experienceYears: 5,
-    city: 'Lucknow',
-    hourlyRate: 249,
-    isAvailable: true
-  },
-  {
-    _id: '6accc342d9a98de465ce847f',
-    businessName: 'FlowPro Master Plumbing',
-    name: 'Elena Rostova',
-    user: { name: 'Elena Rostova', phone: '+1 (555) 456-7890' },
-    categories: [{ name: 'Plumbing Services', slug: 'plumbing-services' }],
-    rating: 4.92,
-    reviewCount: 98,
-    experienceYears: 9,
-    city: 'Lucknow',
-    hourlyRate: 350,
-    isAvailable: true
-  },
-  {
-    _id: '6accc343d9a98de465ce8480',
-    businessName: 'Precision Carpentry & Millwork',
-    name: 'Carlos Mendez',
-    user: { name: 'Carlos Mendez', phone: '+1 (555) 567-8901' },
-    categories: [{ name: 'Carpentry & Furniture', slug: 'carpentry-furniture' }],
-    rating: 4.88,
-    reviewCount: 76,
-    experienceYears: 10,
-    city: 'Lucknow',
-    hourlyRate: 399,
-    isAvailable: true
-  }
-];
-
 export default function HomeScreen({ navigation }: any) {
   const insets = useSafeAreaInsets();
   const topInset = Math.max(
@@ -175,7 +122,7 @@ export default function HomeScreen({ navigation }: any) {
   const { user } = useAuth();
   const [categories, setCategories] = useState<ServiceCategory[]>([]);
   const [activeBookings, setActiveBookings] = useState<Booking[]>([]);
-  const [nearbyVendors, setNearbyVendors] = useState<VerifiedVendor[]>(VERIFIED_FALLBACK_PROS);
+  const [nearbyVendors, setNearbyVendors] = useState<VerifiedVendor[]>([]);
   const [publishedServices, setPublishedServices] = useState<any[]>([]);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
@@ -185,6 +132,21 @@ export default function HomeScreen({ navigation }: any) {
   const [refreshing, setRefreshing] = useState(false);
   const [activePromoIndex, setActivePromoIndex] = useState(0);
   const [favoritedVendors, setFavoritedVendors] = useState<Record<string, boolean>>({});
+
+  const cleaningServices = useMemo(() =>
+    publishedServices.filter((s: any) =>
+      s.category?.slug === 'home-cleaning' ||
+      s.domain?.toLowerCase().includes('clean') ||
+      s.title?.toLowerCase().includes('clean')
+    ), [publishedServices]);
+
+  const applianceServices = useMemo(() =>
+    publishedServices.filter((s: any) =>
+      s.category?.slug === 'appliance-repair' ||
+      s.domain?.toLowerCase().includes('appliance') ||
+      s.title?.toLowerCase().includes('appliance') ||
+      s.title?.toLowerCase().includes('repair')
+    ), [publishedServices]);
 
   const promoScrollRef = useRef<any>(null);
   const promoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -206,11 +168,12 @@ export default function HomeScreen({ navigation }: any) {
 
   // Periodic and focus-based unread notification count sync
   useEffect(() => {
-    if (!user) {
+    if (!user?._id) {
       setUnreadNotifications(0);
       return;
     }
     const syncUnread = async () => {
+      if (!user?._id) return;
       try {
         const res = await api.notifications.getUnreadCount();
         const count = typeof res?.unreadCount === 'number' ? res.unreadCount : (typeof res?.count === 'number' ? res.count : 0);
@@ -222,7 +185,7 @@ export default function HomeScreen({ navigation }: any) {
     syncUnread();
     const interval = setInterval(syncUnread, 15000);
     return () => clearInterval(interval);
-  }, [user, navigation?.currentRoute]);
+  }, [user?._id, navigation?.currentRoute]);
 
   // Intercept back button to dismiss LocationModal first if open
   useEffect(() => {
@@ -326,7 +289,7 @@ export default function HomeScreen({ navigation }: any) {
 
       const [catRes, bookRes, vendorRes, notifRes, servicesRes] = await Promise.all([
         api.categories.getAll().catch(() => ({ categories: [] })),
-        user ? api.bookings.getMyBookings().catch(() => ({ bookings: [] })) : Promise.resolve({ bookings: [] }),
+        user?._id ? api.bookings.getMyBookings().catch(() => ({ bookings: [] })) : Promise.resolve({ bookings: [] }),
         api.vendors.getVendors({
           city,
           locality: locParams.locality,
@@ -336,7 +299,7 @@ export default function HomeScreen({ navigation }: any) {
           mode: locParams.mode,
           limit: 12
         }).catch(() => ({ vendors: [] })),
-        user ? api.notifications.getUnreadCount().catch(() => ({ count: 0, unreadCount: 0 })) : Promise.resolve({ count: 0, unreadCount: 0 }),
+        user?._id ? api.notifications.getUnreadCount().catch(() => ({ count: 0, unreadCount: 0 })) : Promise.resolve({ count: 0, unreadCount: 0 }),
         api.services.getServices({ limit: 10 }).catch(() => ({ services: [] }))
       ]);
 
@@ -357,10 +320,8 @@ export default function HomeScreen({ navigation }: any) {
           // ignore
         }
       }
-      if (loadedVendors.length > 0) {
-        setNearbyVendors(loadedVendors);
-      }
-      if (servicesRes?.services && servicesRes.services.length > 0) {
+      setNearbyVendors(loadedVendors);
+      if (servicesRes?.services) {
         setPublishedServices(servicesRes.services);
       }
       const unread = typeof notifRes?.unreadCount === 'number'
@@ -435,12 +396,13 @@ export default function HomeScreen({ navigation }: any) {
             1. COMPACT TOP HEADER (Matching Screenshot 5)
         ════════════════════════════════════════════════════════════════════ */}
         <View style={[styles.compactHeader, { paddingTop: topInset + 6 }]}>
-          {/* Logo & Brand Name */}
+          {/* Official WorkLogy Logo & Brand Name */}
           <View style={styles.brandContainer}>
-            <View style={styles.logoEmblem}>
-              <Ionicons name="home" size={13} color="#2563EB" />
-              <View style={styles.logoPinDot} />
-            </View>
+            <Image
+              source={WORKLOGY_HEADER_LOGO}
+              style={styles.headerLogo}
+              resizeMode="contain"
+            />
             <Text style={styles.brandTitleText}>WorkLogy</Text>
           </View>
 
@@ -596,7 +558,7 @@ export default function HomeScreen({ navigation }: any) {
                 activeOpacity={0.8}
                 onPress={() => {
                   if (cat.isMore) {
-                    navigation.navigate('SearchTab');
+                    navigation.navigate('Categories');
                   } else {
                     navigation.navigate('CategoryDetail', { slug: cat.slug, name: cat.name });
                   }
@@ -734,76 +696,20 @@ export default function HomeScreen({ navigation }: any) {
                 </TouchableOpacity>
               ))
             ) : (
-              <>
-                {/* Fallback canonical service items */}
+              <View style={styles.emptyVendorCard}>
+                <Ionicons name="briefcase-outline" size={32} color="#94A3B8" />
+                <Text style={styles.emptyVendorTitle}>No Listed Services Yet</Text>
+                <Text style={styles.emptyVendorSub}>
+                  Professional services and fixed-price packages will appear here once listed by verified partners.
+                </Text>
                 <TouchableOpacity
-                  style={styles.serviceCard}
-                  activeOpacity={0.85}
-                  onPress={() => navigation.navigate('CreateJob', { categorySlug: 'carpentry-furniture', title: 'Lucknow Carpenter Expert' })}
+                  style={styles.emptyVendorBtn}
+                  onPress={() => navigation.navigate('Categories')}
+                  activeOpacity={0.8}
                 >
-                  <Image source={require('../assets/services/Skilled Handyman Repairing a Wooden Cabinet.png')} style={styles.serviceCardThumb} />
-                  <View style={styles.serviceCardBody}>
-                    <Text style={styles.serviceCategoryTag}>CARPENTER</Text>
-                    <Text style={styles.serviceCardTitle} numberOfLines={1}>{currentCity} Carpenter Ex...</Text>
-                    <View style={styles.ratingRow}>
-                      <Text style={styles.ratingStar}>★</Text>
-                      <Text style={styles.ratingText}>4.8 <Text style={styles.reviewCount}>(42)</Text></Text>
-                    </View>
-                    <Text style={styles.servicePrice}>₹249 onwards</Text>
-                  </View>
+                  <Text style={styles.emptyVendorBtnText}>Browse Categories</Text>
                 </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.serviceCard}
-                  activeOpacity={0.85}
-                  onPress={() => navigation.navigate('CreateJob', { categorySlug: 'home-cleaning', title: 'Lucknow Cleaner Expert' })}
-                >
-                  <Image source={require('../assets/services/Professional Cleaning in a Bright Living Room.png')} style={styles.serviceCardThumb} />
-                  <View style={styles.serviceCardBody}>
-                    <Text style={styles.serviceCategoryTag}>CLEANER</Text>
-                    <Text style={styles.serviceCardTitle} numberOfLines={1}>{currentCity} Cleaner Exper...</Text>
-                    <View style={styles.ratingRow}>
-                      <Text style={styles.ratingStar}>★</Text>
-                      <Text style={styles.ratingText}>4.8 <Text style={styles.reviewCount}>(42)</Text></Text>
-                    </View>
-                    <Text style={styles.servicePrice}>₹249 onwards</Text>
-                  </View>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.serviceCard}
-                  activeOpacity={0.85}
-                  onPress={() => navigation.navigate('CreateJob', { categorySlug: 'ac-hvac-services', title: 'AC Jet Servicing & Foam Wash' })}
-                >
-                  <Image source={require('../assets/services/Air Conditioner Maintenance in a Modern Home.png')} style={styles.serviceCardThumb} />
-                  <View style={styles.serviceCardBody}>
-                    <Text style={styles.serviceCategoryTag}>AC & APPLIANCE</Text>
-                    <Text style={styles.serviceCardTitle} numberOfLines={1}>AC Jet Deep Cleaning</Text>
-                    <View style={styles.ratingRow}>
-                      <Text style={styles.ratingStar}>★</Text>
-                      <Text style={styles.ratingText}>4.9 <Text style={styles.reviewCount}>(118)</Text></Text>
-                    </View>
-                    <Text style={styles.servicePrice}>₹499 onwards</Text>
-                  </View>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.serviceCard}
-                  activeOpacity={0.85}
-                  onPress={() => navigation.navigate('CreateJob', { categorySlug: 'electrical-services', title: 'Electrical Panel & Fan Repair' })}
-                >
-                  <Image source={require('../assets/services/Electrician Repairing Home Electrical Panel.png')} style={styles.serviceCardThumb} />
-                  <View style={styles.serviceCardBody}>
-                    <Text style={styles.serviceCategoryTag}>ELECTRICIAN</Text>
-                    <Text style={styles.serviceCardTitle} numberOfLines={1}>Switchboard Repair</Text>
-                    <View style={styles.ratingRow}>
-                      <Text style={styles.ratingStar}>★</Text>
-                      <Text style={styles.ratingText}>4.8 <Text style={styles.reviewCount}>(96)</Text></Text>
-                    </View>
-                    <Text style={styles.servicePrice}>₹199 onwards</Text>
-                  </View>
-                </TouchableOpacity>
-              </>
+              </View>
             )}
           </ScrollView>
         </View>
@@ -838,149 +744,88 @@ export default function HomeScreen({ navigation }: any) {
         </View>
 
         {/* ════════════════════════════════════════════════════════════════════
-            8. NEW & NOTEWORTHY (Horizontal Carousel - Matching Screenshot 4)
+            8. NEW & NOTEWORTHY (Dynamic from publishedServices)
         ════════════════════════════════════════════════════════════════════ */}
-        <View style={styles.sectionContainer}>
-          <View style={styles.sectionHeader}>
-            <View>
-              <Text style={styles.sectionTitle}>New & noteworthy</Text>
-              <Text style={styles.sectionSubtitle}>Newly launched services & trending fixes</Text>
+        {publishedServices.length >= 2 && (
+          <View style={styles.sectionContainer}>
+            <View style={styles.sectionHeader}>
+              <View>
+                <Text style={styles.sectionTitle}>New & noteworthy</Text>
+                <Text style={styles.sectionSubtitle}>Newly launched services & trending fixes</Text>
+              </View>
+              <TouchableOpacity onPress={() => navigation.navigate('SearchTab')} activeOpacity={0.7}>
+                <View style={styles.seeAllPill}>
+                  <Text style={styles.seeAllText}>See all</Text>
+                  <Ionicons name="chevron-forward" size={12} color="#0F172A" />
+                </View>
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity onPress={() => navigation.navigate('SearchTab')} activeOpacity={0.7}>
-              <View style={styles.seeAllPill}>
-                <Text style={styles.seeAllText}>See all</Text>
-                <Ionicons name="chevron-forward" size={12} color="#0F172A" />
-              </View>
-            </TouchableOpacity>
+
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalCardList}>
+              {publishedServices.slice(0, 4).map((srv) => (
+                <TouchableOpacity
+                  key={srv._id}
+                  style={styles.noteworthyCard}
+                  activeOpacity={0.85}
+                  onPress={() => navigation.navigate('CreateJob', { categorySlug: srv.category?.slug, title: srv.title, serviceId: srv._id })}
+                >
+                  <View style={styles.noteworthyImageContainer}>
+                    <Image source={getServiceImage(srv.category?.slug || 'home-cleaning')} style={styles.noteworthyThumb} />
+                    <View style={styles.tagOverlay}>
+                      <Text style={styles.tagOverlayText}>NEW</Text>
+                    </View>
+                  </View>
+                  <View style={styles.noteworthyBody}>
+                    <Text style={styles.noteworthyTitle} numberOfLines={1}>{srv.title}</Text>
+                    <Text style={styles.noteworthyDesc} numberOfLines={1}>{srv.shortSummary || srv.description || 'Verified Service'}</Text>
+                    <Text style={styles.noteworthyPrice}>₹{srv.pricing?.amount || srv.price || 499} onwards</Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
           </View>
-
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalCardList}>
-            {/* Item 1: Full House Deep Cleaning */}
-            <TouchableOpacity
-              style={styles.noteworthyCard}
-              activeOpacity={0.85}
-              onPress={() => navigation.navigate('CreateJob', { categorySlug: 'home-cleaning', title: 'Full House Deep Cleaning' })}
-            >
-              <View style={styles.noteworthyImageContainer}>
-                <Image source={require('../assets/services/Professional Cleaning in a Bright Living Room.png')} style={styles.noteworthyThumb} />
-                <View style={styles.tagOverlay}>
-                  <Text style={styles.tagOverlayText}>NEW</Text>
-                </View>
-              </View>
-              <View style={styles.noteworthyBody}>
-                <Text style={styles.noteworthyTitle} numberOfLines={1}>Full House Deep Cleani...</Text>
-                <Text style={styles.noteworthyDesc} numberOfLines={1}>Includes 3 rooms + hall</Text>
-                <Text style={styles.noteworthyPrice}>₹1,499 onwards</Text>
-              </View>
-            </TouchableOpacity>
-
-            {/* Item 2: Kitchen Chimney Service */}
-            <TouchableOpacity
-              style={styles.noteworthyCard}
-              activeOpacity={0.85}
-              onPress={() => navigation.navigate('CreateJob', { categorySlug: 'appliance-repair', title: 'Kitchen Chimney Servicing' })}
-            >
-              <View style={styles.noteworthyImageContainer}>
-                <Image source={require('../assets/services/Modern Kitchen Consultation.png')} style={styles.noteworthyThumb} />
-                <View style={styles.tagOverlay}>
-                  <Text style={styles.tagOverlayText}>POPULAR</Text>
-                </View>
-              </View>
-              <View style={styles.noteworthyBody}>
-                <Text style={styles.noteworthyTitle} numberOfLines={1}>Kitchen Chimney Servi...</Text>
-                <Text style={styles.noteworthyDesc} numberOfLines={1}>Foam wash + motor check</Text>
-                <Text style={styles.noteworthyPrice}>₹499 onwards</Text>
-              </View>
-            </TouchableOpacity>
-
-            {/* Item 3: Smart Door Lock Install */}
-            <TouchableOpacity
-              style={styles.noteworthyCard}
-              activeOpacity={0.85}
-              onPress={() => navigation.navigate('CreateJob', { categorySlug: 'home-installation', title: 'Smart Door Lock Installation' })}
-            >
-              <View style={styles.noteworthyImageContainer}>
-                <Image source={require('../assets/services/Indian Locksmith Repairing Door Lock.png')} style={styles.noteworthyThumb} />
-                <View style={styles.tagOverlay}>
-                  <Text style={styles.tagOverlayText}>TRENDING</Text>
-                </View>
-              </View>
-              <View style={styles.noteworthyBody}>
-                <Text style={styles.noteworthyTitle} numberOfLines={1}>Smart Digital Door Lock</Text>
-                <Text style={styles.noteworthyDesc} numberOfLines={1}>Installation & Setup</Text>
-                <Text style={styles.noteworthyPrice}>₹799 onwards</Text>
-              </View>
-            </TouchableOpacity>
-          </ScrollView>
-        </View>
+        )}
 
         {/* ════════════════════════════════════════════════════════════════════
-            9. MOST BOOKED SERVICES (Horizontal Carousel - Matching Screenshot 3)
+            9. MOST BOOKED SERVICES (Dynamic from publishedServices)
         ════════════════════════════════════════════════════════════════════ */}
-        <View style={styles.sectionContainer}>
-          <View style={styles.sectionHeader}>
-            <View>
-              <Text style={styles.sectionTitle}>Most booked services</Text>
-              <Text style={styles.sectionSubtitle}>Highest rated services booked by homeowners</Text>
+        {publishedServices.length >= 3 && (
+          <View style={styles.sectionContainer}>
+            <View style={styles.sectionHeader}>
+              <View>
+                <Text style={styles.sectionTitle}>Most booked services</Text>
+                <Text style={styles.sectionSubtitle}>Highest rated services booked by homeowners</Text>
+              </View>
+              <TouchableOpacity onPress={() => navigation.navigate('SearchTab')} activeOpacity={0.7}>
+                <View style={styles.seeAllPill}>
+                  <Text style={styles.seeAllText}>See all</Text>
+                  <Ionicons name="chevron-forward" size={12} color="#0F172A" />
+                </View>
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity onPress={() => navigation.navigate('SearchTab')} activeOpacity={0.7}>
-              <View style={styles.seeAllPill}>
-                <Text style={styles.seeAllText}>See all</Text>
-                <Ionicons name="chevron-forward" size={12} color="#0F172A" />
-              </View>
-            </TouchableOpacity>
+
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalCardList}>
+              {publishedServices.map((srv) => (
+                <TouchableOpacity
+                  key={srv._id}
+                  style={styles.serviceCard}
+                  activeOpacity={0.85}
+                  onPress={() => navigation.navigate('CreateJob', { categorySlug: srv.category?.slug, title: srv.title, serviceId: srv._id })}
+                >
+                  <Image source={getServiceImage(srv.category?.slug || 'ac-hvac-services')} style={styles.serviceCardThumb} />
+                  <View style={styles.serviceCardBody}>
+                    <Text style={styles.serviceCardTitle} numberOfLines={1}>{srv.title}</Text>
+                    <View style={styles.ratingRow}>
+                      <Text style={styles.ratingStar}>★</Text>
+                      <Text style={styles.ratingText}>{srv.vendor?.rating ? srv.vendor.rating.toFixed(1) : '5.0'} <Text style={styles.reviewCount}>({srv.vendor?.reviewCount || 0})</Text></Text>
+                    </View>
+                    <Text style={styles.servicePrice}>₹{srv.pricing?.amount || srv.price || 499} onwards</Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
           </View>
-
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalCardList}>
-            <TouchableOpacity
-              style={styles.serviceCard}
-              activeOpacity={0.85}
-              onPress={() => navigation.navigate('CreateJob', { categorySlug: 'ac-hvac-services', title: 'AC Servicing & Jet Wash' })}
-            >
-              <Image source={require('../assets/services/Air Conditioner Maintenance in a Modern Home.png')} style={styles.serviceCardThumb} />
-              <View style={styles.serviceCardBody}>
-                <Text style={styles.serviceCardTitle} numberOfLines={1}>AC Servicing & Jet Wash</Text>
-                <View style={styles.ratingRow}>
-                  <Text style={styles.ratingStar}>★</Text>
-                  <Text style={styles.ratingText}>4.8 <Text style={styles.reviewCount}>(1.2k)</Text></Text>
-                </View>
-                <Text style={styles.servicePrice}>₹299 onwards</Text>
-              </View>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.serviceCard}
-              activeOpacity={0.85}
-              onPress={() => navigation.navigate('CreateJob', { categorySlug: 'plumbing-services', title: 'Kitchen Plumbing Fixes' })}
-            >
-              <Image source={require('../assets/services/Plumber Repairing Under Kitchen Sink.png')} style={styles.serviceCardThumb} />
-              <View style={styles.serviceCardBody}>
-                <Text style={styles.serviceCardTitle} numberOfLines={1}>Kitchen Plumbing Fixes</Text>
-                <View style={styles.ratingRow}>
-                  <Text style={styles.ratingStar}>★</Text>
-                  <Text style={styles.ratingText}>4.7 <Text style={styles.reviewCount}>(980)</Text></Text>
-                </View>
-                <Text style={styles.servicePrice}>₹249 onwards</Text>
-              </View>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.serviceCard}
-              activeOpacity={0.85}
-              onPress={() => navigation.navigate('CreateJob', { categorySlug: 'electrical-services', title: 'Electrician Panel Diagnostics' })}
-            >
-              <Image source={require('../assets/services/Electrician Repairing Home Electrical Panel.png')} style={styles.serviceCardThumb} />
-              <View style={styles.serviceCardBody}>
-                <Text style={styles.serviceCardTitle} numberOfLines={1}>Electrician Diagnostics</Text>
-                <View style={styles.ratingRow}>
-                  <Text style={styles.ratingStar}>★</Text>
-                  <Text style={styles.ratingText}>4.9 <Text style={styles.reviewCount}>(1.4k)</Text></Text>
-                </View>
-                <Text style={styles.servicePrice}>₹199 onwards</Text>
-              </View>
-            </TouchableOpacity>
-          </ScrollView>
-        </View>
+        )}
 
         {/* ════════════════════════════════════════════════════════════════════
             10. 24/7 EMERGENCY ASSISTANCE (Red Card - Matching Screenshot 3)
@@ -1024,231 +869,194 @@ export default function HomeScreen({ navigation }: any) {
           </View>
 
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalCardList}>
-            {(nearbyVendors.length > 0 ? nearbyVendors : VERIFIED_FALLBACK_PROS).map((pro) => (
-              <TouchableOpacity
-                key={pro._id}
-                style={styles.proCard}
-                activeOpacity={0.9}
-                onPress={() => navigation.navigate('ProfessionalProfile', { vendorId: pro._id, vendor: pro })}
-              >
-                <View style={styles.proCardHeader}>
-                  <View style={styles.proAvatarContainer}>
-                    <View style={styles.proAvatarCircle}>
-                      <Text style={styles.proAvatarText}>
-                        {(pro.businessName || pro.name || 'P').charAt(0).toUpperCase()}
-                      </Text>
-                    </View>
-                    {(pro.verifiedBadge?.status === 'verified' || pro.verifiedBadge?.status === 'approved' || (pro as any).isVerified) && (
-                      <View style={styles.verifiedCheckBadge}>
-                        <Ionicons name="checkmark" size={10} color="#FFFFFF" />
-                      </View>
-                    )}
-                  </View>
-
-                  <View style={styles.proHeaderRight}>
-                    {pro.isNearest ? (
-                      <View style={styles.nearestBadge}>
-                        <Ionicons name="sparkles" size={10} color="#065F46" />
-                        <Text style={styles.nearestBadgeText}>Nearest</Text>
-                      </View>
-                    ) : (
-                      <View style={styles.availablePill}>
-                        <View style={styles.availableDot} />
-                        <Text style={styles.availableText}>Available Now</Text>
-                      </View>
-                    )}
-                    <TouchableOpacity
-                      onPress={(e) => {
-                        e.stopPropagation?.();
-                        toggleFavorite(pro._id);
-                      }}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                      style={{ marginLeft: 8 }}
-                    >
-                      <Ionicons
-                        name={favoritedVendors[pro._id] ? 'heart' : 'heart-outline'}
-                        size={19}
-                        color={favoritedVendors[pro._id] ? '#EF4444' : '#94A3B8'}
-                      />
-                    </TouchableOpacity>
-                  </View>
-                </View>
-
-                <Text style={styles.proBusinessName} numberOfLines={1}>{pro.businessName || pro.name}</Text>
-                
-                <View style={styles.proCategoryPill}>
-                  <Text style={styles.proCategoryText}>{pro.categories?.[0]?.name || 'Professional'}</Text>
-                </View>
-
-                <Text style={styles.proMetaStats}>
-                  ★ {pro.rating ? pro.rating.toFixed(1) : '5.0'} ({pro.reviewCount ?? 0}) • {pro.experienceYears || 3} yrs exp
+            {nearbyVendors.length === 0 ? (
+              <View style={styles.emptyVendorCard}>
+                <Ionicons name="people-outline" size={32} color="#94A3B8" />
+                <Text style={styles.emptyVendorTitle}>No Verified Pros Yet</Text>
+                <Text style={styles.emptyVendorSub}>
+                  Newly registered service pros in your locality will appear here once verified.
                 </Text>
-
-                <View style={styles.proDistanceRow}>
-                  <Ionicons name="navigate-circle" size={13} color="#059669" />
-                  <Text style={styles.proDistanceText} numberOfLines={1}>
-                    {pro.distanceText || (pro.locality ? `${pro.locality} • ${pro.city || currentCity}` : pro.city || currentCity)}
-                  </Text>
-                </View>
-
-                {pro.zoneId ? (
-                  <View style={styles.proZoneBadge}>
-                    <Text style={styles.proZoneBadgeText}>{pro.zoneId} • {pro.locality || pro.zoneName || 'Lucknow'}</Text>
-                  </View>
-                ) : null}
-
-                <View style={styles.proCardDivider} />
-
-                <Text style={styles.proStartingLabel}>Starting from</Text>
-                <Text style={styles.proStartingPrice}>₹{pro.hourlyRate || 299} onwards</Text>
-
                 <TouchableOpacity
-                  style={styles.proBookButton}
-                  onPress={() => navigation.navigate('ProfessionalProfile', { vendorId: pro._id, vendor: pro })}
+                  style={styles.emptyVendorBtn}
+                  onPress={() => navigation.navigate('Categories')}
                   activeOpacity={0.8}
                 >
-                  <Text style={styles.proBookButtonText}>View Services & Book</Text>
+                  <Text style={styles.emptyVendorBtnText}>Browse Categories</Text>
                 </TouchableOpacity>
+              </View>
+            ) : (
+              nearbyVendors.map((pro) => (
+                <TouchableOpacity
+                  key={pro._id}
+                  style={styles.proCard}
+                  activeOpacity={0.9}
+                  onPress={() => navigation.navigate('ProfessionalProfile', { vendorId: pro._id, vendor: pro })}
+                >
+                  <View style={styles.proCardHeader}>
+                    <View style={styles.proAvatarContainer}>
+                      <View style={styles.proAvatarCircle}>
+                        <Text style={styles.proAvatarText}>
+                          {(pro.businessName || pro.name || 'P').charAt(0).toUpperCase()}
+                        </Text>
+                      </View>
+                      {(pro.verifiedBadge?.status === 'verified' || pro.verifiedBadge?.status === 'approved' || (pro as any).isVerified) && (
+                        <View style={styles.verifiedCheckBadge}>
+                          <Ionicons name="checkmark" size={10} color="#FFFFFF" />
+                        </View>
+                      )}
+                    </View>
+
+                    <View style={styles.proHeaderRight}>
+                      {pro.isNearest ? (
+                        <View style={styles.nearestBadge}>
+                          <Ionicons name="sparkles" size={10} color="#065F46" />
+                          <Text style={styles.nearestBadgeText}>Nearest</Text>
+                        </View>
+                      ) : (
+                        <View style={styles.availablePill}>
+                          <View style={styles.availableDot} />
+                          <Text style={styles.availableText}>Available Now</Text>
+                        </View>
+                      )}
+                      <TouchableOpacity
+                        onPress={(e) => {
+                          e.stopPropagation?.();
+                          toggleFavorite(pro._id);
+                        }}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        style={{ marginLeft: 8 }}
+                      >
+                        <Ionicons
+                          name={favoritedVendors[pro._id] ? 'heart' : 'heart-outline'}
+                          size={19}
+                          color={favoritedVendors[pro._id] ? '#EF4444' : '#94A3B8'}
+                        />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+
+                  <Text style={styles.proBusinessName} numberOfLines={1}>{pro.businessName || pro.name}</Text>
+                  
+                  <View style={styles.proCategoryPill}>
+                    <Text style={styles.proCategoryText}>{pro.categories?.[0]?.name || 'Professional'}</Text>
+                  </View>
+
+                  <Text style={styles.proMetaStats}>
+                    ★ {pro.rating ? pro.rating.toFixed(1) : '5.0'} ({pro.reviewCount ?? 0}) • {pro.experienceYears || 3} yrs exp
+                  </Text>
+
+                  <View style={styles.proDistanceRow}>
+                    <Ionicons name="navigate-circle" size={13} color="#059669" />
+                    <Text style={styles.proDistanceText} numberOfLines={1}>
+                      {pro.distanceText || (pro.locality ? `${pro.locality} • ${pro.city || currentCity}` : pro.city || currentCity)}
+                    </Text>
+                  </View>
+
+                  {pro.zoneId ? (
+                    <View style={styles.proZoneBadge}>
+                      <Text style={styles.proZoneBadgeText}>{pro.zoneId} • {pro.locality || pro.zoneName || 'Lucknow'}</Text>
+                    </View>
+                  ) : null}
+
+                  <View style={styles.proCardDivider} />
+
+                  <Text style={styles.proStartingLabel}>Starting from</Text>
+                  <Text style={styles.proStartingPrice}>₹{pro.hourlyRate || 299} onwards</Text>
+
+                  <TouchableOpacity
+                    style={styles.proBookButton}
+                    onPress={() => navigation.navigate('ProfessionalProfile', { vendorId: pro._id, vendor: pro })}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.proBookButtonText}>View Services & Book</Text>
+                  </TouchableOpacity>
+                </TouchableOpacity>
+              ))
+            )}
+          </ScrollView>
+        </View>
+
+        {/* ════════════════════════════════════════════════════════════════════
+            12. CLEANING ESSENTIALS (Dynamic from cleaningServices)
+        ════════════════════════════════════════════════════════════════════ */}
+        {cleaningServices.length > 0 && (
+          <View style={styles.sectionContainer}>
+            <View style={styles.sectionHeader}>
+              <View>
+                <Text style={styles.sectionTitle}>Cleaning Essentials</Text>
+                <Text style={styles.sectionSubtitle}>Top rated home hygiene & deep wash</Text>
+              </View>
+              <TouchableOpacity onPress={() => navigation.navigate('CategoryDetail', { slug: 'home-cleaning', name: 'Cleaning' })} activeOpacity={0.7}>
+                <View style={styles.seeAllPill}>
+                  <Text style={styles.seeAllText}>See all</Text>
+                  <Ionicons name="chevron-forward" size={12} color="#0F172A" />
+                </View>
               </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
+            </View>
+
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalCardList}>
+              {cleaningServices.map((srv: any) => (
+                <TouchableOpacity
+                  key={srv._id}
+                  style={styles.serviceCard}
+                  activeOpacity={0.85}
+                  onPress={() => navigation.navigate('CreateJob', { categorySlug: srv.category?.slug || 'home-cleaning', title: srv.title, serviceId: srv._id })}
+                >
+                  <Image source={getServiceImage('home-cleaning')} style={styles.serviceCardThumb} />
+                  <View style={styles.serviceCardBody}>
+                    <Text style={styles.serviceCardTitle} numberOfLines={1}>{srv.title}</Text>
+                    <View style={styles.ratingRow}>
+                      <Text style={styles.ratingStar}>★</Text>
+                      <Text style={styles.ratingText}>{srv.vendor?.rating ? srv.vendor.rating.toFixed(1) : '5.0'} <Text style={styles.reviewCount}>({srv.vendor?.reviewCount || 0})</Text></Text>
+                    </View>
+                    <Text style={styles.servicePrice}>₹{srv.pricing?.amount || srv.price || 499} onwards</Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        )}
 
         {/* ════════════════════════════════════════════════════════════════════
-            12. CLEANING ESSENTIALS (Horizontal Carousel - Matching Screenshot 2)
+            13. APPLIANCE REPAIR & SERVICE (Dynamic from applianceServices)
         ════════════════════════════════════════════════════════════════════ */}
-        <View style={styles.sectionContainer}>
-          <View style={styles.sectionHeader}>
-            <View>
-              <Text style={styles.sectionTitle}>Cleaning Essentials</Text>
-              <Text style={styles.sectionSubtitle}>Top rated home hygiene & deep wash</Text>
+        {applianceServices.length > 0 && (
+          <View style={styles.sectionContainer}>
+            <View style={styles.sectionHeader}>
+              <View>
+                <Text style={styles.sectionTitle}>Appliance Repair & Service</Text>
+                <Text style={styles.sectionSubtitle}>Doorstep troubleshooting by specialists</Text>
+              </View>
+              <TouchableOpacity onPress={() => navigation.navigate('CategoryDetail', { slug: 'appliance-repair', name: 'Appliances' })} activeOpacity={0.7}>
+                <View style={styles.seeAllPill}>
+                  <Text style={styles.seeAllText}>See all</Text>
+                  <Ionicons name="chevron-forward" size={12} color="#0F172A" />
+                </View>
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity onPress={() => navigation.navigate('CategoryDetail', { slug: 'home-cleaning', name: 'Cleaning' })} activeOpacity={0.7}>
-              <View style={styles.seeAllPill}>
-                <Text style={styles.seeAllText}>See all</Text>
-                <Ionicons name="chevron-forward" size={12} color="#0F172A" />
-              </View>
-            </TouchableOpacity>
+
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalCardList}>
+              {applianceServices.map((srv: any) => (
+                <TouchableOpacity
+                  key={srv._id}
+                  style={styles.serviceCard}
+                  activeOpacity={0.85}
+                  onPress={() => navigation.navigate('CreateJob', { categorySlug: srv.category?.slug || 'appliance-repair', title: srv.title, serviceId: srv._id })}
+                >
+                  <Image source={getServiceImage('appliance-repair')} style={styles.serviceCardThumb} />
+                  <View style={styles.serviceCardBody}>
+                    <Text style={styles.serviceCardTitle} numberOfLines={1}>{srv.title}</Text>
+                    <View style={styles.ratingRow}>
+                      <Text style={styles.ratingStar}>★</Text>
+                      <Text style={styles.ratingText}>{srv.vendor?.rating ? srv.vendor.rating.toFixed(1) : '5.0'} <Text style={styles.reviewCount}>({srv.vendor?.reviewCount || 0})</Text></Text>
+                    </View>
+                    <Text style={styles.servicePrice}>₹{srv.pricing?.amount || srv.price || 499} onwards</Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
           </View>
-
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalCardList}>
-            <TouchableOpacity
-              style={styles.serviceCard}
-              activeOpacity={0.85}
-              onPress={() => navigation.navigate('CreateJob', { categorySlug: 'home-cleaning', title: 'Furnished Apartment Cleaning' })}
-            >
-              <Image source={require('../assets/services/Professional Cleaning in a Bright Living Room.png')} style={styles.serviceCardThumb} />
-              <View style={styles.serviceCardBody}>
-                <Text style={styles.serviceCardTitle} numberOfLines={1}>Furnished Apartment Cleaning</Text>
-                <View style={styles.ratingRow}>
-                  <Text style={styles.ratingStar}>★</Text>
-                  <Text style={styles.ratingText}>4.8 <Text style={styles.reviewCount}>(720)</Text></Text>
-                </View>
-                <Text style={styles.servicePrice}>₹2,299 onwards</Text>
-              </View>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.serviceCard}
-              activeOpacity={0.85}
-              onPress={() => navigation.navigate('CreateJob', { categorySlug: 'home-cleaning', title: 'Unfurnished Apartment Deep Clean' })}
-            >
-              <Image source={require('../assets/services/Tiling a Bright Modern Interior.png')} style={styles.serviceCardThumb} />
-              <View style={styles.serviceCardBody}>
-                <Text style={styles.serviceCardTitle} numberOfLines={1}>Unfurnished Apartment Deep Clean</Text>
-                <View style={styles.ratingRow}>
-                  <Text style={styles.ratingStar}>★</Text>
-                  <Text style={styles.ratingText}>4.7 <Text style={styles.reviewCount}>(510)</Text></Text>
-                </View>
-                <Text style={styles.servicePrice}>₹1,799 onwards</Text>
-              </View>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.serviceCard}
-              activeOpacity={0.85}
-              onPress={() => navigation.navigate('CreateJob', { categorySlug: 'home-cleaning', title: 'Sofa & Carpet Deep Shampoo' })}
-            >
-              <Image source={require('../assets/services/Installing Curtains in a Bright Modern Room.png')} style={styles.serviceCardThumb} />
-              <View style={styles.serviceCardBody}>
-                <Text style={styles.serviceCardTitle} numberOfLines={1}>Sofa & Carpet Shampoo</Text>
-                <View style={styles.ratingRow}>
-                  <Text style={styles.ratingStar}>★</Text>
-                  <Text style={styles.ratingText}>4.9 <Text style={styles.reviewCount}>(930)</Text></Text>
-                </View>
-                <Text style={styles.servicePrice}>₹599 onwards</Text>
-              </View>
-            </TouchableOpacity>
-          </ScrollView>
-        </View>
-
-        {/* ════════════════════════════════════════════════════════════════════
-            13. APPLIANCE REPAIR & SERVICE (Horizontal Carousel - Matching Screenshot 2)
-        ════════════════════════════════════════════════════════════════════ */}
-        <View style={styles.sectionContainer}>
-          <View style={styles.sectionHeader}>
-            <View>
-              <Text style={styles.sectionTitle}>Appliance Repair & Service</Text>
-              <Text style={styles.sectionSubtitle}>Doorstep troubleshooting by specialists</Text>
-            </View>
-            <TouchableOpacity onPress={() => navigation.navigate('CategoryDetail', { slug: 'appliance-repair', name: 'Appliances' })} activeOpacity={0.7}>
-              <View style={styles.seeAllPill}>
-                <Text style={styles.seeAllText}>See all</Text>
-                <Ionicons name="chevron-forward" size={12} color="#0F172A" />
-              </View>
-            </TouchableOpacity>
-          </View>
-
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalCardList}>
-            <TouchableOpacity
-              style={styles.serviceCard}
-              activeOpacity={0.85}
-              onPress={() => navigation.navigate('CreateJob', { categorySlug: 'home-installation', title: 'TV Check-up & Installation' })}
-            >
-              <Image source={require('../assets/services/TV Installation with Spirit Level.png')} style={styles.serviceCardThumb} />
-              <View style={styles.serviceCardBody}>
-                <Text style={styles.serviceCardTitle} numberOfLines={1}>TV Check-up & Installation</Text>
-                <View style={styles.ratingRow}>
-                  <Text style={styles.ratingStar}>★</Text>
-                  <Text style={styles.ratingText}>4.7 <Text style={styles.reviewCount}>(1.1k)</Text></Text>
-                </View>
-                <Text style={styles.servicePrice}>₹249 onwards</Text>
-              </View>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.serviceCard}
-              activeOpacity={0.85}
-              onPress={() => navigation.navigate('CreateJob', { categorySlug: 'appliance-repair', title: 'Deep Chimney Service' })}
-            >
-              <Image source={require('../assets/services/Modern Kitchen Consultation.png')} style={styles.serviceCardThumb} />
-              <View style={styles.serviceCardBody}>
-                <Text style={styles.serviceCardTitle} numberOfLines={1}>Deep Chimney Service</Text>
-                <View style={styles.ratingRow}>
-                  <Text style={styles.ratingStar}>★</Text>
-                  <Text style={styles.ratingText}>4.8 <Text style={styles.reviewCount}>(890)</Text></Text>
-                </View>
-                <Text style={styles.servicePrice}>₹499 onwards</Text>
-              </View>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.serviceCard}
-              activeOpacity={0.85}
-              onPress={() => navigation.navigate('CreateJob', { categorySlug: 'appliance-repair', title: 'Refrigerator Check & Gas Refill' })}
-            >
-              <Image source={require('../assets/services/Appliance Repair Workshop Scene.png')} style={styles.serviceCardThumb} />
-              <View style={styles.serviceCardBody}>
-                <Text style={styles.serviceCardTitle} numberOfLines={1}>Single/Double Refrigerator</Text>
-                <View style={styles.ratingRow}>
-                  <Text style={styles.ratingStar}>★</Text>
-                  <Text style={styles.ratingText}>4.9 <Text style={styles.reviewCount}>(1.4k)</Text></Text>
-                </View>
-                <Text style={styles.servicePrice}>₹349 onwards</Text>
-              </View>
-            </TouchableOpacity>
-          </ScrollView>
-        </View>
+        )}
 
         {/* ════════════════════════════════════════════════════════════════════
             14. DIRECT QUOTATION BANNER (Dark Navy - Matching Screenshot 1)
@@ -1332,24 +1140,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center'
   },
-  logoEmblem: {
-    width: 28,
-    height: 28,
-    borderRadius: 7,
-    backgroundColor: '#E0F2FE',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 8,
-    borderWidth: 1,
-    borderColor: '#BAE6FD'
-  },
-  logoPinDot: {
-    position: 'absolute',
-    bottom: 2,
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#0284C7'
+  headerLogo: {
+    width: 42,
+    height: 40,
+    marginRight: 9
   },
   brandTitleText: {
     fontSize: 21,

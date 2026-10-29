@@ -249,7 +249,7 @@ export default function AvailableJobsScreen({ navigation }: any) {
             <Text style={styles.fieldLabel}>Estimated Price (INR ₹) *</Text>
             <TextInput
               style={styles.input}
-              placeholder="e.g. 750"
+              placeholder="Enter your quote amount in ₹, e.g. 750"
               placeholderTextColor="#94A3B8"
               keyboardType="numeric"
               value={bidModal.amount}
@@ -259,7 +259,7 @@ export default function AvailableJobsScreen({ navigation }: any) {
             <Text style={styles.fieldLabel}>Cover Note to Customer</Text>
             <TextInput
               style={styles.textArea}
-              placeholder="e.g. 8 years experience in Havells/Schneider DB wiring. Can arrive in 45 mins with tools."
+              placeholder="Explain what your quote includes, your trade experience, and estimated arrival time..."
               placeholderTextColor="#94A3B8"
               multiline
               numberOfLines={3}

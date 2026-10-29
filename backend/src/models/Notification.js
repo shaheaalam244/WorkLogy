@@ -26,7 +26,10 @@ const NotificationSchema = new mongoose.Schema(
         'message',
         'review',
         'system',
-        'admin_alert'
+        'admin_alert',
+        'payment',
+        'refund',
+        'escrow'
       ],
       default: 'system'
     },
@@ -53,7 +56,7 @@ const NotificationSchema = new mongoose.Schema(
     relatedResource: {
       resourceType: {
         type: String,
-        enum: ['job', 'booking', 'application', 'quotation', 'user', 'conversation', 'chat']
+        enum: ['job', 'booking', 'application', 'quotation', 'user', 'conversation', 'chat', 'payment', 'refund', 'escrow', 'transaction']
       },
       resourceId: {
         type: mongoose.Schema.Types.ObjectId

@@ -93,6 +93,7 @@ export interface SupportTicketItem {
 
 export interface Job {
   _id: string;
+  id?: string;
   customer: string | User;
   category: string | ServiceCategory;
   subcategory?: string;
@@ -103,6 +104,7 @@ export interface Job {
   status: 'open' | 'assigned' | 'in_progress' | 'completed' | 'cancelled';
   address?: ServiceAddress;
   photos?: string[];
+  images?: string[];
   preferredDate?: string;
   preferredTime?: string;
   pricing?: {
@@ -144,19 +146,35 @@ export interface Job {
 export interface Booking {
   _id: string;
   bookingReference?: string;
-  jobId: Job;
+  jobId: any;
   customer: User;
   vendor: any;
   serviceTitle: string;
-  status: 'pending' | 'confirmed' | 'on_the_way' | 'arrived' | 'in_progress' | 'completed' | 'cancelled' | 'disputed' | 'payment_pending';
+  category?: string;
+  status: 'open' | 'quotations_received' | 'dispatching' | 'pending' | 'pending_acceptance' | 'awaiting_confirmation' | 'assigned' | 'confirmed' | 'scheduled' | 'on_the_way' | 'arrived' | 'in_progress' | 'completed' | 'cancelled' | 'disputed' | 'payment_pending';
+  displayStatus?: string;
   totalAmount: number;
   scheduledDate?: string;
   scheduledTime?: string;
+  timeSlot?: string;
+  urgency?: string;
+  applicantsCount?: number;
+  quotationsCount?: number;
+  quotedAmount?: number;
+  minQuotedAmount?: number;
+  quotations?: any[];
+  isJobRequest?: boolean;
+  problemDescription?: string;
   pricing: {
-    totalAmount: number;
-    paymentStatus: 'pending' | 'held_in_escrow' | 'released' | 'refunded';
+    totalAmount?: number;
+    amount?: number;
+    budgetType?: string;
+    quotedAmount?: number;
+    minQuotedAmount?: number;
+    paymentStatus: 'pending' | 'held_in_escrow' | 'released' | 'refunded' | 'escrow_locked';
     diagnosticFee?: number;
     platformFee?: number;
+    isPaid?: boolean;
   };
   address: ServiceAddress;
   arrivalOtp?: string;
@@ -165,6 +183,7 @@ export interface Booking {
   startedAt?: string;
   completedAt?: string;
   hasReview?: boolean;
+  review?: any;
   createdAt: string;
   updatedAt: string;
 }
@@ -177,7 +196,19 @@ export interface ChatMessage {
   recipient?: string | { _id: string; name?: string; avatar?: string; role?: string };
   receiver?: string | { _id: string; name?: string; avatar?: string; role?: string };
   text: string;
-  messageType?: 'text' | 'image' | 'system' | 'job_update';
+  messageType?: 'text' | 'image' | 'system' | 'job_update' | 'quotation';
+  quotationData?: {
+    quotationId?: string;
+    applicationId?: string;
+    jobId?: string;
+    jobTitle?: string;
+    proposedAmount?: number;
+    pricingBasis?: string;
+    proposedSchedule?: string;
+    estimatedDuration?: string;
+    coverLetter?: string;
+    status?: 'submitted' | 'accepted' | 'rejected' | string;
+  };
   attachments?: Array<{ url: string; fileType?: string; name?: string }>;
   clientTempId?: string;
   isRead?: boolean;

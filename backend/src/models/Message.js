@@ -23,8 +23,18 @@ const MessageSchema = new mongoose.Schema(
     },
     messageType: {
       type: String,
-      enum: ['text', 'image', 'system', 'job_update'],
+      enum: ['text', 'image', 'system', 'job_update', 'quotation'],
       default: 'text'
+    },
+    quotationData: {
+      quotationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Application' },
+      jobId: { type: mongoose.Schema.Types.ObjectId, ref: 'Job' },
+      jobTitle: { type: String },
+      proposedAmount: { type: Number },
+      proposedSchedule: { type: String },
+      estimatedDuration: { type: String },
+      coverLetter: { type: String },
+      status: { type: String, default: 'submitted' }
     },
     attachments: [
       {

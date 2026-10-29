@@ -77,7 +77,7 @@ export default function VendorServiceAreaScreen({ navigation }: any) {
   const [tempLocInput, setTempLocInput] = useState('');
 
   // Request deduplication, debouncing & cancellation refs
-  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const lastCoverageParamsRef = useRef<{ lat: number; lng: number; radius: number } | null>(null);
 
@@ -957,7 +957,7 @@ export default function VendorServiceAreaScreen({ navigation }: any) {
             <Ionicons name="search" size={16} color="#64748B" style={{ marginRight: 8 }} />
             <TextInput
               style={styles.searchInput}
-              placeholder="Search locality, zone or PIN..."
+              placeholder="Search your area, locality name, or PIN code, e.g. Gomti Nagar"
               placeholderTextColor="#94A3B8"
               value={searchQuery}
               onChangeText={setSearchQuery}
@@ -1176,7 +1176,7 @@ export default function VendorServiceAreaScreen({ navigation }: any) {
               style={styles.modalInput}
               value={tempLocInput}
               onChangeText={setTempLocInput}
-              placeholder="e.g. Hazratganj, Lucknow, UP 226001"
+              placeholder="Enter your workshop address, building, street, and PIN code"
               placeholderTextColor="#94A3B8"
               autoFocus
             />

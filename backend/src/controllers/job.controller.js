@@ -40,6 +40,23 @@ export const getJobs = async (req, res, next) => {
       }
     }
 
+    // Strict domain-based feed filtering: Vendors can ONLY view jobs matching their selected & approved domains
+    if (req.user?.role === 'vendor') {
+      const vProfile = await VendorProfile.findOne({ user: req.user.id || req.user._id });
+      const vendorApprovedIds = (vProfile?.categories || []).map(c => (c._id || c).toString());
+      if (vendorApprovedIds.length === 0) {
+        return res.status(200).json({ success: true, count: 0, jobs: [] });
+      }
+      if (filter.category) {
+        const catStr = filter.category.toString();
+        if (!vendorApprovedIds.includes(catStr)) {
+          return res.status(200).json({ success: true, count: 0, jobs: [] });
+        }
+      } else {
+        filter.category = { $in: vendorApprovedIds.map(id => new mongoose.Types.ObjectId(id)) };
+      }
+    }
+
     if (status && status !== 'all') {
       // Non-admins cannot browse cancelled or expired jobs via open marketplace endpoint
       if (!isAdmin && ['cancelled', 'expired'].includes(status)) {
@@ -203,33 +220,18 @@ export const getNearbyJobs = async (req, res, next) => {
       });
     }
 
-    // 3. Extract vendor approved categories
+    // 3. Extract vendor approved domains (strictly from canonical profile.categories, max 3)
     const approvedCategoryMap = new Map();
-    if (Array.isArray(profile.categories)) {
+    if (Array.isArray(profile.categories) && profile.categories.length > 0) {
       profile.categories.forEach(c => {
         if (c) {
           const id = (c._id || c).toString();
-          if (id) approvedCategoryMap.set(id, { id, name: c.name || 'Trade Service', slug: c.slug || '' });
-        }
-      });
-    }
-    if (Array.isArray(profile.services)) {
-      profile.services.forEach(s => {
-        if (s && s.isActive !== false && s.category) {
-          const c = s.category;
-          const id = (c._id || c).toString();
-          if (id && !approvedCategoryMap.has(id)) {
-            approvedCategoryMap.set(id, { id, name: s.categoryName || c.name || 'Trade Service', slug: c.slug || '' });
-          }
-        }
-      });
-    }
-    if (Array.isArray(profile.emergencyAvailability?.categories)) {
-      profile.emergencyAvailability.categories.forEach(c => {
-        if (c) {
-          const id = (c._id || c).toString();
-          if (id && !approvedCategoryMap.has(id)) {
-            approvedCategoryMap.set(id, { id, name: c.name || 'Emergency Trade', slug: c.slug || '' });
+          if (id && approvedCategoryMap.size < 3 && !approvedCategoryMap.has(id)) {
+            approvedCategoryMap.set(id, {
+              id,
+              name: c.name || 'Trade Service',
+              slug: c.slug || ''
+            });
           }
         }
       });
@@ -237,6 +239,7 @@ export const getNearbyJobs = async (req, res, next) => {
 
     const approvedCategories = Array.from(approvedCategoryMap.values());
     const approvedCategoryIds = approvedCategories.map(c => new mongoose.Types.ObjectId(c.id));
+
 
     // 4. Extract vendor service areas & coverage
     const vendorCity = (profile.city || 'Lucknow').trim();
@@ -414,7 +417,8 @@ export const getNearbyJobs = async (req, res, next) => {
             categories: approvedCategories
           },
           configurationStatus,
-          vendorEligibility
+          vendorEligibility,
+          message: 'You are not registered for this service domain.'
         });
       }
     }
@@ -558,6 +562,26 @@ export const getNearbyJobs = async (req, res, next) => {
     // 12. Compute status tab counts for the vendor
     const counts = await computeNearbyCounts(vendorUserId, approvedCategoryIds, vendorCity, hasCityWide, uniqueLocalities);
 
+    // Development Diagnostic Report (Masked & Safe)
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`\n======================================================`);
+      console.log(`[VendorFeed Diagnostic] Vendor: ${vendorUser.name} (${vendorUserId})`);
+      console.log(`  Approval Status: ${profile.approvalStatus} | Availability: ${profile.availability?.isAvailableNow !== false}`);
+      console.log(`  Configured Radius: ${profile.serviceAreaCoverage?.radiusKm || profile.vendorServiceRadiusKm || 15} km | City: ${vendorCity}`);
+      console.log(`  Approved Categories (${approvedCategories.length}): ${approvedCategories.map(c => c.name).join(', ') || 'None'}`);
+      console.log(`  Total Evaluated: ${jobs.length} | Returned: ${processedJobs.length}`);
+      jobs.slice(0, 5).forEach(j => {
+        const pJob = processedJobs.find(pj => pj._id.toString() === j._id.toString());
+        const isInc = Boolean(pJob);
+        console.log(`  * Job [${j._id}] "${j.title}":`);
+        console.log(`      Status Eligibility: ${j.status} (${['open', 'dispatching', 'assigned'].includes(j.status) ? 'Pass' : 'Fail'})`);
+        console.log(`      Category Eligibility: ${j.category?.name || j.category} (${approvedCategoryIds.some(cid => cid.toString() === (j.category?._id || j.category).toString()) ? 'Pass' : 'Fail'})`);
+        console.log(`      Geographic Eligibility: ${j.location?.locality}, ${j.location?.city} (Distance: ${pJob?.distanceFormatted || 'Coordinates evaluated'})`);
+        console.log(`      Final Decision: ${isInc ? 'INCLUDED' : 'EXCLUDED (Outside radius or excluded locality)'}`);
+      });
+      console.log(`======================================================\n`);
+    }
+
     res.status(200).json({
       success: true,
       jobs: processedJobs,
@@ -660,6 +684,28 @@ export const getJobById = async (req, res, next) => {
   }
 };
 
+const CATEGORY_ALIASES = {
+  electrician: 'electrical-services',
+  electrical: 'electrical-services',
+  plumber: 'plumbing-services',
+  plumbing: 'plumbing-services',
+  carpenter: 'carpentry-furniture',
+  carpentry: 'carpentry-furniture',
+  painter: 'painting-renovation',
+  painting: 'painting-renovation',
+  cleaning: 'home-cleaning',
+  cleaner: 'home-cleaning',
+  ac: 'ac-hvac-services',
+  hvac: 'ac-hvac-services',
+  'ac-repair': 'ac-hvac-services',
+  appliance: 'appliance-repair',
+  'appliance-repair': 'appliance-repair',
+  pest: 'pest-control',
+  'pest-control': 'pest-control',
+  ro: 'ro-water-purifier',
+  'water-purifier': 'ro-water-purifier'
+};
+
 export const createJob = async (req, res, next) => {
   try {
     let categoryId = req.body.category;
@@ -668,15 +714,19 @@ export const createJob = async (req, res, next) => {
     if (mongoose.Types.ObjectId.isValid(categoryId)) {
       foundCategory = await ServiceCategory.findById(categoryId);
     } else if (typeof categoryId === 'string' && categoryId.trim()) {
+      const trimmedCategory = categoryId.trim().toLowerCase();
+      const aliasedSlug = CATEGORY_ALIASES[trimmedCategory] || trimmedCategory;
       foundCategory = await ServiceCategory.findOne({
         $or: [
-          { slug: categoryId.trim().toLowerCase() },
-          { name: new RegExp('^' + categoryId.trim() + '$', 'i') }
+          { slug: aliasedSlug },
+          { slug: trimmedCategory },
+          { name: new RegExp('^' + categoryId.trim() + '$', 'i') },
+          { name: new RegExp(trimmedCategory, 'i') }
         ]
       });
     }
 
-    if (!foundCategory || foundCategory.isActive === false) {
+    if (!foundCategory) {
       return res.status(400).json({
         success: false,
         message: 'The selected service category is invalid or currently inactive.'
@@ -766,13 +816,19 @@ export const createJob = async (req, res, next) => {
     const safePreferredTime = preferredTime || preferredTimeSlot || 'Flexible';
     const safeInstructions = (additionalInstructions || accessInstructions || location?.instructions || '').trim();
 
+    const rawUrgency = (urgency || '').toLowerCase();
+    let safeUrgency = 'medium';
+    if (['emergency', 'urgent', 'high', 'low', 'medium'].includes(rawUrgency)) {
+      safeUrgency = rawUrgency;
+    }
+
     const jobData = {
       title: title.trim(),
       description: description.trim(),
       category: categoryId,
       subcategory: subcategory || '',
       serviceRequirements: serviceRequirements || {},
-      urgency: urgency || 'medium',
+      urgency: safeUrgency,
       contactPhone: safeContactPhone,
       budget: {
         type: safeBudgetType,
@@ -809,12 +865,12 @@ export const createJob = async (req, res, next) => {
       additionalInstructions: safeInstructions,
       images: Array.isArray(images) ? images.slice(0, 5) : [],
       customer: req.user.id,
-      status: urgency === 'emergency' ? 'dispatching' : 'open',
-      dispatchExpiredAt: urgency === 'emergency' ? new Date(Date.now() + 180 * 1000) : null,
+      status: safeUrgency === 'emergency' ? 'dispatching' : 'open',
+      dispatchExpiredAt: safeUrgency === 'emergency' ? new Date(Date.now() + 180 * 1000) : null,
       eventHistory: [
         {
-          event: urgency === 'emergency' ? 'emergency_dispatched' : 'job_created',
-          note: urgency === 'emergency' ? 'Emergency request dispatched to nearby professionals' : 'Job created by customer',
+          event: safeUrgency === 'emergency' ? 'emergency_dispatched' : 'job_created',
+          note: safeUrgency === 'emergency' ? 'Emergency request dispatched to nearby professionals' : 'Job created by customer',
           actor: req.user.id
         }
       ]
@@ -850,14 +906,19 @@ export const createJob = async (req, res, next) => {
       { upsert: true }
     );
 
-    // Create an in-app notification for the customer confirming publication
+    // Create an in-app and remote push notification for the customer confirming publication
     try {
-      await Notification.create({
-        recipient: req.user.id,
-        title: 'Job Posted Successfully',
-        message: `Your job "${job.title}" has been published and dispatched to eligible verified service professionals. First contractor to accept wins!`,
+      await createNotification({
+        recipientId: req.user.id,
         type: 'job_alert',
-        link: `/customer/bookings`
+        title: 'Service Request Created',
+        message: `Your service request "${job.title}" has been published and dispatched to eligible verified service professionals.`,
+        relatedResource: {
+          resourceType: 'job',
+          resourceId: job._id
+        },
+        link: `/customer/bookings`,
+        sendPush: true
       });
     } catch (notifErr) {
       console.warn('Non-fatal: Failed to save post-job notification:', notifErr.message);

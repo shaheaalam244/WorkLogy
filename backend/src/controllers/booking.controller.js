@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import Booking from '../models/Booking.js';
 import Job from '../models/Job.js';
+import Application from '../models/Application.js';
 import User from '../models/User.js';
 import Transaction from '../models/Transaction.js';
 import VendorProfile from '../models/VendorProfile.js';
@@ -332,120 +333,36 @@ export const getVendorBookings = async (req, res, next) => {
     }
 
     let bookings = await Booking.find(query)
+      .select('+startOtp.otp +startOtp.customerEncryptedOtp')
       .populate('customer', 'name email phone avatar')
       .populate('job', 'title budget urgency location')
       .populate('service', 'title pricing domain')
       .sort({ scheduledDate: -1, createdAt: -1 });
 
-    // If vendor has no bookings yet, seed realistic live initial orders linked to real DB
-    if (bookings.length === 0 && !status) {
-      const demoBooking1 = await Booking.create({
-        bookingReference: `BK-${Math.floor(1000 + Math.random() * 9000)}`,
-        customer: req.user.id, // linked to user
-        vendor: req.user.id,
-        serviceTitle: 'Electrical Subpanel Replacement & Safety Certification',
-        category: 'Electrical Services',
-        scheduledDate: new Date(Date.now() + 86400000 * 2),
-        timeSlot: '10:00 AM - 01:00 PM',
-        address: {
-          street: 'Plot 42, Sector B',
-          locality: 'Gomti Nagar',
-          city: 'Lucknow',
-          state: 'Uttar Pradesh',
-          zipCode: '226010'
-        },
-        pricing: {
-          amount: 1650,
-          platformFee: 82.5,
-          vendorNet: 1567.5,
-          isPaid: true,
-          paymentMethod: 'escrow',
-          paymentStatus: 'escrow_locked'
-        },
-        status: 'in_progress',
-        statusHistory: [
-          {
-            status: 'confirmed',
-            updatedBy: req.user.id,
-            timestamp: new Date(Date.now() - 86400000),
-            note: 'Contract awarded and escrow deposited.'
-          },
-          {
-            status: 'in_progress',
-            updatedBy: req.user.id,
-            timestamp: new Date(),
-            note: 'Vendor dispatched technicians on site.'
-          }
-        ]
-      });
-
-      const demoBooking2 = await Booking.create({
-        bookingReference: `BK-${Math.floor(1000 + Math.random() * 9000)}`,
-        customer: req.user.id,
-        vendor: req.user.id,
-        serviceTitle: 'Smart EV Charger 50A Dedicated Line Installation',
-        category: 'Electrical Services',
-        scheduledDate: new Date(Date.now() + 86400000 * 4),
-        timeSlot: '02:00 PM - 05:00 PM',
-        address: {
-          street: 'House 14, MG Marg',
-          locality: 'Hazratganj',
-          city: 'Lucknow',
-          state: 'Uttar Pradesh',
-          zipCode: '226001'
-        },
-        pricing: {
-          amount: 850,
-          platformFee: 42.5,
-          vendorNet: 807.5,
-          isPaid: true,
-          paymentMethod: 'escrow',
-          paymentStatus: 'escrow_locked'
-        },
-        status: 'scheduled',
-        statusHistory: [
-          {
-            status: 'scheduled',
-            updatedBy: req.user.id,
-            timestamp: new Date(),
-            note: 'Job scheduled with homeowner.'
-          }
-        ]
-      });
-
-      // Create matching initial transaction
-      await Transaction.create({
-        transactionId: `TX-${Math.floor(10000 + Math.random() * 90000)}`,
-        booking: demoBooking1._id,
-        vendor: req.user.id,
-        customer: req.user.id,
-        jobTitle: demoBooking1.serviceTitle,
-        grossAmount: 1650,
-        platformFee: 82.5,
-        netAmount: 1567.5,
-        type: 'escrow_hold',
-        paymentStatus: 'held_in_escrow',
-        settlementStatus: 'pending'
-      });
-
-      bookings = await Booking.find(query)
-        .populate('customer', 'name email phone avatar')
-        .sort({ scheduledDate: -1 });
-    }
+    // Return actual database bookings without auto-seeding demo records
 
     const sanitizedBookings = bookings.map((b) => {
       const obj = b.toObject ? b.toObject() : { ...b };
-      if (obj.startOtp) {
-        delete obj.startOtp.otp;
-        delete obj.startOtp.codeHash;
-        delete obj.startOtp.customerEncryptedOtp;
-      }
-      obj.totalAmount = obj.pricing?.amount || obj.totalAmount;
-      obj.isOtpVerified = Boolean(
+      const isOtpVerified = Boolean(
         obj.startOtp?.isConsumed ||
         obj.arrivalEvidence?.verified ||
         ['in_progress', 'completion_pending', 'completed'].includes(obj.status)
       );
+      obj.isOtpVerified = isOtpVerified;
+
+      if (!isOtpVerified && ['arrived', 'on_the_way', 'confirmed', 'scheduled', 'assigned'].includes(obj.status)) {
+        const customerPin = obj.startOtp?.otp || (obj.startOtp?.customerEncryptedOtp ? decryptCustomerOtp(obj.startOtp.customerEncryptedOtp) : null);
+        if (customerPin) {
+          obj.arrivalOtp = customerPin;
+          if (obj.startOtp) obj.startOtp.otp = customerPin;
+        }
+      }
+
+      if (obj.startOtp) {
+        delete obj.startOtp.codeHash;
+        delete obj.startOtp.customerEncryptedOtp;
+      }
+      obj.totalAmount = obj.pricing?.amount || obj.totalAmount;
       return obj;
     });
 
@@ -463,6 +380,7 @@ export const getBookingById = async (req, res, next) => {
     let booking = null;
     if (isHex24) {
       booking = await Booking.findById(rawId)
+        .select('+startOtp.otp +startOtp.customerEncryptedOtp +startOtp.codeHash')
         .populate('customer', 'name email phone avatar')
         .populate('vendor', 'name email phone avatar')
         .populate('job')
@@ -471,6 +389,7 @@ export const getBookingById = async (req, res, next) => {
 
       if (!booking) {
         booking = await Booking.findOne({ job: rawId })
+          .select('+startOtp.otp +startOtp.customerEncryptedOtp +startOtp.codeHash')
           .populate('customer', 'name email phone avatar')
           .populate('vendor', 'name email phone avatar')
           .populate('job')
@@ -482,6 +401,7 @@ export const getBookingById = async (req, res, next) => {
     if (!booking) {
       // Check if rawId matches human-readable bookingReference with case-insensitivity
       booking = await Booking.findOne({ bookingReference: new RegExp(`^${rawId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') })
+        .select('+startOtp.otp +startOtp.customerEncryptedOtp +startOtp.codeHash')
         .populate('customer', 'name email phone avatar')
         .populate('vendor', 'name email phone avatar')
         .populate('job')
@@ -525,6 +445,47 @@ export const getBookingById = async (req, res, next) => {
           return res.status(403).json({ success: false, message: 'Unauthorized to view this service request' });
         }
 
+        // Fetch all active quotations/proposals for this request
+        const applications = await Application.find({
+          job: job._id,
+          status: { $ne: 'withdrawn' }
+        })
+          .populate('vendor', 'name email avatar phone')
+          .sort({ createdAt: -1 })
+          .lean();
+
+        // Enrich quotations with vendor profile data (ratings, business name)
+        const vendorIds = applications.map(a => a.vendor?._id || a.vendor).filter(Boolean);
+        const profiles = await VendorProfile.find({ user: { $in: vendorIds } })
+          .select('user businessName rating reviewCount completedJobsCount bio avatar isAvailableNow')
+          .lean();
+        const profileMap = new Map();
+        profiles.forEach(p => profileMap.set(p.user.toString(), p));
+
+        const enrichedQuotes = applications.map(a => {
+          const vId = (a.vendor?._id || a.vendor || '').toString();
+          const prof = profileMap.get(vId);
+          return {
+            ...a,
+            vendorProfile: prof || null,
+            vendorName: prof?.businessName || a.vendor?.name || 'Service Professional',
+            vendorRating: prof?.rating || 4.9,
+            vendorAvatar: a.vendor?.avatar || prof?.avatar || null
+          };
+        });
+
+        const quotesCount = enrichedQuotes.length;
+        const hasQuotes = quotesCount > 0;
+        const latestQuote = hasQuotes ? enrichedQuotes[0] : null;
+        const minQuoteAmount = hasQuotes ? Math.min(...enrichedQuotes.map(q => q.proposedAmount)) : 0;
+        const latestQuotedAmount = latestQuote ? latestQuote.proposedAmount : 0;
+
+        // Canonical status: if open and quotes exist, reflect 'quotations_received'
+        const effectiveStatus = (job.status === 'open' && hasQuotes) ? 'quotations_received' : job.status;
+        const effectiveDisplayStatus = effectiveStatus === 'quotations_received'
+          ? 'Quotations Received'
+          : (effectiveStatus === 'open' ? 'Locating Available Local Pros' : effectiveStatus);
+
         // Return a normalized, complete booking-compatible record so the frontend renders seamlessly
         const jobAsBooking = {
           _id: job._id.toString(),
@@ -533,17 +494,26 @@ export const getBookingById = async (req, res, next) => {
           bookingType: 'open_request',
           serviceTitle: job.title,
           category: job.category?.name || 'Home Services',
-          status: job.status,
+          status: effectiveStatus,
+          displayStatus: effectiveDisplayStatus,
           urgency: job.urgency,
           scheduledDate: job.preferredDate ? new Date(job.preferredDate) : job.createdAt,
           timeSlot: job.preferredTime || 'Flexible',
           address: job.location,
+          applicantsCount: Math.max(job.applicantsCount || 0, quotesCount),
+          quotationsCount: quotesCount,
+          quotations: enrichedQuotes,
+          quotedAmount: latestQuotedAmount,
+          minQuotedAmount: minQuoteAmount,
           pricing: {
-            amount: job.budget?.amount || job.finalPrice?.amount || 0,
-            paymentStatus: 'pending',
-            isPaid: false
+            amount: job.finalPrice?.amount || (job.status === 'assigned' ? latestQuotedAmount : 0),
+            budgetType: job.budget?.type || 'quote',
+            quotedAmount: latestQuotedAmount,
+            minQuotedAmount: minQuoteAmount,
+            paymentStatus: job.status === 'assigned' ? 'escrow_locked' : 'pending',
+            isPaid: job.status === 'assigned'
           },
-          totalAmount: job.budget?.amount || job.finalPrice?.amount || 0,
+          totalAmount: job.finalPrice?.amount || (job.status === 'assigned' ? latestQuotedAmount : 0),
           problemDescription: job.description,
           isJobRequest: true,
           customer: job.customer,
@@ -563,7 +533,8 @@ export const getBookingById = async (req, res, next) => {
           success: true,
           jobOnly: true,
           job,
-          booking: jobAsBooking
+          booking: jobAsBooking,
+          quotations: enrichedQuotes
         });
       }
 
@@ -584,8 +555,58 @@ export const getBookingById = async (req, res, next) => {
     }
 
     const bookingObj = booking.toObject();
-    // Vendor must NEVER see customer's plaintext OTP or sensitive hash before verification
-    if (bookingCustomerId !== currentUserId && req.user.role !== 'admin') {
+    const isCustomer = bookingCustomerId === currentUserId;
+    const isAdmin = req.user.role === 'admin';
+
+    const isOtpVerified = Boolean(
+      bookingObj.startOtp?.isConsumed ||
+      bookingObj.arrivalEvidence?.verified ||
+      ['in_progress', 'completion_pending', 'completed'].includes(bookingObj.status)
+    );
+    bookingObj.isOtpVerified = isOtpVerified;
+
+    if (isCustomer || isAdmin) {
+      // Customer: populate service-start arrival OTP
+      let activeOtp = bookingObj.startOtp?.otp;
+      if (!activeOtp && bookingObj.startOtp?.customerEncryptedOtp) {
+        activeOtp = decryptCustomerOtp(bookingObj.startOtp.customerEncryptedOtp);
+      }
+
+      // If status allows arrival or is arrived and no OTP exists yet, generate and persist one securely
+      if (!activeOtp && !isOtpVerified && ['arrived', 'on_the_way', 'confirmed', 'scheduled', 'assigned'].includes(bookingObj.status)) {
+        const fresh = generateSecureOtp();
+        activeOtp = fresh.otp;
+        await Booking.findByIdAndUpdate(booking._id, {
+          startOtp: {
+            otp: fresh.otp,
+            codeHash: fresh.codeHash,
+            customerEncryptedOtp: fresh.customerEncryptedOtp,
+            expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
+            attempts: 0,
+            maxAttempts: 5,
+            isConsumed: false
+          }
+        });
+      }
+
+      if (activeOtp && !isOtpVerified) {
+        bookingObj.arrivalOtp = activeOtp;
+        if (bookingObj.startOtp) {
+          bookingObj.startOtp.otp = activeOtp;
+        }
+      } else {
+        delete bookingObj.arrivalOtp;
+        if (bookingObj.startOtp) delete bookingObj.startOtp.otp;
+      }
+
+      // Remove sensitive hashes from customer payload
+      if (bookingObj.startOtp) {
+        delete bookingObj.startOtp.codeHash;
+        delete bookingObj.startOtp.customerEncryptedOtp;
+      }
+    } else {
+      // Vendor: NEVER receive the customer's plaintext OTP or hashes
+      delete bookingObj.arrivalOtp;
       if (bookingObj.startOtp) {
         delete bookingObj.startOtp.otp;
         delete bookingObj.startOtp.codeHash;
@@ -602,11 +623,6 @@ export const getBookingById = async (req, res, next) => {
     }
 
     bookingObj.totalAmount = bookingObj.pricing?.amount || bookingObj.totalAmount;
-    bookingObj.isOtpVerified = Boolean(
-      bookingObj.startOtp?.isConsumed ||
-      bookingObj.arrivalEvidence?.verified ||
-      ['in_progress', 'completion_pending', 'completed'].includes(bookingObj.status)
-    );
 
     res.status(200).json({ success: true, booking: bookingObj });
   } catch (error) {
@@ -626,14 +642,104 @@ export const getBookingByJobId = async (req, res, next) => {
 
     if (!booking) {
       // If no booking found, check if job exists and belongs to customer
-      const job = await Job.findById(jobId).populate('category', 'name icon');
+      const job = await Job.findById(jobId)
+        .populate('category', 'name icon')
+        .populate('selectedVendor', 'name avatar phone businessName rating');
       if (!job) {
         return res.status(404).json({ success: false, message: 'Job not found' });
       }
       if (job.customer.toString() !== req.user.id && req.user.role !== 'admin') {
         return res.status(403).json({ success: false, message: 'Unauthorized to view this job' });
       }
-      return res.status(200).json({ success: true, jobOnly: true, job });
+
+      // Fetch quotations/proposals for this job
+      const applications = await Application.find({
+        job: job._id,
+        status: { $ne: 'withdrawn' }
+      })
+        .populate('vendor', 'name email avatar phone')
+        .sort({ createdAt: -1 })
+        .lean();
+
+      const vendorIds = applications.map(a => a.vendor?._id || a.vendor).filter(Boolean);
+      const profiles = await VendorProfile.find({ user: { $in: vendorIds } })
+        .select('user businessName rating reviewCount completedJobsCount bio avatar isAvailableNow')
+        .lean();
+      const profileMap = new Map();
+      profiles.forEach(p => profileMap.set(p.user.toString(), p));
+
+      const enrichedQuotes = applications.map(a => {
+        const vId = (a.vendor?._id || a.vendor || '').toString();
+        const prof = profileMap.get(vId);
+        return {
+          ...a,
+          vendorProfile: prof || null,
+          vendorName: prof?.businessName || a.vendor?.name || 'Service Professional',
+          vendorRating: prof?.rating || 4.9,
+          vendorAvatar: a.vendor?.avatar || prof?.avatar || null
+        };
+      });
+
+      const quotesCount = enrichedQuotes.length;
+      const hasQuotes = quotesCount > 0;
+      const latestQuote = hasQuotes ? enrichedQuotes[0] : null;
+      const minQuoteAmount = hasQuotes ? Math.min(...enrichedQuotes.map(q => q.proposedAmount)) : 0;
+      const latestQuotedAmount = latestQuote ? latestQuote.proposedAmount : 0;
+
+      const effectiveStatus = (job.status === 'open' && hasQuotes) ? 'quotations_received' : job.status;
+      const effectiveDisplayStatus = effectiveStatus === 'quotations_received'
+        ? 'Quotations Received'
+        : (effectiveStatus === 'open' ? 'Locating Available Local Pros' : effectiveStatus);
+
+      const jobAsBooking = {
+        _id: job._id.toString(),
+        jobId: job._id.toString(),
+        bookingReference: `REQ-${job._id.toString().slice(-6).toUpperCase()}`,
+        bookingType: 'open_request',
+        serviceTitle: job.title,
+        category: job.category?.name || 'Home Services',
+        status: effectiveStatus,
+        displayStatus: effectiveDisplayStatus,
+        urgency: job.urgency,
+        scheduledDate: job.preferredDate ? new Date(job.preferredDate) : job.createdAt,
+        timeSlot: job.preferredTime || 'Flexible',
+        address: job.location,
+        applicantsCount: Math.max(job.applicantsCount || 0, quotesCount),
+        quotationsCount: quotesCount,
+        quotations: enrichedQuotes,
+        quotedAmount: latestQuotedAmount,
+        minQuotedAmount: minQuoteAmount,
+        pricing: {
+          amount: job.finalPrice?.amount || (job.status === 'assigned' ? latestQuotedAmount : 0),
+          budgetType: job.budget?.type || 'quote',
+          quotedAmount: latestQuotedAmount,
+          minQuotedAmount: minQuoteAmount,
+          paymentStatus: job.status === 'assigned' ? 'escrow_locked' : 'pending',
+          isPaid: job.status === 'assigned'
+        },
+        totalAmount: job.finalPrice?.amount || (job.status === 'assigned' ? latestQuotedAmount : 0),
+        problemDescription: job.description,
+        isJobRequest: true,
+        customer: job.customer,
+        vendor: job.selectedVendor ? {
+          _id: job.selectedVendor._id || job.selectedVendor,
+          name: job.selectedVendor.name || job.selectedVendor.businessName || 'Assigned Specialist',
+          businessName: job.selectedVendor.businessName || job.selectedVendor.name,
+          phone: job.selectedVendor.phone,
+          avatar: job.selectedVendor.avatar,
+          rating: job.selectedVendor.rating || 4.9
+        } : null,
+        createdAt: job.createdAt,
+        updatedAt: job.updatedAt
+      };
+
+      return res.status(200).json({
+        success: true,
+        jobOnly: true,
+        job,
+        booking: jobAsBooking,
+        quotations: enrichedQuotes
+      });
     }
 
     // Verify vendor or customer access
@@ -827,7 +933,8 @@ export const approveBookingCompletion = async (req, res, next) => {
 export const updateBookingStatus = async (req, res, next) => {
   try {
     const { status, note, images } = req.body;
-    const booking = await Booking.findById(req.params.id);
+    const booking = await Booking.findById(req.params.id)
+      .select('+startOtp.otp +startOtp.customerEncryptedOtp +startOtp.codeHash');
 
     if (!booking) {
       return res.status(404).json({ success: false, message: 'Booking not found' });
@@ -967,6 +1074,111 @@ export const updateBookingStatus = async (req, res, next) => {
         success: true,
         message: 'Customer notified that you are on the way to the location.',
         booking
+      });
+    }
+
+    // Arrived at Site Workflow
+    if (status === 'arrived') {
+      if (['completed', 'cancelled', 'disputed'].includes(booking.status)) {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot record arrival for a ${booking.status} booking.`
+        });
+      }
+
+      const wasAlreadyArrived = booking.status === 'arrived';
+      const now = new Date();
+      const hasActiveOtp = Boolean(
+        booking.startOtp?.otp &&
+        !booking.startOtp?.isConsumed &&
+        (!booking.startOtp?.expiresAt || new Date(booking.startOtp.expiresAt) > now)
+      );
+
+      // Generate or activate cryptographically secure 6-digit OTP if not active
+      if (!hasActiveOtp) {
+        const { otp, codeHash, customerEncryptedOtp } = generateSecureOtp();
+        booking.startOtp = {
+          otp,
+          codeHash,
+          customerEncryptedOtp,
+          expiresAt: new Date(Date.now() + 24 * 3600 * 1000), // 24-hour validity
+          attempts: 0,
+          maxAttempts: 5,
+          isConsumed: false
+        };
+      }
+
+      booking.status = 'arrived';
+      booking.arrivedAt = booking.arrivedAt || new Date();
+      if (!wasAlreadyArrived) {
+        booking.statusHistory.push({
+          status: 'arrived',
+          updatedBy: req.user.id,
+          timestamp: new Date(),
+          note: note || 'Specialist has reached customer service location and recorded arrival.'
+        });
+      }
+
+      await booking.save();
+
+      // Update associated Job status if applicable
+      if (booking.job) {
+        await Job.findByIdAndUpdate(booking.job, { status: 'arrived' }).catch(() => {});
+      }
+
+      // Idempotently create persistent in-app notification & send push notification to customer
+      try {
+        await notifyStatusChange({
+          recipientId: booking.customer._id || booking.customer,
+          senderId: req.user.id,
+          booking,
+          jobTitle: booking.serviceTitle,
+          newStatus: 'arrived',
+          customMessage: 'Your professional has arrived at the service location. Open WorkLogy to view your service-start OTP.'
+        });
+      } catch (notifErr) {
+        console.warn('Arrival notification dispatch warning:', notifErr.message);
+      }
+
+      // Real-time socket emissions to customer and vendor
+      const io = getIO();
+      if (io) {
+        const customerIdStr = (booking.customer._id || booking.customer).toString();
+        const vendorIdStr = (booking.vendor._id || booking.vendor).toString();
+        const payload = {
+          bookingId: booking._id,
+          status: 'arrived',
+          arrivedAt: booking.arrivedAt
+        };
+
+        io.to('user_' + customerIdStr).emit('booking_status_updated', payload);
+        io.to('user_' + customerIdStr).emit('technician_arrived', payload);
+        io.to('user_' + vendorIdStr).emit('booking_status_updated', payload);
+        if (booking.job) {
+          const jId = (booking.job._id || booking.job).toString();
+          io.to('job_' + jId).emit('job_status_updated', {
+            jobId: jId,
+            status: 'arrived',
+            arrivedAt: booking.arrivedAt
+          });
+        }
+      }
+
+      // Vendor response must NEVER include customer's plaintext OTP or hashes
+      const returnObj = booking.toObject();
+      if (returnObj.startOtp) {
+        delete returnObj.startOtp.otp;
+        delete returnObj.startOtp.codeHash;
+        delete returnObj.startOtp.customerEncryptedOtp;
+      }
+      delete returnObj.arrivalOtp;
+      returnObj.totalAmount = returnObj.pricing?.amount || returnObj.totalAmount;
+      returnObj.isOtpVerified = false;
+
+      return res.status(200).json({
+        success: true,
+        message: 'Arrival recorded. Customer notified with service-start OTP instructions.',
+        booking: returnObj
       });
     }
 
@@ -1188,13 +1400,13 @@ export const getCustomerStartOtp = async (req, res, next) => {
     }
 
     if (!otp) {
-      otp = Math.floor(100000 + Math.random() * 900000).toString();
-      const codeHash = hashOtp(otp);
-      const expiresAt = new Date(Date.now() + 7 * 86400000);
+      const fresh = generateSecureOtp();
+      otp = fresh.otp;
       booking.startOtp = {
-        otp,
-        codeHash,
-        expiresAt,
+        otp: fresh.otp,
+        codeHash: fresh.codeHash,
+        customerEncryptedOtp: fresh.customerEncryptedOtp,
+        expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
         attempts: 0,
         maxAttempts: 5,
         isConsumed: false
@@ -1205,6 +1417,7 @@ export const getCustomerStartOtp = async (req, res, next) => {
     res.status(200).json({
       success: true,
       otp,
+      arrivalOtp: otp,
       expiresAt: booking.startOtp?.expiresAt,
       attempts: booking.startOtp?.attempts || 0,
       maxAttempts: booking.startOtp?.maxAttempts || 5,
@@ -1542,16 +1755,20 @@ export const verifyStartOtp = async (req, res, next) => {
     // Real-time socket updates
     const io = getIO();
     if (io) {
-      io.to('user_' + (booking.customer._id || booking.customer).toString()).emit('service_started', {
+      const customerIdStr = (booking.customer._id || booking.customer).toString();
+      const vendorIdStr = (booking.vendor._id || booking.vendor).toString();
+      const startPayload = {
         bookingId: booking._id,
         jobId: booking.job?._id || booking.job,
+        status: 'in_progress',
+        isOtpVerified: true,
         startedAt: new Date()
-      });
-      io.to('user_' + (booking.vendor._id || booking.vendor).toString()).emit('service_started', {
-        bookingId: booking._id,
-        jobId: booking.job?._id || booking.job,
-        startedAt: new Date()
-      });
+      };
+
+      io.to('user_' + customerIdStr).emit('service_started', startPayload);
+      io.to('user_' + customerIdStr).emit('booking_status_updated', startPayload);
+      io.to('user_' + vendorIdStr).emit('service_started', startPayload);
+      io.to('user_' + vendorIdStr).emit('booking_status_updated', startPayload);
       io.to('job_' + (booking.job?._id || booking.job)).emit('job_status_updated', {
         jobId: booking.job?._id || booking.job,
         status: 'in_progress',

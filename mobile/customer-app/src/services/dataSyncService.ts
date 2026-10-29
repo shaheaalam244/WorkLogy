@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 
 export type SyncEventType =
   | 'BOOKINGS_CHANGED'
+  | 'REVIEWS_CHANGED'
   | 'NOTIFICATIONS_CHANGED'
   | 'PROFILE_CHANGED'
   | 'QUOTES_CHANGED'

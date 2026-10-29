@@ -428,8 +428,102 @@ export const updateVendorProfile = async (req, res, next) => {
     if (updates.phone && typeof updates.phone === 'string' && updates.phone.trim()) {
       userUpdates.phone = updates.phone.trim();
     }
+    if (updates.email && typeof updates.email === 'string' && updates.email.trim()) {
+      const cleanEmail = updates.email.trim().toLowerCase();
+      if (!cleanEmail.endsWith('@worklogy.local') && !cleanEmail.startsWith('temp_')) {
+        const emailRegex = /\S+@\S+\.\S+/;
+        if (!emailRegex.test(cleanEmail)) {
+          return res.status(400).json({
+            success: false,
+            message: 'Please provide a valid email address.'
+          });
+        }
+        const existingUser = await mongoose.model('User').findOne({
+          email: cleanEmail,
+          _id: { $ne: req.user.id }
+        });
+        if (existingUser) {
+          return res.status(400).json({
+            success: false,
+            message: 'This email address is already in use by another account.'
+          });
+        }
+        userUpdates.email = cleanEmail;
+      }
+    }
     if (Object.keys(userUpdates).length > 0) {
       await mongoose.model('User').findByIdAndUpdate(req.user.id, userUpdates);
+    }
+
+    // Resolve and validate service domains if provided
+    const rawDomainUpdate = updates.categories || updates.serviceDomainIds;
+    if (rawDomainUpdate !== undefined) {
+      if (!Array.isArray(rawDomainUpdate)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Service domains must be provided as an array.'
+        });
+      }
+
+      const rawUniqueStrings = Array.from(
+        new Set(
+          rawDomainUpdate
+            .map(item => (typeof item === 'object' && item?._id ? item._id.toString() : String(item || '')).trim())
+            .filter(Boolean)
+        )
+      );
+
+      if (rawUniqueStrings.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please select at least 1 service domain (maximum 3).'
+        });
+      }
+
+      if (rawUniqueStrings.length > 3) {
+        return res.status(400).json({
+          success: false,
+          message: 'A vendor can select a maximum of 3 service domains.'
+        });
+      }
+
+      const resolvedCategoryIds = [];
+      for (const catStr of rawUniqueStrings) {
+        if (mongoose.Types.ObjectId.isValid(catStr)) {
+          const catDoc = await ServiceCategory.findOne({ _id: catStr, isActive: { $ne: false } });
+          if (catDoc && !resolvedCategoryIds.some(id => id.toString() === catDoc._id.toString())) {
+            resolvedCategoryIds.push(catDoc._id);
+          }
+        } else {
+          const catDoc = await ServiceCategory.findOne({
+            isActive: { $ne: false },
+            $or: [
+              { slug: catStr.toLowerCase() },
+              { name: new RegExp('^' + catStr + '$', 'i') }
+            ]
+          });
+          if (catDoc && !resolvedCategoryIds.some(id => id.toString() === catDoc._id.toString())) {
+            resolvedCategoryIds.push(catDoc._id);
+          }
+        }
+      }
+
+      if (resolvedCategoryIds.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'None of the specified service domains are valid or currently active.'
+        });
+      }
+
+      if (resolvedCategoryIds.length > 3) {
+        return res.status(400).json({
+          success: false,
+          message: 'A vendor can select a maximum of 3 service domains.'
+        });
+      }
+
+      updates.categories = resolvedCategoryIds;
+      delete updates.serviceDomainIds;
     }
 
     let vendor = await VendorProfile.findOneAndUpdate(
@@ -729,108 +823,30 @@ export const getMyServices = async (req, res, next) => {
 
     if (status && status !== 'all') {
       query.status = status;
+    } else {
+      // Exclude archived services from normal view unless explicitly requested
+      query.status = { $ne: 'archived' };
     }
 
-    let services = await ServiceListing.find(query).sort({ updatedAt: -1, createdAt: -1 });
+    const services = await ServiceListing.find(query)
+      .populate('category', 'name slug icon image subcategories')
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .lean();
 
-    // If vendor has no listings in ServiceListing yet, create initial realistic published listings
-    if (services.length === 0 && !status) {
-      const initialServices = [
-        {
-          vendor: req.user.id,
-          title: 'Full Electrical Subpanel Replacement & Safety Certification',
-          domain: 'Electrical Services',
-          subcategory: 'Panel Upgrades & Breakers',
-          shortSummary: 'Complete high-grade subpanel replacement with surge protector and 5-year guarantee',
-          description: 'Comprehensive electrical service panel modernization. Includes heavy-gauge copper wiring, dual busbar configuration, GFCI circuit breakers, surge suppressor, and full safety audit certificate.',
-          experienceYears: 6,
-          deliveryType: 'home_service',
-          pricing: {
-            type: 'fixed',
-            amount: 1850,
-            minPrice: 1850,
-            maxPrice: 2400,
-            currency: 'INR',
-            unit: 'per project',
-            materialCostIncluded: true,
-            cancellationTerms: 'Free cancellation up to 4 hours before service appointment.'
-          },
-          images: [
-            'https://images.unsplash.com/photo-1621905251189-08b45d6a269e?auto=format&fit=crop&w=800&q=80'
-          ],
-          location: {
-            city: 'Lucknow',
-            locality: 'Gomti Nagar',
-            radiusKm: 30,
-            supportedLocalities: ['Gomti Nagar', 'Hazratganj', 'Aliganj', 'Indira Nagar']
-          },
-          status: 'published'
-        },
-        {
-          vendor: req.user.id,
-          title: 'EV Charging Station 50A High-Speed Dedicated Installation',
-          domain: 'Electrical Services',
-          subcategory: 'EV Charger Installation',
-          shortSummary: 'Certified Level 2 electric vehicle home charger installation with dedicated safety breaker',
-          description: 'Professional EV wallbox installation. We calculate panel load capacity, run fire-retardant armored conduit, wire dedicated 50A industrial breaker, and test charging current compatibility.',
-          experienceYears: 5,
-          deliveryType: 'home_service',
-          pricing: {
-            type: 'starting',
-            amount: 750,
-            minPrice: 750,
-            maxPrice: 1200,
-            currency: 'INR',
-            unit: 'per visit',
-            materialCostIncluded: false,
-            cancellationTerms: 'Free cancellation 2 hours prior to scheduled slot.'
-          },
-          images: [
-            'https://images.unsplash.com/photo-1593941707882-a5bba14938c7?auto=format&fit=crop&w=800&q=80'
-          ],
-          location: {
-            city: 'Lucknow',
-            locality: 'Hazratganj',
-            radiusKm: 25,
-            supportedLocalities: ['Hazratganj', 'Gomti Nagar', 'Mahanagar']
-          },
-          status: 'published'
-        },
-        {
-          vendor: req.user.id,
-          title: 'Whole-Home Electrical Diagnostic & Earthing Resistance Test',
-          domain: 'Electrical Services',
-          subcategory: 'Power Trip & Short Circuit Diagnostics',
-          shortSummary: 'Infrared panel thermal scan, earth leakage verification, and complete load health report',
-          description: 'Advanced diagnostic scan for homes experiencing sudden circuit trips or voltage drops. Includes digital earth megger testing, insulation resistance check, and formal safety certification report.',
-          experienceYears: 8,
-          deliveryType: 'home_service',
-          pricing: {
-            type: 'fixed',
-            amount: 350,
-            minPrice: 350,
-            maxPrice: 450,
-            currency: 'INR',
-            unit: 'per visit',
-            materialCostIncluded: true
-          },
-          images: [
-            'https://images.unsplash.com/photo-1544717305-2782549b5136?auto=format&fit=crop&w=800&q=80'
-          ],
-          location: {
-            city: 'Lucknow',
-            locality: 'Aliganj',
-            radiusKm: 35
-          },
-          status: 'draft'
-        }
-      ];
+    // Aggregate real booking counts
+    const serviceIds = services.map(s => s._id);
+    const bookingCounts = await Booking.aggregate([
+      { $match: { service: { $in: serviceIds } } },
+      { $group: { _id: '$service', count: { $sum: 1 } } }
+    ]);
+    const countMap = new Map(bookingCounts.map(b => [b._id.toString(), b.count]));
 
-      await ServiceListing.insertMany(initialServices);
-      services = await ServiceListing.find(query).sort({ createdAt: -1 });
-    }
+    const enrichedServices = services.map(s => ({
+      ...s,
+      bookingCount: countMap.get(s._id.toString()) || s.bookingCount || 0
+    }));
 
-    res.status(200).json({ success: true, count: services.length, services });
+    res.status(200).json({ success: true, count: enrichedServices.length, services: enrichedServices });
   } catch (error) {
     next(error);
   }
@@ -842,6 +858,8 @@ export const createServiceListing = async (req, res, next) => {
       title,
       domain,
       subcategory,
+      isCustom,
+      customSubcategory,
       shortSummary,
       description,
       experienceYears,
@@ -857,48 +875,200 @@ export const createServiceListing = async (req, res, next) => {
       categoryName
     } = req.body;
 
-    const resolvedDomain = domain || (typeof category === 'string' && category) || 'home-services';
-    const resolvedSubcategory = subcategory || categoryName || title || 'General';
-    const resolvedDesc = description || shortSummary || `${title || 'Professional Service'} provided by certified specialist.`;
+    const idempotencyKey = req.headers['x-idempotency-key'] || req.body.idempotencyKey;
 
-    if (!title || !resolvedDomain) {
-      return res.status(400).json({
+    // 1. Check Idempotency: Return previously created service for the same vendor & key
+    if (idempotencyKey) {
+      const existingByIdempotency = await ServiceListing.findOne({
+        vendor: req.user.id,
+        idempotencyKey
+      }).populate('category', 'name slug icon image subcategories');
+
+      if (existingByIdempotency) {
+        return res.status(200).json({
+          success: true,
+          message: 'Service listing already created (idempotent)',
+          service: existingByIdempotency,
+          isDuplicate: true
+        });
+      }
+    }
+
+    // 2. Load vendor profile and check domain authorization
+    const vendorProfile = await VendorProfile.findOne({ user: req.user.id });
+    if (!vendorProfile) {
+      return res.status(404).json({
         success: false,
-        message: 'Title is required to create a service listing'
+        message: 'Vendor profile not found. Please complete profile setup first.'
       });
     }
 
-    const vendorProfile = await VendorProfile.findOne({ user: req.user.id });
+    const approvedCategoryIds = (vendorProfile.categories || []).map(c => (c._id || c).toString());
+    if (approvedCategoryIds.length === 0) {
+      return res.status(403).json({
+        success: false,
+        message: 'You have no approved service domains. Please select your service domains in Profile and wait for approval.'
+      });
+    }
 
+    // 3. Resolve and validate canonical category
+    let catDoc = null;
+    if (category && mongoose.Types.ObjectId.isValid(category)) {
+      catDoc = await ServiceCategory.findById(category);
+    } else if (domain) {
+      catDoc = await ServiceCategory.findOne({
+        $or: [{ slug: domain.toLowerCase() }, { name: new RegExp('^' + domain + '$', 'i') }]
+      });
+    }
+
+    if (!catDoc || !catDoc.isActive) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or inactive service category.'
+      });
+    }
+
+    // Strict Domain Authorization: Must be one of vendor's approved categories!
+    if (!approvedCategoryIds.includes(catDoc._id.toString())) {
+      return res.status(403).json({
+        success: false,
+        message: `You are not authorized to create services under "${catDoc.name}". You may only create services under your approved domains.`
+      });
+    }
+
+    // 4. Validate subcategory
+    const isCustomTask = Boolean(isCustom || subcategory === 'Other' || customSubcategory);
+    let resolvedSubcategory = '';
+
+    if (isCustomTask) {
+      const customName = (customSubcategory || (subcategory !== 'Other' ? subcategory : '')).trim();
+      if (!customName || customName.length < 3 || customName.length > 60) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please provide a valid custom service name between 3 and 60 characters.'
+        });
+      }
+      resolvedSubcategory = customName;
+    } else {
+      if (!subcategory || !subcategory.trim()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please select a valid subcategory.'
+        });
+      }
+      // Verify subcategory belongs to category
+      const belongs = (catDoc.subcategories || []).some(
+        s => s.toLowerCase().trim() === subcategory.toLowerCase().trim()
+      );
+      if (!belongs) {
+        return res.status(400).json({
+          success: false,
+          message: `The subcategory "${subcategory}" does not belong to ${catDoc.name}.`
+        });
+      }
+      resolvedSubcategory = subcategory.trim();
+    }
+
+    // 5. Title & Description
+    if (!title || title.trim().length < 5) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a descriptive service title of at least 5 characters.'
+      });
+    }
+    const resolvedDesc = description?.trim() || shortSummary?.trim() || `${title.trim()} provided by certified specialist.`;
+
+    // 6. Experience Years validation
+    const parsedExp = parseInt(experienceYears, 10);
+    if (isNaN(parsedExp) || parsedExp < 0 || parsedExp > 50) {
+      return res.status(400).json({
+        success: false,
+        message: 'Years of experience must be a non-negative number up to 50.'
+      });
+    }
+
+    // 7. Pricing validation
+    if (pricing && pricing.type !== 'quote') {
+      const amt = pricing.type === 'starting' ? Number(pricing.minPrice) : Number(pricing.amount);
+      if (isNaN(amt) || amt <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please provide a valid pricing amount greater than 0.'
+        });
+      }
+    }
+
+    // 8. Prevent duplicate active listing for same vendor + category + subcategory
+    const escapedSubcat = resolvedSubcategory.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const existingDuplicate = await ServiceListing.findOne({
+      vendor: req.user.id,
+      category: catDoc._id,
+      subcategory: { $regex: new RegExp(`^${escapedSubcat}$`, 'i') },
+      status: { $in: ['published', 'draft', 'pending_approval'] }
+    });
+
+    if (existingDuplicate) {
+      return res.status(409).json({
+        success: false,
+        message: `You already have an active listing for "${resolvedSubcategory}". You can edit the existing listing instead of creating a duplicate.`,
+        existingServiceId: existingDuplicate._id
+      });
+    }
+
+    // 9. Create ServiceListing
     const newListing = await ServiceListing.create({
       vendor: req.user.id,
-      vendorProfile: vendorProfile?._id,
-      title,
-      domain: resolvedDomain,
+      vendorProfile: vendorProfile._id,
+      title: title.trim(),
+      domain: catDoc.slug,
+      category: catDoc._id,
       subcategory: resolvedSubcategory,
-      shortSummary: shortSummary || '',
+      isCustom: isCustomTask,
+      customSubcategory: isCustomTask ? resolvedSubcategory : '',
+      shortSummary: (shortSummary || title).trim(),
       description: resolvedDesc,
-      experienceYears: Number(experienceYears) || 3,
+      experienceYears: parsedExp,
       deliveryType: deliveryType || 'home_service',
       languages: languages || ['Hindi', 'English'],
       pricing: pricing || { type: 'fixed', amount: 450, currency: 'INR', unit: 'per visit' },
       images: images || [],
-      location: location || { city: 'Lucknow', radiusKm: 25 },
+      location: location || {
+        city: vendorProfile.city || 'Lucknow',
+        locality: vendorProfile.locality || 'Gomti Nagar',
+        radiusKm: vendorProfile.vendorServiceRadiusKm || 25,
+        supportedLocalities: ['Gomti Nagar', 'Hazratganj', 'Aliganj', 'Indira Nagar']
+      },
       availability: availability || {},
       requirements: requirements || {},
-      status: status || 'published'
+      status: status || 'published',
+      idempotencyKey: idempotencyKey || undefined,
+      bookingCount: 0
     });
 
-    // Also sync summary into VendorProfile.services array
-    if (vendorProfile) {
-      vendorProfile.services.push({
-        title: newListing.title,
-        description: newListing.shortSummary || newListing.description.slice(0, 80),
-        price: newListing.pricing?.amount || newListing.pricing?.minPrice || 350,
-        duration: '2-3 hours'
-      });
-      await vendorProfile.save();
+    // 10. Sync to vendorProfile.services (safe update/insert without touching categories array)
+    const existingProfServiceIdx = (vendorProfile.services || []).findIndex(
+      s => s.category?.toString() === catDoc._id.toString() &&
+           s.categoryName?.toLowerCase() === resolvedSubcategory.toLowerCase()
+    );
+
+    const profServiceData = {
+      category: catDoc._id,
+      categoryName: resolvedSubcategory,
+      title: newListing.title,
+      description: newListing.shortSummary || newListing.description.slice(0, 80),
+      pricingType: newListing.pricing?.type === 'quote' ? 'quote' : newListing.pricing?.type === 'starting' ? 'hourly' : 'fixed',
+      price: newListing.pricing?.amount || newListing.pricing?.minPrice || 350,
+      experienceYears: parsedExp,
+      serviceArea: newListing.location?.city || 'Lucknow',
+      isActive: newListing.status === 'published'
+    };
+
+    if (existingProfServiceIdx >= 0) {
+      vendorProfile.services[existingProfServiceIdx] = profServiceData;
+    } else {
+      vendorProfile.services.push(profServiceData);
     }
+    await vendorProfile.save();
 
     res.status(201).json({
       success: true,
@@ -906,6 +1076,12 @@ export const createServiceListing = async (req, res, next) => {
       service: newListing
     });
   } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: 'A duplicate service listing already exists for this category and subcategory.'
+      });
+    }
     next(error);
   }
 };
@@ -938,10 +1114,73 @@ export const updateServiceListing = async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'Unauthorized to edit this service' });
     }
 
+    const { category, domain, subcategory, customSubcategory, isCustom, experienceYears } = req.body;
+
+    // If changing category/domain, enforce approved domains!
+    if (category || domain) {
+      const vendorProfile = await VendorProfile.findOne({ user: req.user.id });
+      const approvedCategoryIds = (vendorProfile?.categories || []).map(c => (c._id || c).toString());
+
+      let catDoc = null;
+      if (category && mongoose.Types.ObjectId.isValid(category)) {
+        catDoc = await ServiceCategory.findById(category);
+      } else if (domain) {
+        catDoc = await ServiceCategory.findOne({
+          $or: [{ slug: domain.toLowerCase() }, { name: new RegExp('^' + domain + '$', 'i') }]
+        });
+      }
+
+      if (catDoc) {
+        if (!approvedCategoryIds.includes(catDoc._id.toString())) {
+          return res.status(403).json({
+            success: false,
+            message: `You are not authorized to assign this service to "${catDoc.name}".`
+          });
+        }
+        service.category = catDoc._id;
+        service.domain = catDoc.slug;
+      }
+    }
+
+    // If subcategory updated
+    if (subcategory || customSubcategory) {
+      const resolvedSub = (customSubcategory || subcategory).trim();
+      const escapedSub = resolvedSub.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const collision = await ServiceListing.findOne({
+        _id: { $ne: service._id },
+        vendor: req.user.id,
+        category: service.category,
+        subcategory: { $regex: new RegExp(`^${escapedSub}$`, 'i') },
+        status: { $in: ['published', 'draft', 'pending_approval'] }
+      });
+      if (collision) {
+        return res.status(409).json({
+          success: false,
+          message: `Another active listing for "${resolvedSub}" already exists.`
+        });
+      }
+      service.subcategory = resolvedSub;
+      if (isCustom !== undefined) service.isCustom = Boolean(isCustom);
+      if (customSubcategory !== undefined) service.customSubcategory = customSubcategory;
+    }
+
+    if (experienceYears !== undefined) {
+      const parsedExp = parseInt(experienceYears, 10);
+      if (!isNaN(parsedExp) && parsedExp >= 0 && parsedExp <= 50) {
+        service.experienceYears = parsedExp;
+      }
+    }
+
     const safeUpdates = { ...req.body };
     delete safeUpdates.vendor;
     delete safeUpdates._id;
     delete safeUpdates.vendorProfile;
+    delete safeUpdates.category;
+    delete safeUpdates.domain;
+    delete safeUpdates.subcategory;
+    delete safeUpdates.customSubcategory;
+    delete safeUpdates.isCustom;
+    delete safeUpdates.experienceYears;
 
     Object.assign(service, safeUpdates);
     await service.save();
@@ -955,6 +1194,7 @@ export const updateServiceListing = async (req, res, next) => {
     next(error);
   }
 };
+
 
 export const updateServiceListingStatus = async (req, res, next) => {
   try {
@@ -1222,13 +1462,31 @@ export const getVendorDashboardStats = async (req, res, next) => {
     const publishedServices = await ServiceListing.countDocuments({ vendor: req.user.id, status: 'published' });
     const pendingServices = await ServiceListing.countDocuments({ vendor: req.user.id, status: 'pending_approval' });
 
-    // Job matching counts
-    const matchingJobsCount = await Job.countDocuments({ status: 'open', isDeleted: { $ne: true } });
-    const recentJobs = await Job.find({ status: 'open', isDeleted: { $ne: true } })
+    // Job matching counts (aligned with vendor categories and coverage)
+    const approvedCatIds = Array.isArray(vendorProfile?.categories) && vendorProfile.categories.length > 0
+      ? vendorProfile.categories
+      : [];
+    
+    let jobMatchQuery = null;
+    if (approvedCatIds.length > 0) {
+      jobMatchQuery = {
+        status: { $in: ['open', 'dispatching'] },
+        isDeleted: { $ne: true },
+        selectedVendor: null,
+        declinedVendors: { $ne: req.user.id },
+        category: { $in: approvedCatIds }
+      };
+      if (vendorProfile?.city) {
+        jobMatchQuery['location.city'] = { $regex: new RegExp('^' + vendorProfile.city.trim() + '$', 'i') };
+      }
+    }
+
+    const matchingJobsCount = jobMatchQuery ? await Job.countDocuments(jobMatchQuery) : 0;
+    const recentJobs = jobMatchQuery ? await Job.find(jobMatchQuery)
       .populate('category', 'name slug icon')
       .populate('customer', 'name avatar')
       .sort({ createdAt: -1 })
-      .limit(4);
+      .limit(4) : [];
 
     // Quotations / Applications submitted by this vendor
     const submittedQuotations = await Application.countDocuments({ vendor: req.user.id });

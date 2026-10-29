@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { api, getStoredAuthToken } from '../api/client';
 import { secureStorage } from '../storage/secureStorage';
 import { STORAGE_KEYS } from '../constants';
+import { pushNotificationService } from '../services/pushNotificationService';
 import type { User } from '../types';
 
 interface AuthContextType {
@@ -33,6 +34,7 @@ export const AuthProvider = ({ children }: { children?: React.ReactNode }) => {
         const res = await api.auth.getCurrentUser();
         if (res?.user) {
           setUser(res.user);
+          pushNotificationService.registerForPushNotifications().catch(() => {});
         } else {
           setUser(null);
         }
@@ -55,6 +57,7 @@ export const AuthProvider = ({ children }: { children?: React.ReactNode }) => {
     try {
       const res = await api.auth.login(credentials);
       setUser(res.user);
+      pushNotificationService.registerForPushNotifications().catch(() => {});
     } finally {
       setIsLoading(false);
     }
@@ -65,12 +68,18 @@ export const AuthProvider = ({ children }: { children?: React.ReactNode }) => {
     try {
       const res = await api.auth.register(data);
       setUser(res.user);
+      pushNotificationService.registerForPushNotifications().catch(() => {});
     } finally {
       setIsLoading(false);
     }
   };
 
   const logout = async () => {
+    try {
+      await pushNotificationService.deregister();
+    } catch (e) {
+      console.warn('Push token deregister error on logout:', e);
+    }
     await api.auth.logout();
     setUser(null);
   };

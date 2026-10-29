@@ -1,5 +1,5 @@
 import { Platform } from 'react-native';
-import { CONFIG } from '../config';
+import { CONFIG, SERVERS } from '../config';
 import { secureStorage } from '../storage/secureStorage';
 import { STORAGE_KEYS } from '../constants';
 import type { User, Job, Booking, VendorProfile, ChatMessage, ServiceCategory } from '../types';
@@ -7,12 +7,16 @@ import type { User, Job, Booking, VendorProfile, ChatMessage, ServiceCategory } 
 interface RequestOptions extends RequestInit {
   requiresAuth?: boolean;
   timeoutMs?: number;
+  _isRetry?: boolean;
 }
 
-// ── Dynamic Host Failover with Sticky Memory ──
-const FALLBACK_API_BASE = 'http://76.13.246.224:5001/api';
-const FALLBACK_SOCKET_URL = 'http://76.13.246.224:5001';
+// ── Dynamic Host Management & Multi-Server Support ──
+export type ServerTarget = 'local' | 'vps' | 'auto';
 
+const FALLBACK_API_BASE = `http://${SERVERS.VPS_HOST}/api`;
+const FALLBACK_SOCKET_URL = `http://${SERVERS.VPS_HOST}`;
+
+let currentServerTarget: ServerTarget = 'auto';
 let activeBaseUrl = CONFIG.API_BASE_URL;
 let activeSocketUrl = CONFIG.SOCKET_URL;
 
@@ -24,9 +28,69 @@ export function getActiveSocketUrl(): string {
   return activeSocketUrl;
 }
 
+export function getCurrentServerTarget(): ServerTarget {
+  return currentServerTarget;
+}
+
 export function resetActiveHost(): void {
   activeBaseUrl = CONFIG.API_BASE_URL;
   activeSocketUrl = CONFIG.SOCKET_URL;
+}
+
+export function applyServerTarget(target: ServerTarget, customHost?: string): void {
+  currentServerTarget = target;
+  const localHost = customHost || SERVERS.LOCAL_LAN_HOST;
+
+  if (target === 'local') {
+    activeBaseUrl = `http://${localHost}/api`;
+    activeSocketUrl = `http://${localHost}`;
+  } else if (target === 'vps') {
+    activeBaseUrl = `http://${SERVERS.VPS_HOST}/api`;
+    activeSocketUrl = `http://${SERVERS.VPS_HOST}`;
+  } else {
+    activeBaseUrl = CONFIG.API_BASE_URL;
+    activeSocketUrl = CONFIG.SOCKET_URL;
+  }
+}
+
+export async function switchServerTarget(target: ServerTarget, customHost?: string): Promise<void> {
+  await secureStorage.setItem(STORAGE_KEYS.SERVER_TARGET, target);
+  if (customHost) {
+    await secureStorage.setItem(STORAGE_KEYS.CUSTOM_LOCAL_HOST, customHost);
+  }
+  applyServerTarget(target, customHost);
+}
+
+export async function initializeServerTarget(): Promise<ServerTarget> {
+  try {
+    const saved = await secureStorage.getItem(STORAGE_KEYS.SERVER_TARGET);
+    if (saved === 'local' || saved === 'vps' || saved === 'auto') {
+      currentServerTarget = saved as ServerTarget;
+    }
+    const customHost = await secureStorage.getItem(STORAGE_KEYS.CUSTOM_LOCAL_HOST);
+    applyServerTarget(currentServerTarget, customHost || undefined);
+  } catch (err) {
+    console.warn('[Vendor API] Server target init notice:', err);
+  }
+  return currentServerTarget;
+}
+
+initializeServerTarget().catch(() => {});
+
+export async function pingServerHealth(baseUrl: string, timeoutMs = 3500): Promise<{ ok: boolean; latency: number; service?: string; error?: string }> {
+  const start = Date.now();
+  try {
+    const cleanBase = baseUrl.replace(/\/api\/?$/, '');
+    const res = await doFetchWithTimeout(`${cleanBase}/api/health`, { method: 'GET' }, timeoutMs);
+    const latency = Date.now() - start;
+    if (res.ok) {
+      const data = await res.json().catch(() => ({}));
+      return { ok: true, latency, service: data.service || 'Worklogy API' };
+    }
+    return { ok: false, latency, error: `HTTP ${res.status}` };
+  } catch (err: any) {
+    return { ok: false, latency: Date.now() - start, error: err.message || 'Unreachable' };
+  }
 }
 
 export async function getStoredAuthToken(): Promise<string | null> {
@@ -43,6 +107,70 @@ export async function getStoredAuthToken(): Promise<string | null> {
   }
 
   return null;
+}
+
+export async function getStoredRefreshToken(): Promise<string | null> {
+  const token = await secureStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
+  if (token && typeof token === 'string' && token.trim().length > 0) {
+    return token.trim();
+  }
+  return null;
+}
+
+// ── Single-Flight Silent Token Refresh ──
+let refreshPromise: Promise<string | null> | null = null;
+
+export async function refreshSessionToken(): Promise<string | null> {
+  if (refreshPromise) {
+    return refreshPromise;
+  }
+
+  refreshPromise = (async () => {
+    try {
+      const refreshToken = await getStoredRefreshToken();
+      if (!refreshToken) {
+        return null;
+      }
+
+      const currentBase = activeBaseUrl;
+      const res = await doFetchWithTimeout(
+        `${currentBase}/auth/token/refresh`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refreshToken })
+        },
+        10000
+      );
+
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success && data.token) {
+        await secureStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, data.token);
+        if (data.refreshToken) {
+          await secureStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, data.refreshToken);
+        }
+        if (data.user) {
+          await secureStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(data.user));
+        }
+        return data.token;
+      }
+
+      // If session is revoked or invalid, clear local credentials
+      if (data.code === 'SESSION_REVOKED' || data.code === 'INVALID_REFRESH_TOKEN') {
+        await secureStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
+        await secureStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
+        await secureStorage.removeItem(STORAGE_KEYS.AUTH_USER);
+      }
+      return null;
+    } catch (err) {
+      console.warn('[API Client] Silent refresh warning:', err);
+      return null;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+
+  return refreshPromise;
 }
 
 async function doFetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
@@ -71,7 +199,7 @@ async function doFetchWithTimeout(url: string, init: RequestInit, timeoutMs: num
 }
 
 async function request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
-  const { requiresAuth = true, timeoutMs: customTimeout, ...fetchOptions } = options;
+  const { requiresAuth = true, timeoutMs: customTimeout, _isRetry = false, ...fetchOptions } = options;
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -99,7 +227,16 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
   try {
     response = await doFetchWithTimeout(primaryUrl, { ...fetchOptions, headers }, timeout);
   } catch (networkErr: any) {
-    if (!isLocalHost && !primaryUrl.startsWith(FALLBACK_API_BASE)) {
+    if (currentServerTarget === 'local') {
+      const localErr: any = new Error(
+        `Local backend is unreachable at ${currentBase}. Please run 'npm run dev' in backend or switch to VPS in Settings.`
+      );
+      localErr.isNetworkError = true;
+      localErr.serverTarget = 'local';
+      throw localErr;
+    }
+
+    if (!primaryUrl.startsWith(FALLBACK_API_BASE)) {
       try {
         const fallbackUrl = `${FALLBACK_API_BASE}${endpoint}`;
         response = await doFetchWithTimeout(fallbackUrl, { ...fetchOptions, headers }, 12000);
@@ -115,6 +252,31 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
 
   const data = await response.json().catch(() => ({}));
 
+  // Handle 401 Unauthorized / Token Expired with automatic silent refresh
+  if (response.status === 401 && !_isRetry) {
+    const isAuthRoute =
+      endpoint.startsWith('/auth/login') ||
+      endpoint.startsWith('/auth/otp') ||
+      endpoint.startsWith('/auth/token/refresh');
+
+    if (!isAuthRoute) {
+      const isTokenExpired =
+        data.code === 'TOKEN_EXPIRED' ||
+        (typeof data.message === 'string' && data.message.toLowerCase().includes('expired'));
+
+      if (isTokenExpired) {
+        const refreshedToken = await refreshSessionToken();
+        if (refreshedToken) {
+          // Retry the request with the new access token
+          return await request<T>(endpoint, {
+            ...options,
+            _isRetry: true
+          });
+        }
+      }
+    }
+  }
+
   if (!response.ok) {
     const err: any = new Error(data.message || data.error || `HTTP error ${response.status}`);
     err.status = response.status;
@@ -129,27 +291,101 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
 export const api = {
   // Auth
   auth: {
+    // Mobile OTP (Login & Registration)
+    sendOtp: async (phone: string, purpose: 'login' | 'register' = 'login') => {
+      return await request<{
+        success: boolean;
+        message: string;
+        phone: string;
+        purpose?: string;
+        cooldownSeconds: number;
+        expiresInSeconds: number;
+        debugCode?: string;
+      }>('/auth/otp/send', {
+        method: 'POST',
+        body: JSON.stringify({ phone, purpose }),
+        requiresAuth: false
+      });
+    },
+
+    verifyOtp: async (params: {
+      phone: string;
+      otp: string;
+      deviceInfo?: any;
+    }) => {
+      const data = await request<{
+        success: boolean;
+        token: string;
+        refreshToken?: string;
+        session?: { id: string; expiresAt: string };
+        user: User;
+        profile?: any;
+        isNewUser?: boolean;
+        onboardingStep?: string;
+      }>('/auth/otp/verify', {
+        method: 'POST',
+        body: JSON.stringify(params),
+        requiresAuth: false
+      });
+
+      if (data.token) {
+        await secureStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, data.token);
+        if (data.refreshToken) {
+          await secureStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, data.refreshToken);
+        }
+        await secureStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(data.user));
+      }
+      return data;
+    },
+
+    refreshToken: async () => {
+      return await refreshSessionToken();
+    },
+
     login: async (credentials: { email: string; password: string }) => {
-      const data = await request<{ success: boolean; token: string; user: User }>('/auth/login', {
+      const data = await request<{
+        success: boolean;
+        token: string;
+        refreshToken?: string;
+        user: User;
+      }>('/auth/login', {
         method: 'POST',
         body: JSON.stringify(credentials),
         requiresAuth: false
       });
       if (data.token) {
         await secureStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, data.token);
+        if (data.refreshToken) {
+          await secureStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, data.refreshToken);
+        }
         await secureStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(data.user));
       }
       return data;
     },
 
-    register: async (userData: { name: string; email: string; phone?: string; password: string; role?: string }) => {
-      const data = await request<{ success: boolean; token: string; user: User }>('/auth/register', {
+    register: async (userData: {
+      name: string;
+      email: string;
+      phone?: string;
+      password: string;
+      role?: string;
+      businessName?: string;
+      category?: string;
+      selectedCategory?: string;
+      categories?: string[];
+      serviceDomainIds?: string[];
+      selectedCategories?: string[];
+    }) => {
+      const data = await request<{ success: boolean; token: string; refreshToken?: string; user: User }>('/auth/register', {
         method: 'POST',
         body: JSON.stringify({ ...userData, role: 'vendor' }),
         requiresAuth: false
       });
       if (data.token) {
         await secureStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, data.token);
+        if (data.refreshToken) {
+          await secureStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, data.refreshToken);
+        }
         await secureStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(data.user));
       }
       return data;
@@ -174,8 +410,20 @@ export const api = {
     },
 
     logout: async () => {
-      await secureStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
-      await secureStorage.removeItem(STORAGE_KEYS.AUTH_USER);
+      try {
+        const refreshToken = await getStoredRefreshToken();
+        await request('/auth/session/logout', {
+          method: 'POST',
+          body: JSON.stringify({ refreshToken }),
+          requiresAuth: true
+        }).catch(() => {});
+      } catch {
+        // Continue clearing local storage even if offline
+      } finally {
+        await secureStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
+        await secureStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
+        await secureStorage.removeItem(STORAGE_KEYS.AUTH_USER);
+      }
     },
 
     updatePassword: async (currentPassword: string, newPassword: string) => {
@@ -333,9 +581,15 @@ export const api = {
       return await request<{ success: boolean; service: any }>(`/vendors/services/${id}`);
     },
 
-    create: async (data: any) => {
-      return await request<{ success: boolean; message: string; service: any }>('/vendors/services', {
+    create: async (data: any, idempotencyKey?: string) => {
+      const headers: Record<string, string> = {};
+      const key = idempotencyKey || data?.idempotencyKey;
+      if (key) {
+        headers['x-idempotency-key'] = key;
+      }
+      return await request<{ success: boolean; message: string; service: any; isDuplicate?: boolean }>('/vendors/services', {
         method: 'POST',
+        headers,
         body: JSON.stringify(data)
       });
     },
@@ -792,6 +1046,39 @@ export const api = {
       return await request<{ success: boolean; message: string; ticket: any }>(`/support/${ticketId}/reply`, {
         method: 'POST',
         body: JSON.stringify({ message })
+      });
+    }
+  },
+
+  servers: {
+    getTarget: getCurrentServerTarget,
+    switchTarget: switchServerTarget,
+    ping: pingServerHealth,
+    getActiveBaseUrl,
+    getActiveSocketUrl
+  },
+
+  // Vendor convenience alias
+  vendor: {
+    getProfile: async () => {
+      return await request<{ success: boolean; vendor: VendorProfile }>('/vendors/profile/me');
+    },
+    updateProfile: async (data: Partial<VendorProfile> | any) => {
+      return await request<{ success: boolean; vendor: VendorProfile }>('/vendors/profile/me', {
+        method: 'PUT',
+        body: JSON.stringify(data)
+      });
+    },
+    createService: async (data: any, idempotencyKey?: string) => {
+      const headers: Record<string, string> = {};
+      const key = idempotencyKey || data?.idempotencyKey;
+      if (key) {
+        headers['x-idempotency-key'] = key;
+      }
+      return await request<{ success: boolean; message: string; service: any; isDuplicate?: boolean }>('/vendors/services', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(data)
       });
     }
   }

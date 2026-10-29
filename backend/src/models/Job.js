@@ -95,7 +95,7 @@ const JobSchema = new mongoose.Schema(
     },
     urgency: {
       type: String,
-      enum: ['low', 'medium', 'high', 'emergency'],
+      enum: ['low', 'medium', 'high', 'urgent', 'emergency'],
       default: 'medium'
     },
     status: {

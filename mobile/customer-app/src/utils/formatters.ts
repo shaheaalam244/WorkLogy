@@ -38,6 +38,8 @@ export const getStatusColor = (status: string): string => {
     case 'pending':
     case 'payment_pending':
       return '#F59E0B';
+    case 'quotations_received':
+      return '#059669';
     case 'confirmed':
       return '#2563EB';
     case 'on_the_way':
@@ -58,6 +60,8 @@ export const getStatusColor = (status: string): string => {
 
 export const formatStatusText = (status: string): string => {
   switch (status) {
+    case 'quotations_received':
+      return 'Quotations Received';
     case 'payment_pending':
       return 'Payment Pending';
     case 'on_the_way':

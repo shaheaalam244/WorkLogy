@@ -401,9 +401,20 @@ export default function AdminVendors() {
                       )}
                     </div>
 
-                    <p className="text-xs font-semibold text-slate-700">
-                      {business} · <span className="text-purple-800">{categories}</span>
-                    </p>
+                    <div className="flex items-center gap-1.5 flex-wrap text-xs">
+                      <span className="font-semibold text-slate-700">{business}</span>
+                      <span className="text-slate-400">·</span>
+                      {v.categories?.length > 0 ? (
+                        v.categories.map((c, i) => (
+                          <span key={i} className="px-1.5 py-0.5 rounded-md bg-purple-50 text-purple-800 text-[11px] font-bold border border-purple-200">
+                            {c.name || c}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="text-[11px] font-bold text-amber-700">No domains</span>
+                      )}
+                      <span className="text-[10px] text-slate-400 font-semibold">({v.categories?.length || 0}/3)</span>
+                    </div>
 
                     <div className="flex items-center gap-4 text-xs text-slate-500 flex-wrap">
                       <span className="inline-flex items-center gap-1">

@@ -20,6 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../hooks/useAuth';
 import { api } from '../api/client';
 import { COLORS } from '../theme/colors';
+import { isTemporaryEmail } from '../utils/formatters';
 import type { VendorProfile } from '../types';
 
 export default function VendorEditProfileScreen({ navigation }: any) {
@@ -46,7 +47,7 @@ export default function VendorEditProfileScreen({ navigation }: any) {
   const [fullName, setFullName] = useState(user?.name || '');
   const [businessName, setBusinessName] = useState('');
   const [phone, setPhone] = useState(user?.phone || '');
-  const [email, setEmail] = useState(user?.email || '');
+  const [email, setEmail] = useState(!isTemporaryEmail(user?.email) ? user?.email || '' : '');
   const [bio, setBio] = useState('');
   const [avatarUri, setAvatarUri] = useState<string | null>(user?.avatar || null);
   const [imageError, setImageError] = useState(false);
@@ -65,6 +66,10 @@ export default function VendorEditProfileScreen({ navigation }: any) {
   const [addSkillModalOpen, setAddSkillModalOpen] = useState(false);
   const [newSkillText, setNewSkillText] = useState('');
 
+  // Trade Categories / Specialties
+  const [availableCategories, setAvailableCategories] = useState<any[]>([]);
+  const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>([]);
+
   useEffect(() => {
     loadProfileDetails();
   }, []);
@@ -72,13 +77,32 @@ export default function VendorEditProfileScreen({ navigation }: any) {
   const loadProfileDetails = async () => {
     try {
       setLoading(true);
-      const res = await api.vendors.getProfile();
+      const [res, catRes] = await Promise.all([
+        api.vendors.getProfile(),
+        api.categories.getAll().catch(() => [])
+      ]);
+
+      const catList = Array.isArray(catRes) ? catRes : catRes?.categories || [];
+      setAvailableCategories(catList);
+
       if (res?.vendor) {
         const v = res.vendor;
         setBusinessName(v.businessName || '');
         setBio(v.bio || '');
         if (v.skills && Array.isArray(v.skills) && v.skills.length > 0) {
           setSkills(v.skills);
+        }
+        if (Array.isArray(v.categories) && v.categories.length > 0) {
+          const ids = v.categories.map((c: any) => (c._id || c).toString());
+          setSelectedCategoryIds(ids);
+        } else if (catList.length > 0) {
+          // Pre-select popular primary categories if none configured
+          const defaults = catList.filter((c: any) =>
+            ['electrical-services', 'ac-hvac-services', 'plumbing-services'].includes(c.slug)
+          ).map((c: any) => c._id.toString());
+          if (defaults.length > 0) {
+            setSelectedCategoryIds(defaults);
+          }
         }
         const resolvedAvatar =
           v.avatar ||
@@ -94,7 +118,8 @@ export default function VendorEditProfileScreen({ navigation }: any) {
           setPhone((v.user as any).phone);
         }
         if (typeof v.user === 'object' && (v.user as any)?.email) {
-          setEmail((v.user as any).email);
+          const fEmail = (v.user as any).email;
+          setEmail(!isTemporaryEmail(fEmail) ? fEmail : '');
         }
       }
     } catch (err: any) {
@@ -105,6 +130,28 @@ export default function VendorEditProfileScreen({ navigation }: any) {
       console.warn('Failed to load profile for edit:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleToggleCategory = (catId: string) => {
+    if (selectedCategoryIds.includes(catId)) {
+      if (selectedCategoryIds.length <= 1) {
+        Alert.alert(
+          'Domain Required',
+          'You must have at least 1 service domain selected so you can receive relevant customer job requests.'
+        );
+        return;
+      }
+      setSelectedCategoryIds(selectedCategoryIds.filter((id) => id !== catId));
+    } else {
+      if (selectedCategoryIds.length >= 3) {
+        Alert.alert(
+          'Domain Limit Reached (3 Max)',
+          'A vendor can select a maximum of 3 service domains. Please deselect an existing domain to add another.'
+        );
+        return;
+      }
+      setSelectedCategoryIds([...selectedCategoryIds, catId]);
     }
   };
 
@@ -235,14 +282,19 @@ export default function VendorEditProfileScreen({ navigation }: any) {
 
     try {
       setSaving(true);
-      const payload: Partial<VendorProfile> & { fullName?: string; name?: string; phone?: string; skills?: string[] } = {
+      const payload: Partial<VendorProfile> & { fullName?: string; name?: string; phone?: string; email?: string; skills?: string[]; categories?: string[] } = {
         fullName: fullName.trim(),
         name: fullName.trim(),
         businessName: businessName.trim(),
         phone: phone.trim(),
         bio: bio.trim(),
-        skills
+        skills,
+        categories: selectedCategoryIds
       };
+
+      if (email.trim() && !isTemporaryEmail(email.trim())) {
+        payload.email = email.trim().toLowerCase();
+      }
 
       if (avatarUri && (avatarUri.startsWith('http') || avatarUri.startsWith('file:') || avatarUri.startsWith('content:'))) {
         payload.avatar = avatarUri;
@@ -253,6 +305,7 @@ export default function VendorEditProfileScreen({ navigation }: any) {
         updateLocalUser({
           name: fullName.trim(),
           phone: phone.trim(),
+          ...(payload.email ? { email: payload.email } : {}),
           ...(payload.avatar ? { avatar: payload.avatar } : {})
         });
         Alert.alert('Profile Saved 🎉', 'Your professional profile details have been updated successfully.', [
@@ -376,7 +429,7 @@ export default function VendorEditProfileScreen({ navigation }: any) {
                 style={styles.textInput}
                 value={fullName}
                 onChangeText={setFullName}
-                placeholder="e.g. Mohammad Aalam"
+                placeholder="Enter your full name, e.g. Mohammad Aalam"
                 placeholderTextColor="#94A3B8"
               />
             </View>
@@ -388,7 +441,7 @@ export default function VendorEditProfileScreen({ navigation }: any) {
                 style={styles.textInput}
                 value={businessName}
                 onChangeText={setBusinessName}
-                placeholder="e.g. Aalam Technical Services"
+                placeholder="Enter your business or workshop name, e.g. Aalam Technical Services"
                 placeholderTextColor="#94A3B8"
               />
             </View>
@@ -400,7 +453,7 @@ export default function VendorEditProfileScreen({ navigation }: any) {
                 style={styles.textInput}
                 value={phone}
                 onChangeText={setPhone}
-                placeholder="+91 98765 43210"
+                placeholder="Enter your 10-digit mobile number, e.g. 9876543210"
                 placeholderTextColor="#94A3B8"
                 keyboardType="phone-pad"
               />
@@ -408,13 +461,20 @@ export default function VendorEditProfileScreen({ navigation }: any) {
 
             {/* Email */}
             <View style={styles.fieldGroup}>
-              <Text style={styles.fieldLabel}>Email</Text>
+              <View style={styles.labelCountRow}>
+                <Text style={styles.fieldLabel}>Email Address</Text>
+                {!email ? (
+                  <Text style={styles.emailPromptBadge}>Please fill your email</Text>
+                ) : null}
+              </View>
               <TextInput
-                style={[styles.textInput, styles.disabledInput]}
+                style={styles.textInput}
                 value={email}
-                editable={false}
-                placeholder="vendor@worklogy.com"
+                onChangeText={setEmail}
+                placeholder="Enter email, e.g. name@example.com"
                 placeholderTextColor="#94A3B8"
+                keyboardType="email-address"
+                autoCapitalize="none"
               />
             </View>
 
@@ -428,12 +488,63 @@ export default function VendorEditProfileScreen({ navigation }: any) {
                 style={[styles.textInput, styles.textArea]}
                 value={bio}
                 onChangeText={(text) => text.length <= 300 && setBio(text)}
-                placeholder="Professional AC Technician with 5+ years of experience. I provide reliable and quality service for AC installation, repair and maintenance."
+                placeholder="Introduce your business, trade background, years of hands-on experience, and quality commitment to customers..."
                 placeholderTextColor="#94A3B8"
                 multiline
                 numberOfLines={4}
                 textAlignVertical="top"
               />
+            </View>
+          </View>
+
+          {/* ── TRADE CATEGORIES / SPECIALTIES SECTION ── */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 18 }}>
+            <Text style={styles.sectionHeading}>Trade Domains</Text>
+            <View style={{
+              backgroundColor: selectedCategoryIds.length === 3 ? '#ECFDF5' : '#F1F5F9',
+              paddingHorizontal: 8,
+              paddingVertical: 3,
+              borderRadius: 8,
+              borderWidth: 1,
+              borderColor: selectedCategoryIds.length === 3 ? '#A7F3D0' : '#E2E8F0'
+            }}>
+              <Text style={{
+                fontSize: 10,
+                fontWeight: '700',
+                color: selectedCategoryIds.length === 3 ? '#065F46' : '#475569'
+              }}>
+                {selectedCategoryIds.length} of 3 domains selected
+              </Text>
+            </View>
+          </View>
+          <Text style={styles.sectionSubtitle}>
+            Select 1 to 3 service domains you offer. Open customer requests matching your selected domains will appear in your job feed.
+          </Text>
+
+          <View style={styles.skillsCard}>
+            <View style={styles.skillsRow}>
+              {availableCategories.map((cat) => {
+                const catIdStr = (cat._id || cat).toString();
+                const isSelected = selectedCategoryIds.includes(catIdStr);
+                return (
+                  <TouchableOpacity
+                    key={catIdStr}
+                    style={[styles.categoryChip, isSelected && styles.categoryChipActive]}
+                    onPress={() => handleToggleCategory(catIdStr)}
+                    activeOpacity={0.75}
+                  >
+                    <Ionicons
+                      name={isSelected ? 'checkmark-circle' : 'add-circle-outline'}
+                      size={15}
+                      color={isSelected ? '#065F46' : '#64748B'}
+                      style={{ marginRight: 6 }}
+                    />
+                    <Text style={[styles.categoryChipText, isSelected && styles.categoryChipTextActive]}>
+                      {cat.name}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           </View>
 
@@ -494,7 +605,7 @@ export default function VendorEditProfileScreen({ navigation }: any) {
               style={styles.modalInput}
               value={newSkillText}
               onChangeText={setNewSkillText}
-              placeholder="e.g. Copper Pipe Brazing"
+              placeholder="Enter trade skill or tool expertise, e.g. Copper Pipe Brazing"
               placeholderTextColor="#94A3B8"
               autoFocus
             />
@@ -691,6 +802,35 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8
   },
+  sectionSubtitle: {
+    fontSize: 12,
+    color: '#64748B',
+    marginBottom: 10,
+    lineHeight: 17
+  },
+  categoryChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20
+  },
+  categoryChipActive: {
+    backgroundColor: '#ECFDF5',
+    borderColor: '#059669'
+  },
+  categoryChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#475569'
+  },
+  categoryChipTextActive: {
+    color: '#065F46',
+    fontWeight: '700'
+  },
   skillChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -808,5 +948,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#FFFFFF'
+  },
+  emailPromptBadge: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#065F46'
   }
 });

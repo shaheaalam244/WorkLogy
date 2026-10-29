@@ -4,9 +4,118 @@ import Booking from '../models/Booking.js';
 import Notification from '../models/Notification.js';
 import Transaction from '../models/Transaction.js';
 import VendorProfile from '../models/VendorProfile.js';
+import Conversation from '../models/Conversation.js';
+import Message from '../models/Message.js';
 import { generateSecureOtp } from '../utils/otp.js';
 import { getIO } from '../config/socket.js';
 import { notifyNewQuotation, notifyBookingConfirmed } from '../services/notification.service.js';
+
+/**
+ * Synchronize a quotation into a dedicated chat conversation between customer and vendor
+ */
+export async function syncQuotationToChat({ application, job, vendorId, customerId }) {
+  try {
+    const custId = (customerId?._id || customerId).toString();
+    const vendId = (vendorId?._id || vendorId).toString();
+    const jId = (job?._id || job).toString();
+    const jTitle = job?.title || 'Service Request';
+
+    // 1. Find or create conversation
+    let conversation = await Conversation.findOne({
+      participants: { $all: [custId, vendId] },
+      relatedJob: jId
+    });
+
+    if (!conversation) {
+      conversation = await Conversation.findOne({
+        participants: { $all: [custId, vendId] }
+      });
+      if (conversation) {
+        if (!conversation.relatedJob) {
+          conversation.relatedJob = jId;
+          await conversation.save();
+        }
+      } else {
+        conversation = await Conversation.create({
+          participants: [custId, vendId],
+          relatedJob: jId
+        });
+      }
+    }
+
+    // 2. Prepare quotation message payload
+    const quotationData = {
+      quotationId: application._id,
+      applicationId: application._id,
+      jobId: jId,
+      jobTitle: jTitle,
+      proposedAmount: application.proposedAmount,
+      pricingBasis: application.pricingBasis || 'fixed',
+      proposedSchedule: application.proposedSchedule || 'Flexible',
+      estimatedDuration: application.estimatedDuration || '1-2 hours',
+      coverLetter: application.coverLetter || '',
+      status: application.status || 'submitted'
+    };
+
+    const quoteText = `📋 Service Quotation: ₹${application.proposedAmount} for "${jTitle}". Proposed schedule: ${quotationData.proposedSchedule}.`;
+
+    // 3. Check for existing quotation message to prevent duplicates on resubmissions
+    let message = await Message.findOne({
+      conversation: conversation._id,
+      $or: [
+        { 'quotationData.quotationId': application._id },
+        { 'quotationData.applicationId': application._id }
+      ]
+    });
+
+    if (message) {
+      message.quotationData = quotationData;
+      message.text = quoteText;
+      await message.save();
+    } else {
+      message = await Message.create({
+        conversation: conversation._id,
+        sender: vendId,
+        recipient: custId,
+        text: quoteText,
+        messageType: 'quotation',
+        quotationData,
+        isRead: false
+      });
+
+      await Conversation.findByIdAndUpdate(conversation._id, {
+        lastMessage: message._id,
+        lastMessageAt: message.createdAt
+      });
+    }
+
+    // 4. Socket.IO Broadcast to conversation and recipient personal rooms
+    const io = getIO();
+    if (io) {
+      const populated = await Message.findById(message._id)
+        .populate('sender', 'name avatar role')
+        .lean();
+
+      io.to(`conversation_${conversation._id}`).emit('receive_message', populated);
+      io.to(`user_${custId}`).emit('new_message_notification', {
+        conversationId: conversation._id,
+        message: populated,
+        senderName: populated?.sender?.name || 'Service Professional'
+      });
+      io.to(`user_${custId}`).emit('job_quotation_received', {
+        jobId: jId,
+        quotationId: application._id.toString(),
+        amount: application.proposedAmount,
+        conversationId: conversation._id.toString()
+      });
+    }
+
+    return { conversation, message };
+  } catch (err) {
+    console.warn('Non-fatal: syncQuotationToChat warning:', err.message);
+    return null;
+  }
+}
 
 
 
@@ -71,6 +180,24 @@ export const applyForJob = async (req, res, next) => {
         await existing.save();
 
         await Job.findByIdAndUpdate(jobId, { $inc: { applicantsCount: 1 } });
+
+        // Synchronize quotation message into dedicated customer-vendor chat
+        await syncQuotationToChat({
+          application: existing,
+          job,
+          vendorId: req.user.id,
+          customerId: job.customer
+        });
+
+        // Notify the customer via unified notification service
+        await notifyNewQuotation({
+          customerId: job.customer,
+          vendorId: req.user.id,
+          job,
+          proposedAmount: amountNum,
+          quotationId: existing._id
+        });
+
         return res.status(200).json({ success: true, message: 'Proposal re-submitted', application: existing });
       }
       return res.status(400).json({ success: false, message: 'You have already submitted an active proposal for this job' });
@@ -91,7 +218,15 @@ export const applyForJob = async (req, res, next) => {
 
     await Job.findByIdAndUpdate(jobId, { $inc: { applicantsCount: 1 } });
 
-    // Notify the customer via unified notification service (in-app + email)
+    // Synchronize quotation message into dedicated customer-vendor chat
+    await syncQuotationToChat({
+      application,
+      job,
+      vendorId: req.user.id,
+      customerId: job.customer
+    });
+
+    // Notify the customer via unified notification service (in-app + email + push)
     await notifyNewQuotation({
       customerId: job.customer,
       vendorId: req.user.id,
@@ -99,7 +234,6 @@ export const applyForJob = async (req, res, next) => {
       proposedAmount: amountNum,
       quotationId: application._id
     });
-
 
     res.status(201).json({ success: true, message: 'Proposal submitted successfully', application });
   } catch (error) {
@@ -123,9 +257,31 @@ export const getJobApplications = async (req, res, next) => {
 
     const applications = await Application.find(filter)
       .populate('vendor', 'name email avatar phone')
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
 
-    res.status(200).json({ success: true, applications });
+    // Attach vendorProfile info (businessName, rating, reviewCount)
+    const vendorIds = applications.map(a => a.vendor?._id || a.vendor).filter(Boolean);
+    const profiles = await VendorProfile.find({ user: { $in: vendorIds } })
+      .select('user businessName rating reviewCount completedJobsCount bio avatar isAvailableNow')
+      .lean();
+
+    const profileMap = new Map();
+    profiles.forEach(p => profileMap.set(p.user.toString(), p));
+
+    const enrichedApplications = applications.map(a => {
+      const vId = (a.vendor?._id || a.vendor || '').toString();
+      const prof = profileMap.get(vId);
+      return {
+        ...a,
+        vendorProfile: prof || null,
+        vendorName: prof?.businessName || a.vendor?.name || 'Service Professional',
+        vendorRating: prof?.rating || 4.9,
+        vendorAvatar: a.vendor?.avatar || prof?.avatar || null
+      };
+    });
+
+    res.status(200).json({ success: true, count: enrichedApplications.length, applications: enrichedApplications });
   } catch (error) {
     next(error);
   }
@@ -196,8 +352,25 @@ export const updateApplicationStatus = async (req, res, next) => {
         return res.status(403).json({ success: false, message: 'Only the property owner can accept or reject proposals' });
       }
 
-      if (status === 'accepted' && (application.job.status !== 'open' || application.job.isDeleted)) {
-        return res.status(409).json({ success: false, message: 'This request has already been cancelled or is no longer available.' });
+      if (['accepted', 'rejected', 'withdrawn'].includes(application.status)) {
+        return res.status(400).json({
+          success: false,
+          message: `This quotation has already been ${application.status}.`
+        });
+      }
+
+      if (status === 'accepted') {
+        if (application.job.status !== 'open' || application.job.isDeleted || application.job.selectedVendor) {
+          return res.status(409).json({ success: false, message: 'This request has already been assigned, cancelled, or is no longer available.' });
+        }
+
+        const vendorProfile = await VendorProfile.findOne({ user: application.vendor });
+        if (!vendorProfile || vendorProfile.approvalStatus !== 'approved') {
+          return res.status(400).json({
+            success: false,
+            message: 'The selected service professional is not currently verified or approved for assignments.'
+          });
+        }
       }
     }
 
@@ -314,10 +487,47 @@ export const updateApplicationStatus = async (req, res, next) => {
       });
 
 
+      // Update quotation message status in conversation
+      await Message.updateMany(
+        { 'quotationData.quotationId': application._id },
+        {
+          $set: {
+            'quotationData.status': 'accepted',
+            text: `✓ Accepted Quotation: ₹${application.proposedAmount} for "${application.job.title}". Booking confirmed!`
+          }
+        }
+      ).catch(() => {});
+
+      // Update rejected messages for this job
+      await Message.updateMany(
+        {
+          'quotationData.jobId': application.job._id,
+          'quotationData.quotationId': { $ne: application._id }
+        },
+        {
+          $set: {
+            'quotationData.status': 'rejected',
+            text: `Quotation not selected for "${application.job.title}".`
+          }
+        }
+      ).catch(() => {});
+
       const io = getIO();
       if (io) {
         io.emit('job_taken', { jobId: application.job._id.toString(), title: application.job.title });
         io.emit('job_status_updated', { jobId: application.job._id.toString(), status: 'assigned' });
+        io.to(`user_${application.job.customer.toString()}`).emit('quotation_status_updated', {
+          jobId: application.job._id.toString(),
+          quotationId: application._id.toString(),
+          status: 'accepted',
+          bookingId: newBooking._id.toString()
+        });
+        io.to(`user_${application.vendor.toString()}`).emit('quotation_status_updated', {
+          jobId: application.job._id.toString(),
+          quotationId: application._id.toString(),
+          status: 'accepted',
+          bookingId: newBooking._id.toString()
+        });
       }
 
       return res.status(200).json({
@@ -327,6 +537,16 @@ export const updateApplicationStatus = async (req, res, next) => {
         booking: newBooking
       });
     } else if (status === 'rejected') {
+      await Message.updateMany(
+        { 'quotationData.quotationId': application._id },
+        {
+          $set: {
+            'quotationData.status': 'rejected',
+            text: `Quotation declined by client for "${application.job.title}".`
+          }
+        }
+      ).catch(() => {});
+
       await Notification.create({
         recipient: application.vendor,
         sender: req.user.id,
@@ -335,6 +555,15 @@ export const updateApplicationStatus = async (req, res, next) => {
         message: `Your quotation on "${application.job.title}" was not selected by the property owner.`,
         link: `/jobs/${application.job._id}`
       });
+
+      const io = getIO();
+      if (io) {
+        io.to(`user_${application.vendor.toString()}`).emit('quotation_status_updated', {
+          jobId: application.job._id.toString(),
+          quotationId: application._id.toString(),
+          status: 'rejected'
+        });
+      }
     }
 
 

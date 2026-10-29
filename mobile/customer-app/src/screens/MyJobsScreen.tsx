@@ -37,7 +37,12 @@ export default function MyJobsScreen({ navigation }: any) {
 
   // Subscribe to centralized data synchronization events
   useEffect(() => {
-    const unsubscribe = dataSyncService.subscribe('BOOKINGS_CHANGED', () => {
+    const unsubscribe = dataSyncService.subscribe('BOOKINGS_CHANGED', (payload: any) => {
+      if (payload?.bookingId && payload?.hasReview) {
+        setBookings((prev) =>
+          prev.map((b) => (b._id === payload.bookingId ? { ...b, hasReview: true } : b))
+        );
+      }
       loadBookings(true);
     });
     return () => {
@@ -182,6 +187,9 @@ export default function MyJobsScreen({ navigation }: any) {
     const isCompleted = item.status === 'completed';
     const canCancel = ['pending', 'pending_acceptance', 'open', 'confirmed', 'scheduled'].includes(item.status);
     const amount = item.pricing?.amount ?? item.totalAmount ?? item.amount ?? 0;
+    const quotesCount = item.quotationsCount ?? item.applicantsCount ?? 0;
+    const hasQuotes = Boolean(item.isJobRequest && quotesCount > 0);
+    const quotedAmount = item.quotedAmount ?? item.pricing?.quotedAmount ?? item.minQuotedAmount ?? 0;
     const title = item.serviceTitle || item.title || 'Home Service';
     const refCode = item.bookingReference || (item._id ? `#${item._id.slice(-6).toUpperCase()}` : '');
     const vendorName = item.vendor?.businessName || item.vendor?.name || item.vendorName;
@@ -221,9 +229,9 @@ export default function MyJobsScreen({ navigation }: any) {
           <Text style={{ fontSize: 13, color: '#475569', marginTop: 4, fontWeight: '600' }}>
             Specialist: {vendorName}
           </Text>
-        ) : item.isJobRequest && (item.applicantsCount || 0) > 0 ? (
+        ) : hasQuotes ? (
           <Text style={{ fontSize: 13, color: '#059669', marginTop: 4, fontWeight: '700' }}>
-            💬 {item.applicantsCount} Professional Quotes Received
+            💬 {quotesCount === 1 ? '1 Professional Quote Received' : `${quotesCount} Professional Quotes Received`}
           </Text>
         ) : null}
 
@@ -243,9 +251,22 @@ export default function MyJobsScreen({ navigation }: any) {
 
         {/* Amount & Actions */}
         <View style={styles.cardFooter}>
-          <Text style={styles.amountText}>
-            {amount > 0 ? formatCurrency(amount) : 'Quote Based'}
-          </Text>
+          <View>
+            {hasQuotes && quotedAmount > 0 ? (
+              <View>
+                <Text style={[styles.amountText, { color: '#06684F' }]}>
+                  {quotesCount > 1 ? `From ${formatCurrency(quotedAmount)}` : `Quoted: ${formatCurrency(quotedAmount)}`}
+                </Text>
+                <Text style={{ fontSize: 11, color: '#059669', fontWeight: '600', marginTop: 1 }}>
+                  Awaiting decision
+                </Text>
+              </View>
+            ) : (
+              <Text style={styles.amountText}>
+                {amount > 0 ? formatCurrency(amount) : 'Quote Based'}
+              </Text>
+            )}
+          </View>
           <View style={styles.actionRow}>
             {canCancel && (
               <TouchableOpacity
@@ -267,6 +288,9 @@ export default function MyJobsScreen({ navigation }: any) {
                   const targetVendorId = item.vendor?._id || item.vendor?.id || item.vendor?.user?._id || item.vendor;
                   navigation.navigate('ReviewModal', {
                     bookingId: item._id,
+                    jobId: (item as any).jobId || (item as any).job?._id || (item as any).job,
+                    bookingReference: item.bookingReference,
+                    serviceTitle: item.serviceTitle,
                     vendorName: item.vendor?.businessName || item.vendor?.name,
                     vendorId: targetVendorId
                   });
@@ -289,10 +313,15 @@ export default function MyJobsScreen({ navigation }: any) {
               </TouchableOpacity>
             )}
             <TouchableOpacity
-              style={styles.detailsBtn}
+              style={[
+                styles.detailsBtn,
+                hasQuotes && { backgroundColor: '#ECFDF5', borderColor: '#A7F3D0' }
+              ]}
               onPress={() => navigation.navigate('JobDetail', { bookingId: item._id })}
             >
-              <Text style={styles.detailsBtnText}>Details ›</Text>
+              <Text style={[styles.detailsBtnText, hasQuotes && { color: '#06684F' }]}>
+                {hasQuotes ? 'View Quotes ›' : 'Details ›'}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>

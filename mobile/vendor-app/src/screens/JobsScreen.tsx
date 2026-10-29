@@ -1,4 +1,5 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+
 import {
   View,
   Text,
@@ -28,8 +29,7 @@ import type { Job, Booking } from '../types';
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 export type JobTab =
-  | 'requests'
-  | 'new'
+  | 'all'
   | 'quoted'
   | 'accepted'
   | 'in_progress'
@@ -46,22 +46,15 @@ interface TabDefinition {
 
 const TAB_DEFINITIONS: TabDefinition[] = [
   {
-    key: 'requests',
-    label: 'Direct Inquiries',
-    icon: 'chatbubbles-outline',
-    emptyTitle: 'No Direct Inquiries',
-    emptySubtext: 'Customer inquiries sent directly to your profile will appear here.'
-  },
-  {
-    key: 'new',
-    label: 'New Requests',
-    icon: 'flash-outline',
-    emptyTitle: 'No New Requests',
-    emptySubtext: 'Open service tenders matching your approved trade categories in Lucknow will appear here.'
+    key: 'all',
+    label: 'All Jobs',
+    icon: 'briefcase-outline',
+    emptyTitle: 'No matching jobs found',
+    emptySubtext: 'Try another domain or refresh the feed.'
   },
   {
     key: 'quoted',
-    label: 'Quoted',
+    label: 'My Quotes',
     icon: 'document-text-outline',
     emptyTitle: 'No Active Quotations',
     emptySubtext: 'Proposals you submit on open customer requests will be tracked here.'
@@ -96,10 +89,37 @@ const TAB_DEFINITIONS: TabDefinition[] = [
   }
 ];
 
+const normalizeTab = (tab?: string): JobTab => {
+  if (!tab || tab === 'new' || tab === 'requests' || tab === 'all') return 'all';
+  if (tab === 'quoted' || tab === 'my_quotes') return 'quoted';
+  if (tab === 'accepted') return 'accepted';
+  if (tab === 'in_progress') return 'in_progress';
+  if (tab === 'completed') return 'completed';
+  if (tab === 'cancelled') return 'cancelled';
+  return 'all';
+};
+
+function formatTimeAgo(dateInput?: string | Date): string {
+  if (!dateInput) return 'Recently';
+  const diffMs = Date.now() - new Date(dateInput).getTime();
+  if (isNaN(diffMs) || diffMs < 0) return 'Recently';
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHrs = Math.floor(diffMin / 60);
+  const diffDays = Math.floor(diffHrs / 24);
+
+  if (diffMin < 1) return 'Just now';
+  if (diffMin < 60) return `${diffMin}m ago`;
+  if (diffHrs < 24) return `${diffHrs}h ago`;
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return formatDate(typeof dateInput === 'string' ? dateInput : dateInput.toISOString());
+}
+
 export default function JobsScreen({ navigation, route }: any) {
   const { user } = useAuth();
   const appNav = useNavigation();
-  const initialTab: JobTab = route?.params?.initialTab || 'new';
+  const initialTab: JobTab = normalizeTab(route?.params?.initialTab);
   const categoryFilter: string | undefined = route?.params?.category;
 
   const [activeTab, setActiveTab] = useState<JobTab>(initialTab);
@@ -107,6 +127,16 @@ export default function JobsScreen({ navigation, route }: any) {
   const [assignedJobs, setAssignedJobs] = useState<Job[]>([]);
   const [myApplications, setMyApplications] = useState<any[]>([]);
   const [myBookings, setMyBookings] = useState<Booking[]>([]);
+  const [allCategories, setAllCategories] = useState<any[]>([]);
+  const [approvedCategoriesList, setApprovedCategoriesList] = useState<any[]>([]);
+
+  // Domain Filter & Search State
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(
+    categoryFilter || null
+  );
+  const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -133,6 +163,25 @@ export default function JobsScreen({ navigation, route }: any) {
   const [workDescription, setWorkDescription] = useState('');
   const [submittingQuote, setSubmittingQuote] = useState(false);
 
+  // Debounce search query to prevent unnecessary re-computations
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedSearch(searchQuery.trim());
+    }, 280);
+    return () => clearTimeout(handler);
+  }, [searchQuery]);
+
+  // Synchronize active domain and initial tab when navigated from My Domains or other screens
+  useEffect(() => {
+    const target = route?.params?.category ?? route?.params?.activeDomain;
+    if (target !== undefined) {
+      setSelectedCategory(!target || target === 'all' ? null : target);
+    }
+    if (route?.params?.initialTab) {
+      setActiveTab(normalizeTab(route.params.initialTab));
+    }
+  }, [route?.params?.category, route?.params?.activeDomain, route?.params?.initialTab]);
+
   useEffect(() => {
     if (!quoteModalVisible) return;
     const unregister = appNav.registerBackHandler(() => {
@@ -142,8 +191,12 @@ export default function JobsScreen({ navigation, route }: any) {
     return unregister;
   }, [quoteModalVisible, appNav]);
 
+  const isFetchingRef = useRef(false);
+
   const loadAllJobsData = useCallback(
     async (isSilent = false) => {
+      if (isFetchingRef.current) return;
+      isFetchingRef.current = true;
       try {
         if (isSilent) {
           setRefreshing(true);
@@ -163,11 +216,11 @@ export default function JobsScreen({ navigation, route }: any) {
           return;
         }
 
-        // Concurrent fetch of all required streams
-        const [jobsRes, assignedRes, appsRes, bookRes, notifRes] = await Promise.all([
-          api.jobs.getOpenJobs({ tab: 'all', category: categoryFilter }).catch((e) => {
+        // Concurrent fetch of all required streams including catalogue categories
+        const [jobsRes, assignedRes, appsRes, bookRes, notifRes, catRes] = await Promise.all([
+          api.jobs.getOpenJobs({ tab: 'all' }).catch((e) => {
             console.warn('Open jobs fetch warning:', e);
-            return { jobs: [], configurationStatus: 'ready' as const };
+            return { jobs: [], configurationStatus: 'ready' as const, vendorCoverage: undefined };
           }),
           api.jobs.getOpenJobs({ tab: 'assigned' }).catch((e) => {
             console.warn('Assigned jobs fetch warning:', e);
@@ -181,7 +234,8 @@ export default function JobsScreen({ navigation, route }: any) {
             console.warn('Bookings fetch warning:', e);
             return { bookings: [] };
           }),
-          api.notifications.getUnreadCount().catch(() => ({ count: 0 }))
+          api.notifications.getUnreadCount().catch(() => ({ count: 0 })),
+          api.categories.getAll().catch(() => ({ categories: [] }))
         ]);
 
         if (jobsRes?.jobs) {
@@ -189,6 +243,13 @@ export default function JobsScreen({ navigation, route }: any) {
         }
         if (jobsRes?.configurationStatus) {
           setConfigurationStatus(jobsRes.configurationStatus);
+        }
+        const openCoverage = (jobsRes as any)?.vendorCoverage;
+        if (openCoverage?.categories) {
+          setApprovedCategoriesList(openCoverage.categories);
+        }
+        if (catRes?.categories && Array.isArray(catRes.categories)) {
+          setAllCategories(catRes.categories);
         }
         if (assignedRes?.jobs) {
           setAssignedJobs(assignedRes.jobs);
@@ -215,11 +276,12 @@ export default function JobsScreen({ navigation, route }: any) {
           setApiError(msg || 'Unable to connect to jobs server. Please check your connection.');
         }
       } finally {
+        isFetchingRef.current = false;
         setLoading(false);
         setRefreshing(false);
       }
     },
-    [categoryFilter]
+    []
   );
 
   useEffect(() => {
@@ -381,15 +443,93 @@ export default function JobsScreen({ navigation, route }: any) {
     );
   };
 
-  // ── UNIFIED FILTERING PIPELINE ACROSS ALL 7 TABS ──
+  // ── UNIFIED FILTERING PIPELINE ACROSS ALL 6 TABS ──
   const itemsByTab = useMemo(() => {
     // 1. Direct inquiries: Pending customer bookings sent directly to this vendor
-    const requests = myBookings.filter((b) => b.status === 'pending_acceptance');
+    const directInquiries = myBookings.filter((b) => b.status === 'pending_acceptance');
 
-    // 2. New requests: Open eligible opportunities without an assigned vendor
-    const newItems = openJobs.filter(
+    // 2. Open marketplace opportunities without an assigned vendor
+    const openMarketplaceJobs = openJobs.filter(
       (j) => ['open', 'dispatching'].includes(j.status) && !j.selectedVendor
     );
+
+    // Prevent duplicate entries between direct inquiries and marketplace jobs
+    const directJobIds = new Set(
+      directInquiries
+        .map((b: any) => (b.job?._id || b.job || b.jobId?._id || b.jobId || '').toString())
+        .filter(Boolean)
+    );
+
+    // Unified "All Jobs": Combine direct inquiries + non-duplicated open jobs
+    const rawAllItems: any[] = [
+      ...directInquiries,
+      ...openMarketplaceJobs.filter((j) => !directJobIds.has(j._id.toString()))
+    ];
+
+    // Filter "All Jobs" by selected category and debounced search
+    const filteredAllItems = rawAllItems.filter((item) => {
+      // Category / Domain Match
+      if (selectedCategory && selectedCategory !== 'all') {
+        const itemCatId = (
+          item.category?._id ||
+          item.category ||
+          item.job?.category?._id ||
+          item.job?.category ||
+          ''
+        ).toString();
+        const itemCatSlug = (
+          item.category?.slug ||
+          item.job?.category?.slug ||
+          ''
+        ).toLowerCase();
+        const itemCatName = (
+          item.category?.name ||
+          item.job?.category?.name ||
+          item.serviceTitle ||
+          ''
+        ).toLowerCase();
+
+        const matchId = itemCatId === selectedCategory;
+        const matchSlug = itemCatSlug === selectedCategory.toLowerCase();
+        const matchName =
+          itemCatName.includes(selectedCategory.toLowerCase()) ||
+          selectedCategory.toLowerCase().includes(itemCatName);
+
+        if (!matchId && !matchSlug && !matchName) {
+          return false;
+        }
+      }
+
+      // Search Query Match
+      if (debouncedSearch) {
+        const queryLower = debouncedSearch.toLowerCase();
+        const title = (item.title || item.serviceTitle || item.job?.title || '').toLowerCase();
+        const desc = (item.description || item.problemDescription || '').toLowerCase();
+        const locality = (
+          item.location?.locality ||
+          item.location?.city ||
+          item.address?.locality ||
+          item.address?.city ||
+          ''
+        ).toLowerCase();
+        const catName = (
+          item.category?.name ||
+          item.job?.category?.name ||
+          item.serviceTitle ||
+          ''
+        ).toLowerCase();
+
+        const matches =
+          title.includes(queryLower) ||
+          desc.includes(queryLower) ||
+          locality.includes(queryLower) ||
+          catName.includes(queryLower);
+
+        if (!matches) return false;
+      }
+
+      return true;
+    });
 
     // 3. Quoted: Proposals submitted by vendor
     const quotedItems = myApplications;
@@ -398,7 +538,8 @@ export default function JobsScreen({ navigation, route }: any) {
     const inProgressBookings = myBookings.filter((b) =>
       ['on_the_way', 'arrived', 'in_progress', 'completion_pending'].includes(b.status)
     );
-    const getBookingJobId = (b: any) => (b.job?._id || b.job || b.jobId?._id || b.jobId || '').toString();
+    const getBookingJobId = (b: any) =>
+      (b.job?._id || b.job || b.jobId?._id || b.jobId || '').toString();
 
     const inProgressBookingJobIds = new Set(
       inProgressBookings.map(getBookingJobId).filter(Boolean)
@@ -464,24 +605,87 @@ export default function JobsScreen({ navigation, route }: any) {
     const cancelledItems = [...cancelledBookings, ...cancelledJobs];
 
     return {
-      requests,
-      new: newItems,
+      all: filteredAllItems,
+      rawAllCount: rawAllItems.length,
+      rawAllItems,
       quoted: quotedItems,
       accepted: acceptedItems,
       in_progress: inProgressItems,
       completed: completedItems,
       cancelled: cancelledItems
     };
-  }, [openJobs, assignedJobs, myApplications, myBookings]);
+  }, [openJobs, assignedJobs, myApplications, myBookings, selectedCategory, debouncedSearch]);
 
   const currentItems = itemsByTab[activeTab] || [];
+
+  // Domain Filter Options dynamically restricted to ONLY vendor's approved domains
+  const domainFilterOptions = useMemo(() => {
+    const list: any[] = [];
+    const seen = new Set<string>();
+
+    if (Array.isArray(approvedCategoriesList)) {
+      approvedCategoriesList.forEach((c) => {
+        if (!c) return;
+        const id = (c._id || c.id || c).toString();
+        if (id && !seen.has(id)) {
+          seen.add(id);
+          list.push({
+            _id: id,
+            name: c.name || 'Service',
+            slug: c.slug || ''
+          });
+        }
+      });
+    }
+
+    return list;
+  }, [approvedCategoriesList]);
+
+  // Count open opportunities per domain for badges on category pills
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    const rawItems = itemsByTab.rawAllItems || [];
+    rawItems.forEach((item) => {
+      const catId = (
+        item.category?._id ||
+        item.category ||
+        item.job?.category?._id ||
+        item.job?.category ||
+        ''
+      ).toString();
+      const catSlug = (
+        item.category?.slug ||
+        item.job?.category?.slug ||
+        ''
+      ).toLowerCase();
+      if (catId) counts[catId] = (counts[catId] || 0) + 1;
+      if (catSlug) counts[catSlug] = (counts[catSlug] || 0) + 1;
+    });
+    return counts;
+  }, [itemsByTab.rawAllItems]);
+
+  const selectedDomainName = useMemo(() => {
+    if (!selectedCategory || selectedCategory === 'all') return 'All Domains';
+    const found = domainFilterOptions.find(
+      (c) =>
+        c._id === selectedCategory ||
+        c.slug === selectedCategory.toLowerCase() ||
+        c.name.toLowerCase() === selectedCategory.toLowerCase()
+    );
+    return found?.name || 'Selected Domain';
+  }, [selectedCategory, domainFilterOptions]);
 
   const tabs = useMemo(() => {
     return TAB_DEFINITIONS.map((def) => ({
       ...def,
-      count: (itemsByTab[def.key] || []).length
+      count:
+        def.key === 'all'
+          ? selectedCategory || debouncedSearch
+            ? (itemsByTab.all || []).length
+            : itemsByTab.rawAllCount || 0
+          : (itemsByTab[def.key] || []).length
     }));
-  }, [itemsByTab]);
+  }, [itemsByTab, selectedCategory, debouncedSearch]);
 
   const activeTabMeta = useMemo(() => {
     return TAB_DEFINITIONS.find((t) => t.key === activeTab) || TAB_DEFINITIONS[0];
@@ -532,26 +736,24 @@ export default function JobsScreen({ navigation, route }: any) {
   };
 
   const renderJobCard = ({ item }: { item: any }) => {
-    const isRequest = activeTab === 'requests';
+    const isDirectInquiry = item.status === 'pending_acceptance';
     const isApplication = activeTab === 'quoted';
-    const isOpenJob = activeTab === 'new';
-    const isBooking =
-      Boolean(item.bookingReference) ||
-      (!isApplication && !isOpenJob && Boolean(item.serviceTitle));
+    const isBooking = Boolean(item.bookingReference);
+    const isOpenJob = ['open', 'dispatching'].includes(item.status) && !item.selectedVendor;
 
-    const title = isBooking
+    const title = isBooking || isDirectInquiry
       ? item.serviceTitle || item.job?.title || 'Service Booking'
       : isApplication
       ? item.job?.title || 'Quoted Job'
       : item.title;
 
-    const catSlug = isBooking
+    const catSlug = isBooking || isDirectInquiry
       ? item.category || item.job?.category?.slug || item.serviceTitle
       : isApplication
       ? item.job?.category?.slug || item.job?.title
       : item.category?.slug || item.category?.name || item.title;
 
-    const categoryName = isBooking
+    const categoryName = isBooking || isDirectInquiry
       ? item.category || item.job?.category?.name || 'Home Service'
       : isApplication
       ? item.job?.category?.name || 'Home Service'
@@ -559,7 +761,7 @@ export default function JobsScreen({ navigation, route }: any) {
 
     const jobImage = getServiceImage(catSlug || title);
 
-    const locality = isBooking
+    const locality = isBooking || isDirectInquiry
       ? item.address?.locality
         ? `${item.address.locality}, ${item.address.city || 'Lucknow'}`
         : item.address?.city || 'Lucknow'
@@ -571,19 +773,19 @@ export default function JobsScreen({ navigation, route }: any) {
       ? `${item.location.locality}, ${item.location.city || 'Lucknow'}`
       : item.location?.city || item.address?.city || 'Lucknow';
 
-    const customerName = isBooking
+    const customerName = isBooking || isDirectInquiry
       ? item.customer?.name || 'Customer'
       : isApplication
       ? item.job?.customer?.name || 'Customer'
       : item.customer?.name || 'Homeowner';
 
-    const referenceId = isBooking
+    const referenceId = isBooking || isDirectInquiry
       ? item.bookingReference || `#${String(item._id).slice(-6).toUpperCase()}`
       : `#${String(item._id).slice(-6).toUpperCase()}`;
 
     const statusBadge = getStatusBadge(item.status, item.urgency);
 
-    const displayAmount = isBooking
+    const displayAmount = isBooking || isDirectInquiry
       ? item.pricing?.amount || item.totalAmount
       : isApplication
       ? item.proposedAmount
@@ -593,6 +795,12 @@ export default function JobsScreen({ navigation, route }: any) {
 
     const scheduledDateVal =
       item.scheduledDate || item.preferredDate || item.createdAt || item.updatedAt;
+
+    const attachedPhotos: string[] = Array.isArray(item.images) && item.images.length > 0
+      ? item.images
+      : Array.isArray(item.photos) && item.photos.length > 0
+      ? item.photos
+      : [];
 
     return (
       <View style={[styles.jobCard, isEmergency && styles.emergencyBorder]}>
@@ -627,7 +835,7 @@ export default function JobsScreen({ navigation, route }: any) {
           </View>
         </View>
 
-        {/* Customer & Schedule Details Row */}
+        {/* Customer, Schedule, Distance & Posted Details Row */}
         <View style={styles.infoStrip}>
           <View style={styles.infoChip}>
             <Ionicons name="person-circle-outline" size={14} color="#64748B" />
@@ -641,16 +849,26 @@ export default function JobsScreen({ navigation, route }: any) {
               {formatDate(scheduledDateVal)}
             </Text>
           </View>
-          {item.timeSlot ? (
+          {item.timeSlot || item.preferredTime ? (
             <View style={styles.infoChip}>
               <Ionicons name="time-outline" size={14} color="#64748B" />
-              <Text style={styles.infoChipText}>{item.timeSlot}</Text>
+              <Text style={styles.infoChipText}>{item.timeSlot || item.preferredTime}</Text>
             </View>
           ) : null}
+          {item.distanceFormatted ? (
+            <View style={[styles.infoChip, styles.distanceChip]}>
+              <Ionicons name="navigate-outline" size={13} color="#047857" />
+              <Text style={styles.distanceChipText}>{item.distanceFormatted}</Text>
+            </View>
+          ) : null}
+          <View style={styles.infoChip}>
+            <Ionicons name="hourglass-outline" size={13} color="#64748B" />
+            <Text style={styles.infoChipText}>{formatTimeAgo(item.createdAt)}</Text>
+          </View>
         </View>
 
         {/* Problem Description or Proposal Note */}
-        {isRequest && item.problemDescription ? (
+        {isDirectInquiry && item.problemDescription ? (
           <View style={styles.contextNoteBox}>
             <Text style={styles.contextNoteLabel}>Customer Request Note:</Text>
             <Text style={styles.contextNoteText} numberOfLines={2}>
@@ -664,11 +882,37 @@ export default function JobsScreen({ navigation, route }: any) {
               {item.coverLetter}
             </Text>
           </View>
-        ) : isOpenJob && item.description ? (
+        ) : item.description ? (
           <Text style={styles.jobDescriptionPreview} numberOfLines={2}>
             {item.description}
           </Text>
         ) : null}
+
+        {/* Attached Photos Strip (Customer uploaded images) */}
+        {attachedPhotos.length > 0 && (
+          <View style={styles.photosStripContainer}>
+            <View style={styles.photosBadge}>
+              <Ionicons name="images-outline" size={12} color="#047857" />
+              <Text style={styles.photosBadgeText}>
+                {attachedPhotos.length} Photo{attachedPhotos.length > 1 ? 's' : ''} Attached
+              </Text>
+            </View>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.photosThumbRow}
+            >
+              {attachedPhotos.map((imgUrl: string, idx: number) => (
+                <Image
+                  key={idx}
+                  source={{ uri: imgUrl }}
+                  style={styles.jobAttachedThumb}
+                  resizeMode="cover"
+                />
+              ))}
+            </ScrollView>
+          </View>
+        )}
 
         {/* Amount & Actions Row */}
         <View style={styles.footerRow}>
@@ -678,20 +922,24 @@ export default function JobsScreen({ navigation, route }: any) {
                 ? 'Your Quoted Offer'
                 : isBooking
                 ? 'Booking Total'
+                : item.budget?.type === 'fixed'
+                ? 'Fixed Budget'
+                : item.budget?.type === 'quote'
+                ? 'Quote Required'
                 : 'Budget / Offer'}
             </Text>
             <Text style={styles.priceValue}>
               {displayAmount && displayAmount > 0
                 ? formatCurrency(displayAmount)
                 : item.budget?.type === 'quote'
-                ? 'Open Quote'
-                : 'Standard'}
+                ? 'Open for Quotes'
+                : 'Standard Rate'}
             </Text>
           </View>
 
           {/* Action Buttons */}
           <View style={styles.actionsContainer}>
-            {isRequest ? (
+            {isDirectInquiry ? (
               <View style={styles.btnGroup}>
                 <TouchableOpacity
                   style={[
@@ -733,29 +981,31 @@ export default function JobsScreen({ navigation, route }: any) {
                   activeOpacity={0.85}
                 >
                   <Ionicons name="send" size={13} color="#FFFFFF" />
-                  <Text style={styles.primaryActionBtnText}>Quote</Text>
+                  <Text style={styles.primaryActionBtnText}>Send Quote</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={[
-                    styles.accentActionBtn,
-                    respondingId === item._id && { opacity: 0.7 }
-                  ]}
-                  onPress={() => handleClaimJob(item)}
-                  disabled={respondingId === item._id}
-                  activeOpacity={0.85}
-                >
-                  {respondingId === item._id ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                  ) : (
-                    <>
-                      <Ionicons name="flash" size={13} color="#FFFFFF" />
-                      <Text style={styles.accentActionBtnText}>
-                        {isEmergency ? 'Claim ⚡' : 'Accept'}
-                      </Text>
-                    </>
-                  )}
-                </TouchableOpacity>
+                {(isEmergency || item.budget?.type === 'fixed') && (
+                  <TouchableOpacity
+                    style={[
+                      styles.accentActionBtn,
+                      respondingId === item._id && { opacity: 0.7 }
+                    ]}
+                    onPress={() => handleClaimJob(item)}
+                    disabled={respondingId === item._id}
+                    activeOpacity={0.85}
+                  >
+                    {respondingId === item._id ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <>
+                        <Ionicons name="flash" size={13} color="#FFFFFF" />
+                        <Text style={styles.accentActionBtnText}>
+                          {isEmergency ? 'Claim ⚡' : 'Accept'}
+                        </Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                )}
 
                 <TouchableOpacity
                   style={styles.outlineActionBtn}
@@ -764,7 +1014,7 @@ export default function JobsScreen({ navigation, route }: any) {
                   }
                   activeOpacity={0.85}
                 >
-                  <Text style={styles.outlineActionBtnText}>Dossier</Text>
+                  <Text style={styles.outlineActionBtnText}>View Details</Text>
                 </TouchableOpacity>
               </View>
             ) : isBooking ? (
@@ -821,7 +1071,7 @@ export default function JobsScreen({ navigation, route }: any) {
                 activeOpacity={0.85}
               >
                 <Ionicons name="eye-outline" size={14} color="#047857" />
-                <Text style={styles.outlineActionBtnText}>View Dossier ›</Text>
+                <Text style={styles.outlineActionBtnText}>View Details ›</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -858,7 +1108,7 @@ export default function JobsScreen({ navigation, route }: any) {
         onPressProfile={() => navigation.navigate('ProfileTab')}
       />
 
-      {/* ── COMPACT HORIZONTALLY SCROLLABLE SEGMENTED TAB STRIP ── */}
+      {/* ── COMPACT HORIZONTALLY SCROLLABLE SEGMENTED TAB STRIP (6 TABS) ── */}
       <View style={styles.tabsWrapper}>
         <ScrollView
           horizontal
@@ -905,8 +1155,151 @@ export default function JobsScreen({ navigation, route }: any) {
         </ScrollView>
       </View>
 
+      {/* ── UNIFIED DOMAIN & SEARCH FILTER STRIP (Only visible on All Jobs tab) ── */}
+      {activeTab === 'all' && (
+        <View style={styles.domainFilterContainer}>
+          {/* Search Box */}
+          <View style={styles.searchBarRow}>
+            <View style={styles.searchBarInputWrap}>
+              <Ionicons name="search" size={15} color="#64748B" style={styles.searchIcon} />
+              <TextInput
+                style={styles.searchBarInput}
+                placeholder="Search jobs by service title, trade, or locality..."
+                placeholderTextColor="#94A3B8"
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                returnKeyType="search"
+                clearButtonMode="while-editing"
+              />
+              {searchQuery.length > 0 && (
+                <TouchableOpacity
+                  onPress={() => setSearchQuery('')}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="close-circle" size={16} color="#94A3B8" />
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {(selectedCategory || debouncedSearch) && (
+              <TouchableOpacity
+                style={styles.clearFilterBtn}
+                onPress={() => {
+                  setSelectedCategory(null);
+                  setSearchQuery('');
+                }}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="filter-outline" size={13} color="#047857" />
+                <Text style={styles.clearFilterBtnText}>Reset</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* Horizontal Domain Scroll Strip */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.domainPillsScroll}
+          >
+            {/* "All Domains" Pill */}
+            <TouchableOpacity
+              style={[
+                styles.domainPill,
+                (!selectedCategory || selectedCategory === 'all') && styles.domainPillActive
+              ]}
+              onPress={() => setSelectedCategory(null)}
+              activeOpacity={0.8}
+            >
+              <Text
+                style={[
+                  styles.domainPillText,
+                  (!selectedCategory || selectedCategory === 'all') && styles.domainPillTextActive
+                ]}
+              >
+                All My Domains
+              </Text>
+              <View
+                style={[
+                  styles.domainCountBadge,
+                  (!selectedCategory || selectedCategory === 'all') && styles.domainCountBadgeActive
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.domainCountText,
+                    (!selectedCategory || selectedCategory === 'all') && styles.domainCountTextActive
+                  ]}
+                >
+                  {itemsByTab.rawAllCount || 0}
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            {/* Individual Domain Pills from Backend Catalogue */}
+            {domainFilterOptions.map((cat) => {
+              const isSelected =
+                selectedCategory === cat._id ||
+                selectedCategory === cat.slug ||
+                selectedCategory === cat.name;
+              const count = categoryCounts[cat._id] || categoryCounts[cat.slug] || 0;
+
+              return (
+                <TouchableOpacity
+                  key={cat._id || cat.slug}
+                  style={[styles.domainPill, isSelected && styles.domainPillActive]}
+                  onPress={() => setSelectedCategory(isSelected ? null : cat._id)}
+                  activeOpacity={0.8}
+                >
+                  <Text
+                    style={[styles.domainPillText, isSelected && styles.domainPillTextActive]}
+                    numberOfLines={1}
+                  >
+                    {cat.name}
+                  </Text>
+                  {count > 0 && (
+                    <View
+                      style={[
+                        styles.domainCountBadge,
+                        isSelected && styles.domainCountBadgeActive
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.domainCountText,
+                          isSelected && styles.domainCountTextActive
+                        ]}
+                      >
+                        {count}
+                      </Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+
+          {/* Active Domain Info Bar */}
+          {selectedCategory && (
+            <View style={styles.filterStatusBanner}>
+              <Ionicons name="pricetag-outline" size={12} color="#047857" />
+              <Text style={styles.filterStatusText}>
+                Showing <Text style={{ fontWeight: '700' }}>{currentItems.length}</Text> jobs in{' '}
+                <Text style={{ fontWeight: '700' }}>{selectedDomainName}</Text>
+              </Text>
+              <TouchableOpacity
+                onPress={() => setSelectedCategory(null)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Text style={styles.clearFilterLink}>Clear Filter</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      )}
+
       {/* ── ACTIONABLE CONFIGURATION BANNER (Missing Categories or Location) ── */}
-      {activeTab === 'new' && configurationStatus === 'missing_categories' ? (
+      {activeTab === 'all' && configurationStatus === 'missing_categories' ? (
         <View style={styles.configBannerCard}>
           <View style={styles.configBannerIcon}>
             <Ionicons name="construct-outline" size={20} color="#B45309" />
@@ -918,14 +1311,14 @@ export default function JobsScreen({ navigation, route }: any) {
             </Text>
             <TouchableOpacity
               style={styles.configActionBtn}
-              onPress={() => navigation.navigate('ProfileTab')}
+              onPress={() => navigation.navigate('VendorEditProfile')}
               activeOpacity={0.8}
             >
               <Text style={styles.configActionBtnText}>Configure Categories in Profile →</Text>
             </TouchableOpacity>
           </View>
         </View>
-      ) : activeTab === 'new' && configurationStatus === 'missing_service_area' ? (
+      ) : activeTab === 'all' && configurationStatus === 'missing_service_area' ? (
         <View style={styles.configBannerCard}>
           <View style={styles.configBannerIcon}>
             <Ionicons name="location-outline" size={20} color="#B45309" />
@@ -937,10 +1330,10 @@ export default function JobsScreen({ navigation, route }: any) {
             </Text>
             <TouchableOpacity
               style={styles.configActionBtn}
-              onPress={() => navigation.navigate('ProfileTab')}
+              onPress={() => navigation.navigate('VendorServiceArea')}
               activeOpacity={0.8}
             >
-              <Text style={styles.configActionBtnText}>Set Service Area in Profile →</Text>
+              <Text style={styles.configActionBtnText}>Set Service Area Coverage →</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -959,7 +1352,7 @@ export default function JobsScreen({ navigation, route }: any) {
             onPress={() => navigation.navigate('VendorLogin')}
             activeOpacity={0.85}
           >
-            <Text style={styles.authActionBtnText}>Sign In to WorkLogy Pro</Text>
+            <Text style={styles.authActionBtnText}>Sign In to WorkLogy</Text>
           </TouchableOpacity>
         </View>
       ) : apiError ? (
@@ -988,16 +1381,42 @@ export default function JobsScreen({ navigation, route }: any) {
             <View style={styles.emptyIconCircle}>
               <Ionicons name={activeTabMeta.icon} size={28} color="#047857" />
             </View>
-            <Text style={styles.emptyTitle}>{activeTabMeta.emptyTitle}</Text>
-            <Text style={styles.emptySubtext}>{activeTabMeta.emptySubtext}</Text>
-            <TouchableOpacity
-              style={styles.refreshFeedBtn}
-              onPress={handleRefresh}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="refresh" size={14} color="#FFFFFF" />
-              <Text style={styles.refreshFeedBtnText}>Refresh Feed</Text>
-            </TouchableOpacity>
+            <Text style={styles.emptyTitle}>
+              {activeTab === 'all' && (selectedCategory || debouncedSearch)
+                ? 'No matching jobs found'
+                : activeTabMeta.emptyTitle}
+            </Text>
+            <Text style={styles.emptySubtext}>
+              {activeTab === 'all' && (selectedCategory || debouncedSearch)
+                ? 'Try another domain or refresh the feed.'
+                : activeTabMeta.emptySubtext}
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 14 }}>
+              {activeTab === 'all' && (selectedCategory || debouncedSearch) && (
+                <TouchableOpacity
+                  style={[
+                    styles.refreshFeedBtn,
+                    { backgroundColor: '#F1F5F9', borderWidth: 1, borderColor: '#CBD5E1' }
+                  ]}
+                  onPress={() => {
+                    setSelectedCategory(null);
+                    setSearchQuery('');
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="close-circle-outline" size={14} color="#334155" />
+                  <Text style={[styles.refreshFeedBtnText, { color: '#334155' }]}>Clear Filter</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                style={styles.refreshFeedBtn}
+                onPress={handleRefresh}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="refresh" size={14} color="#FFFFFF" />
+                <Text style={styles.refreshFeedBtnText}>Refresh Feed</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       ) : (
@@ -1042,46 +1461,50 @@ export default function JobsScreen({ navigation, route }: any) {
 
               <View style={styles.inputRow}>
                 <View style={styles.halfInput}>
-                  <Text style={styles.inputLabel}>Diagnostic / Service Fee</Text>
+                  <Text style={styles.inputLabel}>Diagnostic / Service Fee (₹)</Text>
                   <TextInput
                     style={styles.textInput}
                     keyboardType="numeric"
                     value={serviceCharge}
                     onChangeText={setServiceCharge}
-                    placeholder="350"
+                    placeholder="e.g. 350"
+                    placeholderTextColor="#94A3B8"
                   />
                 </View>
                 <View style={styles.halfInput}>
-                  <Text style={styles.inputLabel}>Labour Charges</Text>
+                  <Text style={styles.inputLabel}>Labour Charges (₹)</Text>
                   <TextInput
                     style={styles.textInput}
                     keyboardType="numeric"
                     value={labourCharge}
                     onChangeText={setLabourCharge}
-                    placeholder="150"
+                    placeholder="e.g. 150"
+                    placeholderTextColor="#94A3B8"
                   />
                 </View>
               </View>
 
               <View style={styles.inputRow}>
                 <View style={styles.halfInput}>
-                  <Text style={styles.inputLabel}>Material / Parts (Est.)</Text>
+                  <Text style={styles.inputLabel}>Material / Parts Est. (₹)</Text>
                   <TextInput
                     style={styles.textInput}
                     keyboardType="numeric"
                     value={materialCharge}
                     onChangeText={setMaterialCharge}
-                    placeholder="0"
+                    placeholder="e.g. 0 if parts not needed"
+                    placeholderTextColor="#94A3B8"
                   />
                 </View>
                 <View style={styles.halfInput}>
-                  <Text style={styles.inputLabel}>Additional / Travel</Text>
+                  <Text style={styles.inputLabel}>Additional / Travel (₹)</Text>
                   <TextInput
                     style={styles.textInput}
                     keyboardType="numeric"
                     value={additionalCharge}
                     onChangeText={setAdditionalCharge}
-                    placeholder="0"
+                    placeholder="e.g. 0"
+                    placeholderTextColor="#94A3B8"
                   />
                 </View>
               </View>
@@ -1098,7 +1521,8 @@ export default function JobsScreen({ navigation, route }: any) {
                     style={styles.textInput}
                     value={estimatedDuration}
                     onChangeText={setEstimatedDuration}
-                    placeholder="1-2 hours"
+                    placeholder="e.g. 1 hour 30 mins"
+                    placeholderTextColor="#94A3B8"
                   />
                 </View>
                 <View style={styles.halfInput}>
@@ -1107,7 +1531,8 @@ export default function JobsScreen({ navigation, route }: any) {
                     style={styles.textInput}
                     value={proposedSchedule}
                     onChangeText={setProposedSchedule}
-                    placeholder="Tomorrow 10 AM"
+                    placeholder="e.g. Today 4:00 PM or Tomorrow 10:00 AM"
+                    placeholderTextColor="#94A3B8"
                   />
                 </View>
               </View>
@@ -1119,7 +1544,8 @@ export default function JobsScreen({ navigation, route }: any) {
                 numberOfLines={3}
                 value={workDescription}
                 onChangeText={setWorkDescription}
-                placeholder="Detail what is included in your service..."
+                placeholder="Explain what your quotation covers, materials included, and workmanship warranty (e.g. 30-day guarantee)..."
+                placeholderTextColor="#94A3B8"
               />
 
               <Text style={styles.modalDisclaimer}>
@@ -1212,6 +1638,165 @@ const styles = StyleSheet.create({
   },
   tabCountTextActive: {
     color: '#FFFFFF'
+  },
+
+  // Unified Domain & Search Filter Styles
+  domainFilterContainer: {
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+    paddingTop: 8,
+    paddingBottom: 8
+  },
+  searchBarRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    gap: 8,
+    marginBottom: 8
+  },
+  searchBarInputWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F1F5F9',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    height: 36,
+    borderWidth: 1,
+    borderColor: '#E2E8F0'
+  },
+  searchIcon: {
+    marginRight: 6
+  },
+  searchBarInput: {
+    flex: 1,
+    fontSize: 12,
+    color: '#0F172A',
+    paddingVertical: 0
+  },
+  clearFilterBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8
+  },
+  clearFilterBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#047857'
+  },
+  domainPillsScroll: {
+    paddingHorizontal: 12,
+    gap: 6,
+    alignItems: 'center',
+    paddingBottom: 2
+  },
+  domainPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    gap: 5
+  },
+  domainPillActive: {
+    backgroundColor: '#047857',
+    borderColor: '#047857'
+  },
+  domainPillText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#475569'
+  },
+  domainPillTextActive: {
+    color: '#FFFFFF'
+  },
+  domainCountBadge: {
+    backgroundColor: '#E2E8F0',
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 8
+  },
+  domainCountBadgeActive: {
+    backgroundColor: 'rgba(255, 255, 255, 0.25)'
+  },
+  domainCountText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#334155'
+  },
+  domainCountTextActive: {
+    color: '#FFFFFF'
+  },
+  filterStatusBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#ECFDF5',
+    marginHorizontal: 12,
+    marginTop: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#A7F3D0'
+  },
+  filterStatusText: {
+    fontSize: 11,
+    color: '#065F46',
+    flex: 1,
+    marginLeft: 4
+  },
+  clearFilterLink: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#047857',
+    textDecorationLine: 'underline'
+  },
+
+  // Distance Chip & Photos Strip
+  distanceChip: {
+    backgroundColor: '#ECFDF5',
+    borderColor: '#A7F3D0',
+    borderWidth: 1
+  },
+  distanceChipText: {
+    fontSize: 11,
+    color: '#047857',
+    fontWeight: '700'
+  },
+  photosStripContainer: {
+    marginTop: 8,
+    gap: 6
+  },
+  photosBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4
+  },
+  photosBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#047857'
+  },
+  photosThumbRow: {
+    flexDirection: 'row',
+    gap: 6
+  },
+  jobAttachedThumb: {
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    backgroundColor: '#F1F5F9'
   },
 
   // Job Card Styles

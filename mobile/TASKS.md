@@ -23,12 +23,12 @@ A backlog item transitions to **Done** if and only if:
 | Category | Total Tasks | Done | In Progress | Todo | Blocked |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **Phase 1: Architecture & Isolation (P0)** | 6 | 6 | 0 | 0 | 0 |
-| **Phase 2: Customer Mobile App Core (P1)** | 10 | 10 | 0 | 0 | 0 |
+| **Phase 2: Customer Mobile App Core (P1)** | 13 | 13 | 0 | 0 | 0 |
 | **Phase 3: Vendor Mobile App Core (P1)** | 11 | 11 | 0 | 0 | 0 |
 | **Phase 4: Shared Mobile Architecture (P1)** | 5 | 5 | 0 | 0 | 0 |
 | **Phase 5: Enhanced Field Capabilities (P2)** | 4 | 0 | 0 | 4 | 0 |
 | **Phase 6: Future Scale & Localization (P3)** | 3 | 0 | 0 | 3 | 0 |
-| **Total** | **39** | **32** | **0** | **7** | **0** |
+| **Total** | **42** | **35** | **0** | **7** | **0** |
 
 ---
 
@@ -605,4 +605,254 @@ A backlog item transitions to **Done** if and only if:
   6. Environment configurations updated in both mobile apps to ensure production builds never use localhost URLs.
 - **Acceptance Criteria**: 100% data parity between Web and Mobile; TypeScript checks (`npx tsc --noEmit`) pass with 0 errors; full 19-assertion E2E test suite passes cleanly.
 - **Test Requirements**: Automated multi-platform lifecycle E2E test suite passing with 0 failures.
+- **Status**: Done
+
+---
+
+### TSK-MOB-039: Fix WorkLogy Mobile App Splash Screen — Single Logo, Correct Branding & Smooth Startup
+- **Title**: Unified WorkLogy Splash Screen with Smooth Fade-In/Scale-Up Animation & Eliminated Duplicate Branding
+- **Priority**: P0
+- **Relevant Area**: Mobile Branding & App Startup Lifecycle
+- **Problem Statement**:
+  1. A duplicate splash screen was observed on Android: Screen 1 displayed an old green square icon with a white "W" and "WorkLogy Pro", along with Expo Go development banners ("Loading from 10.211.183.171:8082...", "New update available, downloading..."). Screen 2 displayed the blue-and-green icon by itself at a smaller scale.
+  2. The root cause was that `app.json`'s `icon` (`./src/assets/icon.png`), `adaptive-icon.png`, and `favicon.png` still retained the legacy green "W" asset and `"WorkLogy Pro"` name, which Expo Go uses when bootstrapping its container before transferring the bundle.
+  3. The React Native splash component also lacked the prominent scale, the brand name "WorkLogy", the tagline "Trusted Local Services", and the subtle entrance/exit animation.
+- **Expected Behavior**: Single consistent WorkLogy identity throughout startup. Native splash and animated React Native splash view share the exact same `#FFFFFF` background, centered prominent logo, "WorkLogy" brand name, and "Trusted Local Services" tagline. Subtle fade-in and scale-up entrance animation plays for 1.4s, session restoration completes in parallel, and the splash smoothly fades out over 250ms to reveal the already-rendered initial screen.
+- **Implementation Scope**:
+  1. Replaced `icon.png`, `adaptive-icon.png` (with Android safe zone padding), and `favicon.png` with official WorkLogy logo assets.
+  2. Generated high-resolution 1242x2436 `splash.png` with `#FFFFFF` background, prominent centered WorkLogy logo, "WorkLogy" title, and "Trusted Local Services" tagline.
+  3. Updated `app.json` in both apps to unified `"name": "WorkLogy"`, `splash.backgroundColor: "#FFFFFF"`, and `adaptiveIcon.backgroundColor: "#FFFFFF"`.
+  4. Built animated `WorklogySplashScreen.tsx` component with `Animated` API (subtle logo scale from 0.92 to 1.0, logo fade-in, text slide-up & fade-in, 1.4s minimum display time, and 250ms smooth fade-out).
+  5. Mounted `WorklogySplashScreen` as an absolute overlay (`...StyleSheet.absoluteFill, zIndex: 99999`) in both navigators so the destination screen renders underneath and appears seamlessly without flashes or route jumping.
+- **Acceptance Criteria**: Single brand identity; no legacy green "W" icon; "WorkLogy" brand name and "Trusted Local Services" tagline present; smooth animated transition; existing auth flows preserved; TypeScript and Android Metro production bundles passing with 0 errors.
+- **Test Requirements**: Automated script verification of assets and configuration, TypeScript check (`npx tsc --noEmit`), and Android release export bundling (`npx expo export --platform android`).
+- **Status**: Done
+
+---
+
+### TSK-MOB-041: Single Authoritative Native Splash Screen & Elimination of Secondary JS Splash
+- **Title**: Permanently eliminate duplicate JavaScript splash screen and establish single native splash startup
+- **Priority**: P0
+- **Relevant Area**: Mobile Startup Flow & Native Splash Lifecycle
+- **Problem Statement**:
+  1. The app had a duplicate splash screen experience: an initial native launch screen was followed by a custom JavaScript animated screen (`WorklogySplashScreen.tsx`) with an artificial 1.4-second timer.
+  2. The custom React component caused an unwanted second branded screen to display before revealing the app.
+  3. Development loading messages (`Loading from 10.211.183.171:8082...`, `New update available, downloading...`) appeared during Expo Go bundle download over LAN.
+- **Expected Behavior**: Single authoritative native splash screen. On launch, Android OS / Expo native splash displays `splash.png` (official WorkLogy logo, "WorkLogy" title, and "Trusted Local Services" on `#FFFFFF`). `SplashScreen.preventAutoHideAsync()` holds this native splash while background session restore runs. Once authentication state is determined (`isLoading === false`), `SplashScreen.hideAsync()` is invoked directly to transition straight into the destination screen (`VendorHomeTab` or `VendorLogin`) with zero intermediate screens, zero duplicate logos, and zero arbitrary delays.
+- **Implementation Scope**:
+  1. Removed custom JavaScript `WorklogySplashScreen.tsx` component from `VendorNavigator.tsx` and `CustomerNavigator.tsx`.
+  2. Replaced duplicate splash timer with direct lifecycle synchronization: native splash is held via `SplashScreen.preventAutoHideAsync()` during `restoreSession()` and dismissed via `SplashScreen.hideAsync()` the moment session restoration resolves.
+  3. Configured `app.json` with explicit `android.splash` and `expo-splash-screen` native plugin options matching `#FFFFFF` background.
+  4. Verified native Android prebuild artifacts (`Theme.App.SplashScreen`, `values/colors.xml`, `values/styles.xml`, `drawable/splashscreen_logo.png`).
+- **Acceptance Criteria**: Single native splash screen on startup; no secondary JS splash screen; existing authentication and session restoration preserved; TypeScript and Android production bundle exports pass with 0 errors.
+- **Status**: Done
+
+---
+
+### TSK-MOB-042: Expo Go Client Cache Invalidation & Isolated Asset Key Manifest Configuration
+- **Title**: Force cache invalidation of obsolete green "W" icon in Expo Go client via isolated asset key manifests
+- **Priority**: P0
+- **Relevant Area**: Expo Go Bundling, Asset Serving & Cache Invalidation
+- **Problem Statement**:
+  1. In the Expo Go development client on Android, the bundle download screen (`Loading from 10.211.183.171:8082...`, `New update available, downloading...`) cached the obsolete green "W" icon from an earlier session in the device's internal OkHttp/Glide disk cache.
+  2. Even after replacing `icon.png` and updating `app.json` name to "WorkLogy", Expo Go displayed the updated name "WorkLogy" but continued reading the old cached bitmap keyed to the identical URL path (`./src/assets/icon.png`).
+- **Expected Behavior**: Expo Go client requests a fresh, un-cached icon URL from the Metro bundler; production standalone builds (`npx expo export`) bundle clean 1024x1024 WorkLogy assets with zero references to obsolete files.
+- **Implementation Scope**:
+  1. Created isolated asset filenames: `worklogy-app-icon.png`, `worklogy-adaptive-icon.png`, and `worklogy-splash.png` in both `customer-app` and `vendor-app`.
+  2. Updated `app.json` `expo.icon`, `expo.android.adaptiveIcon.foregroundImage`, `expo.splash.image`, and `expo-notifications` icon paths in both apps to reference the new versioned filenames.
+  3. Verified Metro manifest outputs `iconUrl` pointing to `worklogy-app-icon.png`.
+  4. Documented clear instructions for clearing Expo Go's local Android disk cache.
+- **Acceptance Criteria**: Metro manifests on ports 8081 and 8082 emit fresh `worklogy-app-icon.png` URLs; standalone production export succeeds cleanly; TypeScript passes with 0 errors.
+- **Status**: Done
+
+---
+
+### TSK-MOB-043: Elimination of Nested Double-Box Logo Containers & Large Prominent Artwork Alignment
+- **Title**: Remove duplicate rounded-square containers and scale single approved WorkLogy artwork to match outer container dimensions
+- **Priority**: P0
+- **Relevant Area**: Splash Screen Asset Processing & Mobile Brand Architecture
+- **Problem Statement**:
+  1. The splash/loading screen displayed two nested rounded-square containers: an outer container rendered by the Android launcher/Expo Go card view, and an inner container with drop shadow caused by embedding a padded master card inside the icon and splash assets.
+  2. The blue-and-green service-professional logo was visually undersized within the inner container rather than filling the area.
+- **Expected Behavior**: Single WorkLogy logo displayed on clean white `#FFFFFF` background. The approved blue-and-green artwork fills the container at the prominent visual scale of the outer container. No redundant inner/outer container nesting, no card shadow artifact, and clean centered "WorkLogy" and "Trusted Local Services" text.
+- **Implementation Scope**:
+  1. Extracted pixel-pure blue-and-green logo artwork (house, worker, wrench) from master asset, eliminating the white rounded card border and drop shadow.
+  2. Generated 1024x1024 `worklogy-app-icon-v2.png` with the clean logo scaled to 860px (84% fill) directly on `#FFFFFF`.
+  3. Generated 1024x1024 `worklogy-adaptive-icon-v2.png` with the clean logo scaled to 680px within the Android adaptive icon safe zone.
+  4. Generated 1242x2436 `worklogy-splash-v2.png` featuring the prominent 640x609px logo, bold "WorkLogy" navy title (`#0F172A`, 86px), and muted slate tagline (`#64748B`, 44px) centered with balanced optical spacing.
+  5. Updated `app.json` in both apps with `-v2` filenames for immediate device cache invalidation.
+- **Acceptance Criteria**: Single large logo visible without nested squircle borders; visual size matches outer container; `WorkLogy` and `Trusted Local Services` properly aligned; TypeScript and Android production bundle exports pass with 0 errors.
+- **Status**: Done
+
+---
+
+### TSK-MOB-044: Final Professional Marketplace Splash Screen & Value Proposition Typography
+- **Title**: Production-ready balanced WorkLogy Pro splash screen with value propositions, trust indicators, and smooth lifecycle fade
+- **Priority**: P0
+- **Relevant Area**: Mobile Branding & App Launch Lifecycle
+- **Problem Statement**:
+  1. The splash screen displayed a single logo and app title in a vast empty white space, lacking marketing polish, brand value communication, and marketplace identity.
+- **Expected Behavior**: Balanced, modern, professional launch screen featuring:
+  - Approved blue-and-green WorkLogy handyman/house logo.
+  - Heading: **WorkLogy Pro** in bold dark navy `#0F172A`.
+  - Tagline: **Your Skills. More Opportunities.** in WorkLogy green `#059669`.
+  - Supporting message: "Connect with local customers. Grow your business." in slate `#475569`.
+  - Subtle trust/value points with micro-icons: "Trusted Professionals" and "Local Jobs. Real Opportunities.".
+  - Clean white `#FFFFFF` canvas with balanced vertical spacing and status-bar inset respect.
+  - Zero artificial delay; immediate 220ms smooth fade into destination screen once session restoration resolves.
+- **Implementation Scope**:
+  1. Generated 1242x2436 native splash bitmap `worklogy-splash-v3.png` with full typography, vector shield and briefcase trust icons, and pure white background.
+  2. Rebuilt `WorklogySplashScreen.tsx` React Native component with `@expo/vector-icons` Ionicons (`shield-checkmark`, `briefcase`), matching typography, and immediate dismissal on `isReady`.
+  3. Integrated `WorklogySplashScreen` seamlessly into `VendorNavigator.tsx`, replacing the plain placeholder with an overlay that dissolves directly into `VendorHomeTab` or `VendorLogin`.
+  4. Updated `mobile/vendor-app/app.json` `splash.image` to `worklogy-splash-v3.png`.
+- **Acceptance Criteria**: Single approved WorkLogy logo; brand name "WorkLogy Pro"; tagline "Your Skills. More Opportunities."; supporting message and trust indicators correctly rendered and vertically balanced; zero artificial delay; clean TypeScript and Android release bundle export.
+- **Status**: Done
+
+---
+
+### TSK-MOB-045: Elimination of Dual Consecutive Splash Screens & Unified Single Startup Lifecycle
+- **Title**: Permanently eliminate Screen 1 (logo-only with "WorkLogy") and establish single authoritative Screen 2 startup experience
+- **Priority**: P0
+- **Relevant Area**: App Startup Architecture & Expo Splash Lifecycle
+- **Problem Statement**:
+  1. On cold launch, two different splash screens were observed consecutively: Screen 1 displaying a large logo with only "WorkLogy", followed by Screen 2 displaying "WorkLogy Pro", tagline, supporting text, and trust indicators.
+- **Expected Behavior**: Only ONE single consistent splash screen matching Screen 2. Screen 1 must never appear.
+  - Native splash: Plain white `#FFFFFF` background with the approved WorkLogy logo centered at matching coordinates. Zero text.
+  - In-app branded splash: Displays the complete Screen 2 design (logo, "WorkLogy Pro", "Your Skills. More Opportunities.", "Connect with local customers. Grow your business.", and trust points).
+  - Transition: Seamless handoff from native splash logo into the in-app branded splash, dissolving smoothly (220ms) into the resolved screen with zero artificial delays.
+- **Implementation Scope**:
+  1. Generated `native-splash.png` (plain `#FFFFFF` background with approved WorkLogy logo centered at identical vertical offset `y ≈ 36%`, no text).
+  2. Configured `app.json` `splash.image` and `android.splash.image` to `native-splash.png`.
+  3. Updated `app.json` `name` to `"WorkLogy Pro"`.
+  4. Rebuilt `WorklogySplashScreen.tsx` to mount seamlessly over the native splash, hide native splash on mount, and fade out immediately when `isReady` (`!isLoading`) resolves.
+  5. Verified Android production release export and TypeScript checks with 0 errors.
+- **Acceptance Criteria**: Zero occurrences of Screen 1; only Screen 2 displays with full branding; smooth 220ms fade into destination; production build passes cleanly.
+- **Status**: Done
+
+---
+
+### TSK-MOB-046: Customer App Production Audit & Profile Screen Clean-up
+- **Title**: Remove Backend Server Environment row and modal from Customer Profile while ensuring complete production readiness
+- **Priority**: P0
+- **Relevant Area**: Customer Profile, Account & Security Architecture
+- **Problem Statement**:
+  1. The Customer Profile displayed an internal development/failover row: "Backend Server Environment", "Auto (Local with VPS Failover)" with a server switcher modal.
+  2. Customers should never see internal server configurations or VPS failover options in a consumer marketplace.
+  3. The entire Customer Profile needed a comprehensive end-to-end verification (addresses, notification permissions, sound toggle, password update, support tickets, role switcher, logout) without touching or causing regressions to the finalized Vendor App.
+- **Expected Behavior**:
+  - Customer Profile "Preferences & Account" card cleanly presents consumer rows: Alerts & Notifications, Device Push Notifications, Push Notification Sound, and Account Security & Password.
+  - No internal server row, status badge, or switcher modal in customer UI.
+  - Sub-loaders (`loadInitialData`, addresses, stats, tickets) guarded against unauthenticated execution.
+  - Address selection integrity maintained (GPS never silently overwrites explicit saved address).
+  - Background server failover and multi-host ping client remain intact under the hood.
+  - Vendor App strictly untouched.
+- **Implementation Scope**:
+  1. Removed `showServerModal`, server pinging states, and server switcher methods from `mobile/customer-app/src/screens/ProfileScreen.tsx`.
+  2. Removed the "Backend Server Environment" `TouchableOpacity` block from the Preferences card.
+  3. Removed Modal 8 (Server Switcher Modal) and associated unused server stylesheet rules.
+  4. Preserved underlying API client failover architecture in `mobile/customer-app/src/api/client.ts` and `src/config/index.ts`.
+  5. Verified all Customer Profile integrations: address management, notification permissions (Android 33+), push sound persistence, password update (`PUT /api/auth/updatepassword`), support ticket creation (`POST /api/support`), role switching (`switchRole('vendor')`), and secure logout.
+  6. Verified Vendor App files remain completely untouched.
+  7. Tested clean compilation with `tsc --noEmit` and production Android bundle export with `expo export --platform android`.
+- **Acceptance Criteria**: Zero internal server UI visible to customers; uniform card borders and dividers; robust address and auth workflows; clean builds; vendor app untouched.
+- **Status**: Done
+
+---
+
+### TSK-MOB-047: Easy Job Posting, Address Persistence & Verified Reviews Production Fix
+- **Title**: Streamline job posting flow, enable seamless address persistence from jobs/profile, and resolve verified reviews booking validation error
+- **Priority**: P0
+- **Relevant Area**: Customer Service Booking, Address Management & Verified Reviews Lifecycle
+- **Problem Statement**:
+  1. The Request Service form was overly complex and technical for customers, lacking search over the 30 canonical service categories and quick task suggestion chips.
+  2. Addresses from completed bookings were not saved to customer profile, requiring customers to repeatedly re-enter their address.
+  3. Attempting to submit a review from completed jobs or vendor profile failed with `"Booking reference is required to submit a verified review. No unreviewed completed booking was found with this professional."` because the client sent `{ booking: bookingId }` while the backend controller expected `req.body.bookingId` or `req.params.bookingId`, and lacked fallback resolution by `job` ID or `vendorId`.
+- **Expected Behavior**:
+  1. **7-Step Streamlined Job Posting Flow (`CreateJobScreen.tsx`)**:
+     - Searchable category picker covering all 30 canonical categories (`api.categories.getAll()`) with instant task/subcategory chips.
+     - Service needed title (click-to-fill chips) + clear description + optional photo attachments (< 5MB).
+     - Standard Schedule vs Urgent (Today / ASAP) selection.
+     - Get Quotes (Compare Bids) vs Fixed Budget (₹) selection.
+     - Address form with saved address chips, GPS auto-detect, and destination summary box.
+     - "Save this address for future bookings" checkbox with label selection (`Home` | `Work` | `Other`).
+     - Compact review summary card + primary "Post Service Request" with in-flight guard, backend address saving, and navigation to `JobDetailScreen`.
+  2. **Authoritative Address Persistence**:
+     - Backend `addAddress` upserts `CustomerProfile` if not present, normalizes input strings, prevents duplicate address entries, and manages `isDefault` flags.
+     - Mounted `/api/customer/addresses` and `/api/users/customer/addresses` routes.
+     - Direct "Save Address to Profile" button on `JobDetailScreen` allows saving completed service location to profile.
+  3. **Verified Reviews End-to-End Fix**:
+     - Backend `createReview` accepts `bookingId || req.body.bookingId || req.body.booking`, resolves bookings by `job` ID or `bookingReference`, and falls back to completed customer bookings for `vendorId`.
+     - Marks `Job.hasReview = true` upon review creation.
+     - Client `ReviewModalScreen` pre-checks booking eligibility (`checkEligibility`), handles star ratings (1-5) with qualitative descriptions, and submits both `bookingId` and `booking`.
+  4. **Strict Isolation**: `mobile/vendor-app/` remains 100% untouched.
+- **Implementation Scope**:
+  1. Updated backend controllers: [`backend/src/controllers/user.controller.js`](file:///Users/shaheaalam/Desktop/worklogy/backend/src/controllers/user.controller.js), [`backend/src/controllers/review.controller.js`](file:///Users/shaheaalam/Desktop/worklogy/backend/src/controllers/review.controller.js).
+  2. Updated backend routes: [`backend/src/routes/user.routes.js`](file:///Users/shaheaalam/Desktop/worklogy/backend/src/routes/user.routes.js), [`backend/src/routes/customer.routes.js`](file:///Users/shaheaalam/Desktop/worklogy/backend/src/routes/customer.routes.js).
+  3. Updated customer app API client: [`mobile/customer-app/src/api/client.ts`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/api/client.ts).
+  4. Rebuilt [`mobile/customer-app/src/screens/CreateJobScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/CreateJobScreen.tsx).
+  5. Enhanced [`mobile/customer-app/src/screens/ReviewModalScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/ReviewModalScreen.tsx).
+  6. Enhanced [`mobile/customer-app/src/screens/JobDetailScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/JobDetailScreen.tsx).
+  7. Enhanced [`mobile/customer-app/src/screens/MyJobsScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/MyJobsScreen.tsx).
+  8. Verified TypeScript compilation and Android release bundle export with 0 errors.
+- **Acceptance Criteria**: Seamless 7-step job posting; automatic address profile persistence; review submission succeeds; zero vendor-app changes; clean builds.
+- **Status**: Done
+
+---
+
+### TSK-MOB-048: Verified Review Published Lifecycle, Done Navigation & Discard Popup Elimination
+- **Title**: Implement explicit 4-state review form lifecycle, eliminate discard confirmation loop on published reviews, and fix Done / View on Profile navigation
+- **Priority**: P0
+- **Relevant Area**: Customer Verified Reviews Lifecycle & Modal Navigation
+- **Problem Statement**:
+  1. After publishing a review, tapping "Done" on the "Review Published!" success dialog failed to leave the screen or triggered the "Discard Review?" prompt because the navigation handler saw unsubmitted text (`comment.length > 0`) and lacked a published state flag.
+  2. Tapping "View on Profile" returned to the review modal upon clicking Back, instead of returning to the completed booking dossier.
+  3. Network failures or racing submissions could trigger duplicate reviews or leave the customer in an inconsistent state.
+- **Expected Behavior**:
+  1. **Explicit 4-State Lifecycle Machine**:
+     - `editing`: Unsaved draft changes trigger "Discard Review?" on back press/cancel.
+     - `submitting`: In-flight submission guards prevent accidental repeated taps or navigation.
+     - `published`: Once the backend confirms review creation (or reconciles a duplicate), discard confirmation is permanently disabled.
+     - `closing`: Concurrency guard prevents duplicate navigation actions.
+  2. **Done Navigation**:
+     - Tapping "Done" closes the success dialog and immediately pops the review screen (`navigation.goBack(true)`).
+     - Dispatches `BOOKINGS_CHANGED`, `REVIEWS_CHANGED`, and `PROFILE_CHANGED` sync events.
+     - Never displays "Discard Review?".
+  3. **View on Profile Navigation**:
+     - Tapping "View on Profile" replaces `ReviewModal` with `ProfessionalProfile` (`navigation.replace('ProfessionalProfile', { vendorId })`).
+     - Pressing Back from the professional's profile returns to the completed booking or bookings list, never back to the review form.
+  4. **Duplicate Protection & Reconciliation**:
+     - UI disables the submit button during in-flight requests.
+     - Backend reconciles duplicate review submissions (409 `REVIEW_ALREADY_EXISTS`), setting `booking.hasReview = true` and `Job.hasReview = true`.
+     - Transient network errors preserve entered rating and comment so user never loses their text.
+  5. **Strict Isolation**: `mobile/vendor-app/` remains 100% untouched.
+- **Implementation Scope**:
+  1. Updated [`backend/src/controllers/review.controller.js`](file:///Users/shaheaalam/Desktop/worklogy/backend/src/controllers/review.controller.js) with duplicate review reconciliation and model sync.
+  2. Overhauled [`mobile/customer-app/src/screens/ReviewModalScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/ReviewModalScreen.tsx) with explicit lifecycle states (`editing`, `submitting`, `published`, `closing`), single-exit execution, and non-blocking back handler.
+  3. Updated [`mobile/customer-app/src/screens/JobDetailScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/JobDetailScreen.tsx) and [`mobile/customer-app/src/screens/MyJobsScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/MyJobsScreen.tsx) to listen for `hasReview` payloads and update UI instantly.
+  4. Added `REVIEWS_CHANGED` to [`mobile/customer-app/src/services/dataSyncService.ts`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/services/dataSyncService.ts).
+  5. Added `review?: any;` to `Booking` interface in [`mobile/customer-app/src/types/index.ts`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/types/index.ts).
+  6. Verified TypeScript compilation and Android release bundle export with 0 errors.
+- **Acceptance Criteria**: "Done" cleanly finishes and leaves the review screen; "Discard Review?" never appears after publishing; "View on Profile" replaces review screen; Vendor App untouched.
+- **Status**: Done
+
+---
+
+### TSK-MOB-049: Customer App Home Header Official WorkLogy Logo Integration
+- **Title**: Replace legacy home icon emblem with transparent official WorkLogy logo in Customer Home header
+- **Priority**: P1
+- **Relevant Area**: Customer App Branding & Header UI (`HomeScreen.tsx`)
+- **Problem Statement**:
+  1. The Customer App Home screen displayed a generic blue square with a home icon and a dot next to the "WorkLogy" text.
+  2. The header lacked the official WorkLogy branding (blue-and-green house, technician, and wrench).
+- **Expected Behavior**:
+  1. Replace the generic home emblem with the official WorkLogy logo asset.
+  2. Maintain authentic aspect ratio, true RGBA transparency, and professional vertical alignment with the "WorkLogy" title.
+  3. Ensure zero layout shifts or visual clipping; preserve all other Home screen controls, buttons, categories, and carousel.
+  4. Vendor App remains strictly untouched.
+- **Implementation Scope**:
+  1. Sourced and processed the official WorkLogy transparent asset into [`mobile/customer-app/src/assets/worklogybgremove.png`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/assets/worklogybgremove.png).
+  2. Updated [`mobile/customer-app/src/screens/HomeScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/HomeScreen.tsx) to import and render `WORKLOGY_HEADER_LOGO` with `width: 42, height: 40, resizeMode: 'contain'`, aligned with `WorkLogy` title text.
+  3. Removed obsolete `logoEmblem` and `logoPinDot` elements from `HomeScreen.tsx`.
+  4. Verified TypeScript checks (`tsc --noEmit`) and Android Expo production export with 0 errors.
+- **Acceptance Criteria**: Official WorkLogy logo cleanly renders immediately before "WorkLogy" with transparency; no white box or checkerboard; home screen controls intact; vendor app untouched.
 - **Status**: Done

@@ -484,12 +484,12 @@ export default function VendorKycScreen({ navigation }: any) {
                 onChangeText={setIdNumber}
                 placeholder={
                   docType === 'Aadhaar Card'
-                    ? 'Enter 12-digit Aadhaar number'
+                    ? 'Enter 12-digit Aadhaar number exactly as printed on card'
                     : docType === 'PAN Card'
-                    ? 'Enter 10-char PAN (e.g. ABCDE1234F)'
+                    ? 'Enter 10-character PAN number (e.g. ABCDE1234F)'
                     : docType === 'Voter ID'
-                    ? 'Enter Voter ID (EPIC) number'
-                    : 'Enter Trade License / Reg number'
+                    ? 'Enter Voter ID (EPIC) number exactly as printed'
+                    : 'Enter Trade License or registration number'
                 }
                 placeholderTextColor="#94A3B8"
                 keyboardType={docType === 'Aadhaar Card' ? 'numeric' : 'default'}

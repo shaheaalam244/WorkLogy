@@ -1,5 +1,40 @@
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001/api';
-export const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:5001';
+const getRuntimeServerConfig = () => {
+  const savedMode = typeof window !== 'undefined' ? localStorage.getItem('worklogy_server_mode') : null;
+  const LOCAL_API = 'http://localhost:5001/api';
+  const LOCAL_SOCKET = 'http://localhost:5001';
+  const VPS_API = 'http://76.13.246.224:5001/api';
+  const VPS_SOCKET = 'http://76.13.246.224:5001';
+
+  if (savedMode === 'local') {
+    return { api: LOCAL_API, socket: LOCAL_SOCKET, mode: 'local' };
+  }
+  if (savedMode === 'vps') {
+    return { api: VPS_API, socket: VPS_SOCKET, mode: 'vps' };
+  }
+  return {
+    api: import.meta.env.VITE_API_BASE_URL || LOCAL_API,
+    socket: import.meta.env.VITE_SOCKET_URL || LOCAL_SOCKET,
+    mode: 'env'
+  };
+};
+
+const runtimeConfig = getRuntimeServerConfig();
+
+export const API_BASE_URL = runtimeConfig.api;
+export const SOCKET_URL = runtimeConfig.socket;
+
+if (typeof window !== 'undefined') {
+  window.switchWorklogyServer = (target) => {
+    if (target === 'local' || target === 'vps') {
+      localStorage.setItem('worklogy_server_mode', target);
+      console.log(`[WorkLogy] Target switched to: ${target.toUpperCase()}. Reloading...`);
+    } else {
+      localStorage.removeItem('worklogy_server_mode');
+      console.log(`[WorkLogy] Target reset to .env default. Reloading...`);
+    }
+    window.location.reload();
+  };
+}
 
 export const USER_ROLES = {
   CUSTOMER: 'customer',

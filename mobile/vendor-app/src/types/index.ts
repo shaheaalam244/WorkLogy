@@ -144,6 +144,7 @@ export interface VendorProfile {
   user: string | User;
   businessName: string;
   bio?: string;
+  onboardingStep?: 'profile_pending' | 'domains_pending' | 'first_service_pending' | 'completed' | string;
   categories: string[] | ServiceCategory[];
   locality?: string;
   city?: string;
@@ -239,6 +240,10 @@ export interface ServiceListing {
   domain: string;
   category?: string | ServiceCategory;
   subcategory: string;
+  isCustom?: boolean;
+  customSubcategory?: string;
+  idempotencyKey?: string;
+  bookingCount?: number;
   shortSummary?: string;
   description: string;
   experienceYears?: number;

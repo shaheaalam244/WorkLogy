@@ -18,6 +18,7 @@ import MessagesScreen from '../screens/MessagesScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import NotificationsScreen from '../screens/NotificationsScreen';
 import CategoryDetailScreen from '../screens/CategoryDetailScreen';
+import CategoriesScreen from '../screens/CategoriesScreen';
 import CreateJobScreen from '../screens/CreateJobScreen';
 import EmergencyScreen from '../screens/EmergencyScreen';
 import JobDetailScreen from '../screens/JobDetailScreen';
@@ -26,11 +27,13 @@ import ReviewModalScreen from '../screens/ReviewModalScreen';
 import LoginScreen from '../screens/LoginScreen';
 import RegisterScreen from '../screens/RegisterScreen';
 import ProfessionalProfileScreen from '../screens/ProfessionalProfileScreen';
+import * as SplashScreen from 'expo-splash-screen';
 import { COLORS } from '../theme/colors';
 import { api } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
 import { socketService } from '../services/socketService';
 import { dataSyncService } from '../services/dataSyncService';
+import { pushNotificationService } from '../services/pushNotificationService';
 import type { RouteEntry, AppNavigation } from '../types';
 
 export const NavigationContext = createContext<AppNavigation | null>(null);
@@ -54,10 +57,19 @@ export function CustomerAppContainer() {
   );
   const bottomInset = insets.bottom;
 
-  const { user } = useAuth();
+  const { user, isLoading } = useAuth();
   const [history, setHistory] = useState<RouteEntry[]>([{ name: 'HomeTab', params: {} }]);
   const [unreadNotificationsCount, setUnreadNotificationsCount] = useState<number>(0);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState<number>(0);
+
+  const hasHiddenSplashRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    if (!isLoading && !hasHiddenSplashRef.current) {
+      hasHiddenSplashRef.current = true;
+      SplashScreen.hideAsync().catch(() => {});
+    }
+  }, [isLoading]);
 
   const historyRef = useRef<RouteEntry[]>(history);
   historyRef.current = history;
@@ -77,6 +89,7 @@ export function CustomerAppContainer() {
   }, [user?._id]);
 
   const fetchUnreadNotifications = async () => {
+    if (!user?._id) return;
     try {
       const res = await api.notifications.getUnreadCount();
       const count = typeof res?.unreadCount === 'number' ? res.unreadCount : (typeof res?.count === 'number' ? res.count : 0);
@@ -87,6 +100,7 @@ export function CustomerAppContainer() {
   };
 
   const fetchUnreadMessages = async () => {
+    if (!user?._id) return;
     try {
       const res = await api.chat.getUnreadCount();
       const count = typeof res?.unreadCount === 'number' ? res.unreadCount : 0;
@@ -109,12 +123,50 @@ export function CustomerAppContainer() {
     const notifInterval = setInterval(fetchUnreadNotifications, 30000);
     const msgInterval = setInterval(fetchUnreadMessages, 30000);
 
-    const unsubNotif = dataSyncService.subscribe('NOTIFICATIONS_CHANGED', () => {
+    const unsubNotif = dataSyncService.subscribe('NOTIFICATIONS_CHANGED', (data: any) => {
       fetchUnreadNotifications();
+      if (data?.notification && data.notification.title && data.notification.message) {
+        const notif = data.notification;
+        const channel = notif.type === 'message'
+          ? 'customer_messages'
+          : (notif.type === 'payment' || notif.type === 'refund' || notif.type === 'escrow')
+          ? 'customer_payments'
+          : (notif.type === 'booking_confirmed' || notif.type === 'status_change' || notif.type === 'cancellation' || notif.type === 'quotation' || notif.type === 'quotation_received')
+          ? 'customer_bookings'
+          : 'customer_updates';
+
+        pushNotificationService.presentLocalNotification({
+          title: notif.title,
+          body: notif.message,
+          data: {
+            type: notif.type,
+            notificationId: notif._id,
+            bookingId: notif.relatedResource?.resourceId,
+            jobId: notif.relatedResource?.resourceId || notif.jobId,
+            quotationId: notif.quotationId,
+            conversationId: notif.relatedResource?.resourceId
+          },
+          channelId: channel as any
+        }).catch(() => {});
+      }
     });
 
-    const unsubMsg = dataSyncService.subscribe('MESSAGES_CHANGED', () => {
+    const unsubMsg = dataSyncService.subscribe('MESSAGES_CHANGED', (data: any) => {
       fetchUnreadMessages();
+      const activeScreen = historyRef.current[historyRef.current.length - 1]?.name;
+      if (data?.message && activeScreen !== 'ChatDetail') {
+        const senderName = data.message.sender?.name || data.senderName || 'New Message';
+        const text = data.message.text || data.message.content || 'You received a new message';
+        pushNotificationService.presentLocalNotification({
+          title: senderName,
+          body: text,
+          data: {
+            type: 'message',
+            conversationId: data.conversationId || data.message.conversationId || data.message.conversation
+          },
+          channelId: 'customer_messages'
+        }).catch(() => {});
+      }
     });
 
     const unsubRead = dataSyncService.subscribe('MESSAGES_READ', () => {
@@ -277,6 +329,27 @@ export function CustomerAppContainer() {
     routeParams
   };
 
+  const navigationRef = useRef<AppNavigation>(navigation);
+  navigationRef.current = navigation;
+
+  useEffect(() => {
+    // Provide a stable delegation wrapper so notification taps route correctly
+    pushNotificationService.initialize({
+      navigate: (screen: string, params?: any) => navigationRef.current.navigate(screen, params),
+      goBack: (force?: boolean) => navigationRef.current.goBack(force),
+      canGoBack: () => navigationRef.current.canGoBack(),
+      replace: (screen: string, params?: any) => navigationRef.current.replace(screen, params),
+      resetTo: (screen: string, params?: any) => navigationRef.current.resetTo(screen, params),
+      registerBackHandler: (handler: () => boolean) => navigationRef.current.registerBackHandler(handler),
+      get currentRoute() { return navigationRef.current.currentRoute; },
+      get routeParams() { return navigationRef.current.routeParams; }
+    } as AppNavigation);
+
+    if (user?._id) {
+      pushNotificationService.registerForPushNotifications().catch(() => {});
+    }
+  }, [user?._id]);
+
   const isTabScreen = TAB_ROUTES.includes(currentRoute);
   const showNavHeader = !isTabScreen && !SCREENS_WITH_CUSTOM_HEADER.includes(currentRoute);
 
@@ -299,6 +372,9 @@ export function CustomerAppContainer() {
         return <NotificationsScreen navigation={navigation} route={route} />;
       case 'CategoryDetail':
         return <CategoryDetailScreen navigation={navigation} route={route} />;
+      case 'Categories':
+      case 'CategoriesTab':
+        return <CategoriesScreen navigation={navigation} route={route} />;
       case 'ProfessionalProfile':
       case 'ProfessionalDetails':
       case 'ServiceDetails':
@@ -328,6 +404,9 @@ export function CustomerAppContainer() {
         return 'Alerts & Updates';
       case 'CategoryDetail':
         return 'Category Packages';
+      case 'Categories':
+      case 'CategoriesTab':
+        return 'Browse Categories';
       case 'ProfessionalProfile':
       case 'ProfessionalDetails':
         return 'Professional Details';
@@ -354,6 +433,10 @@ export function CustomerAppContainer() {
         return 'WorkLogy';
     }
   };
+
+  if (isLoading && !hasHiddenSplashRef.current) {
+    return <View style={styles.splashPlaceholder} />;
+  }
 
   return (
     <NavigationContext.Provider value={navigation}>
@@ -474,6 +557,10 @@ export function CustomerAppContainer() {
 }
 
 const styles = StyleSheet.create({
+  splashPlaceholder: {
+    flex: 1,
+    backgroundColor: '#FFFFFF'
+  },
   container: {
     flex: 1,
     backgroundColor: '#F8FAFC'

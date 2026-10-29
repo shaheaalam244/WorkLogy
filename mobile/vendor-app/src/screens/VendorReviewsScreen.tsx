@@ -76,53 +76,35 @@ export default function VendorReviewsScreen({ navigation }: any) {
     }
   };
 
-  const avgRating = profile?.rating ? Number(profile.rating).toFixed(1) : '4.9';
-  const totalReviews = profile?.reviewCount || reviews.length || 128;
+  const totalReviews = profile?.reviewCount || reviews.length || 0;
+  const avgRating = profile?.rating
+    ? Number(profile.rating).toFixed(1)
+    : (reviews.length > 0
+        ? (reviews.reduce((acc, r) => acc + (r.rating || 5), 0) / reviews.length).toFixed(1)
+        : '0.0');
 
-  // Distribution percentages matching design
-  const dist = {
-    5: 85,
-    4: 10,
-    3: 3,
-    2: 1,
-    1: 1
+  // Distribution percentages matching real data
+  const dist = totalReviews > 0 ? {
+    5: Math.round((reviews.filter((r) => (r.rating || 5) === 5).length / (reviews.length || 1)) * 100),
+    4: Math.round((reviews.filter((r) => (r.rating || 5) === 4).length / (reviews.length || 1)) * 100),
+    3: Math.round((reviews.filter((r) => (r.rating || 5) === 3).length / (reviews.length || 1)) * 100),
+    2: Math.round((reviews.filter((r) => (r.rating || 5) === 2).length / (reviews.length || 1)) * 100),
+    1: Math.round((reviews.filter((r) => (r.rating || 5) === 1).length / (reviews.length || 1)) * 100)
+  } : {
+    5: 0,
+    4: 0,
+    3: 0,
+    2: 0,
+    1: 0
   };
 
-  // Demonstration reviews if none in local DB yet
-  const defaultReviews = [
-    {
-      _id: 'rev-1',
-      customerName: 'Amit Verma',
-      rating: 5,
-      date: '2 days ago',
-      comment: 'Very professional and on time. AC service done perfectly. Highly recommended!'
-    },
-    {
-      _id: 'rev-2',
-      customerName: 'Priya Singh',
-      rating: 5,
-      date: '5 days ago',
-      comment: 'Good work and polite behavior. Will definitely book again.'
-    },
-    {
-      _id: 'rev-3',
-      customerName: 'Rahul Sharma',
-      rating: 4,
-      date: '1 week ago',
-      comment: 'Quick installation and tested cooling before leaving. Great job.'
-    }
-  ];
-
-  const displayReviews =
-    reviews.length > 0
-      ? reviews.map((r) => ({
-          _id: r._id,
-          customerName: r.customer?.name || 'Verified Client',
-          rating: r.rating || 5,
-          date: r.createdAt ? new Date(r.createdAt).toLocaleDateString() : 'Recently',
-          comment: r.comment || r.review || 'Completed job satisfactorily.'
-        }))
-      : defaultReviews;
+  const displayReviews = reviews.map((r) => ({
+    _id: r._id,
+    customerName: r.customer?.name || 'Verified Client',
+    rating: r.rating || 5,
+    date: r.createdAt ? new Date(r.createdAt).toLocaleDateString() : 'Recently',
+    comment: r.comment || r.review || 'Completed job satisfactorily.'
+  }));
 
   const sortedReviews = activeTab === 'latest' ? [...displayReviews].reverse() : displayReviews;
 
@@ -205,59 +187,69 @@ export default function VendorReviewsScreen({ navigation }: any) {
           </View>
 
           {/* ── REVIEWS LIST ── */}
-          {sortedReviews.map((rev) => (
-            <View key={rev._id} style={styles.reviewItemCard}>
-              <View style={styles.reviewTopRow}>
-                <View style={styles.avatarCircle}>
-                  <Text style={styles.avatarLetter}>
-                    {rev.customerName.charAt(0).toUpperCase()}
-                  </Text>
-                </View>
-                <View style={{ flex: 1, marginLeft: 10 }}>
-                  <Text style={styles.customerName}>{rev.customerName}</Text>
-                  <View style={styles.reviewStarsRow}>
-                    {[1, 2, 3, 4, 5].map((s) => (
-                      <Ionicons
-                        key={s}
-                        name={s <= rev.rating ? 'star' : 'star-outline'}
-                        size={11}
-                        color="#F59E0B"
-                      />
-                    ))}
-                    <Text style={styles.reviewDateText}> • {rev.date}</Text>
+          {sortedReviews.length === 0 ? (
+            <View style={styles.emptyReviewsCard}>
+              <Ionicons name="star-outline" size={36} color="#CBD5E1" />
+              <Text style={styles.emptyReviewsTitle}>No Reviews Yet</Text>
+              <Text style={styles.emptyReviewsSub}>
+                Customer reviews and ratings will appear here as you fulfill confirmed service bookings.
+              </Text>
+            </View>
+          ) : (
+            sortedReviews.map((rev) => (
+              <View key={rev._id} style={styles.reviewItemCard}>
+                <View style={styles.reviewTopRow}>
+                  <View style={styles.avatarCircle}>
+                    <Text style={styles.avatarLetter}>
+                      {rev.customerName.charAt(0).toUpperCase()}
+                    </Text>
                   </View>
+                  <View style={{ flex: 1, marginLeft: 10 }}>
+                    <Text style={styles.customerName}>{rev.customerName}</Text>
+                    <View style={styles.reviewStarsRow}>
+                      {[1, 2, 3, 4, 5].map((s) => (
+                        <Ionicons
+                          key={s}
+                          name={s <= rev.rating ? 'star' : 'star-outline'}
+                          size={11}
+                          color="#F59E0B"
+                        />
+                      ))}
+                      <Text style={styles.reviewDateText}> • {rev.date}</Text>
+                    </View>
+                  </View>
+
+                  <TouchableOpacity
+                    onPress={() =>
+                      Alert.alert(
+                        'Review Options',
+                        'This review is verified by WorkLogy moderation.',
+                        [{ text: 'Close', style: 'cancel' }]
+                      )
+                    }
+                    style={styles.moreDotsBtn}
+                  >
+                    <Ionicons name="ellipsis-vertical" size={16} color="#94A3B8" />
+                  </TouchableOpacity>
                 </View>
 
+                <Text style={styles.reviewComment}>{rev.comment}</Text>
+
+                {/* Reply Button */}
                 <TouchableOpacity
-                  onPress={() =>
-                    Alert.alert(
-                      'Review Options',
-                      'This review is verified by WorkLogy moderation.',
-                      [{ text: 'Close', style: 'cancel' }]
-                    )
-                  }
-                  style={styles.moreDotsBtn}
+                  style={styles.replyBtn}
+                  onPress={() => {
+                    setReplyingReview(rev);
+                    setReplyText('');
+                  }}
+                  activeOpacity={0.75}
                 >
-                  <Ionicons name="ellipsis-vertical" size={16} color="#94A3B8" />
+                  <Ionicons name="chatbubble-outline" size={13} color="#06684F" />
+                  <Text style={styles.replyBtnText}>Reply</Text>
                 </TouchableOpacity>
               </View>
-
-              <Text style={styles.reviewComment}>{rev.comment}</Text>
-
-              {/* Reply Button */}
-              <TouchableOpacity
-                style={styles.replyBtn}
-                onPress={() => {
-                  setReplyingReview(rev);
-                  setReplyText('');
-                }}
-                activeOpacity={0.75}
-              >
-                <Ionicons name="chatbubble-outline" size={13} color="#06684F" />
-                <Text style={styles.replyBtnText}>Reply</Text>
-              </TouchableOpacity>
-            </View>
-          ))}
+            ))
+          )}
 
           <View style={{ height: 40 }} />
         </ScrollView>
@@ -276,7 +268,7 @@ export default function VendorReviewsScreen({ navigation }: any) {
               style={styles.replyInput}
               value={replyText}
               onChangeText={setReplyText}
-              placeholder="Write a polite response to your customer..."
+              placeholder="Write a polite, professional reply to this customer review..."
               placeholderTextColor="#94A3B8"
               multiline
               numberOfLines={3}
@@ -575,5 +567,28 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#FFFFFF'
+  },
+  emptyReviewsCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 28,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10
+  },
+  emptyReviewsTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#1E293B',
+    marginTop: 10
+  },
+  emptyReviewsSub: {
+    fontSize: 13,
+    color: '#64748B',
+    textAlign: 'center',
+    marginTop: 6,
+    lineHeight: 18
   }
 });

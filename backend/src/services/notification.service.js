@@ -3,6 +3,7 @@ import Notification from '../models/Notification.js';
 import User from '../models/User.js';
 import { sendEmail } from './email.service.js';
 import { sendPushNotification } from './pushNotification.service.js';
+import { getIO } from '../config/socket.js';
 
 /**
  * Core In-App & Email Notification Dispatcher
@@ -61,10 +62,37 @@ export async function createNotification({
 
     const notification = await Notification.create(notifData);
 
+    // Real-time Socket.IO emission to recipient's personal room
+    try {
+      const io = getIO();
+      if (io) {
+        io.to(`user_${targetRecipient}`).emit('notification', notification);
+        const unreadCount = await Notification.countDocuments({
+          recipient: targetRecipient,
+          isRead: false
+        }).catch(() => 1);
+        io.to(`user_${targetRecipient}`).emit('unread_notifications_count', { count: unreadCount });
+        if (type === 'quotation_received') {
+          io.to(`user_${targetRecipient}`).emit('job_quotation_received', {
+            jobId: (relatedResource?.jobId || relatedResource?.resourceId)?.toString(),
+            quotationId: (relatedResource?.quotationId || relatedResource?.resourceId)?.toString(),
+            title,
+            message
+          });
+        }
+      }
+    } catch (socketErr) {
+      console.warn('Socket emit non-fatal warning in createNotification:', socketErr.message);
+    }
+
     // 3. Process Remote Push Notification if enabled
     if (sendPush) {
       try {
-        let channelId = 'general';
+        // Resolve recipient role to map proper Android notification channels
+        const recipientDoc = recipient?.role ? recipient : await User.findById(targetRecipient).select('role').lean().catch(() => null);
+        const isCustomer = recipientDoc?.role === 'customer';
+
+        let channelId = isCustomer ? 'customer_updates' : 'general';
         const pushData = {
           notificationId: notification._id.toString(),
           type,
@@ -72,13 +100,13 @@ export async function createNotification({
         };
 
         if (type === 'message') {
-          channelId = 'messages';
+          channelId = isCustomer ? 'customer_messages' : 'messages';
           pushData.type = 'message';
           if (relatedResource?.resourceId) {
             pushData.conversationId = relatedResource.resourceId.toString();
           }
         } else if (type === 'job_alert') {
-          channelId = 'job-requests';
+          channelId = isCustomer ? 'customer_updates' : 'job-requests';
           pushData.type = 'job';
           if (relatedResource?.resourceId) {
             pushData.jobId = relatedResource.resourceId.toString();
@@ -89,7 +117,7 @@ export async function createNotification({
           type === 'status_change' ||
           type === 'cancellation'
         ) {
-          channelId = 'bookings';
+          channelId = isCustomer ? 'customer_bookings' : 'bookings';
           pushData.type = 'booking';
           if (relatedResource?.resourceId) {
             pushData.bookingId = relatedResource.resourceId.toString();
@@ -99,10 +127,17 @@ export async function createNotification({
           type === 'application_received' ||
           type === 'proposal_accepted'
         ) {
-          channelId = 'job-requests';
-          pushData.type = 'job';
+          channelId = isCustomer ? 'customer_bookings' : 'job-requests';
+          pushData.type = 'quotation';
+          pushData.jobId = (relatedResource?.jobId || relatedResource?.resourceId || '').toString();
+          if (relatedResource?.quotationId) {
+            pushData.quotationId = relatedResource.quotationId.toString();
+          }
+        } else if (type === 'payment' || type === 'refund' || type === 'escrow') {
+          channelId = isCustomer ? 'customer_payments' : 'bookings';
+          pushData.type = 'payment';
           if (relatedResource?.resourceId) {
-            pushData.jobId = relatedResource.resourceId.toString();
+            pushData.transactionId = relatedResource.resourceId.toString();
           }
         }
 
@@ -198,6 +233,7 @@ export async function notifyNewQuotation({
 }) {
   const amountFormatted = proposedAmount ? `₹${proposedAmount}` : 'an agreed rate';
   const jobTitle = job.title || 'your service request';
+  const jobId = (job._id || job.id || job).toString();
 
   return await createNotification({
     recipientId: customerId,
@@ -205,12 +241,14 @@ export async function notifyNewQuotation({
     type: 'quotation_received',
     title: 'New quotation received',
     message: `A service professional has submitted a quotation of ${amountFormatted} on "${jobTitle}".`,
-    link: `/jobs/${job._id || job.id}`,
+    link: `/jobs/${jobId}`,
     relatedResource: {
       resourceType: 'quotation',
-      resourceId: quotationId || job._id
+      resourceId: quotationId || jobId,
+      jobId,
+      quotationId: quotationId ? quotationId.toString() : undefined
     },
-    idempotencyKey: quotationId ? `quotation_${quotationId}` : `quotation_${job._id}_${vendorId}`,
+    idempotencyKey: quotationId ? `quotation_${quotationId}` : `quotation_${jobId}_${vendorId}`,
     sendEmailNotification: true,
     emailSubject: `New quotation received on "${jobTitle}"`,
     emailDetails: [
@@ -311,6 +349,10 @@ export async function notifyStatusChange({
   let link = '/customer/bookings';
 
   switch (newStatus) {
+    case 'arrived':
+      title = 'Your technician has arrived';
+      message = message || 'Your professional has arrived at the service location. Open WorkLogy to view your service-start OTP.';
+      break;
     case 'in_progress':
       title = 'Work in progress';
       message = message || `Technician has started work on "${jobTitle}". Work is actively underway.`;
@@ -425,13 +467,72 @@ export async function notifyCancellation({
   return results;
 }
 
+/**
+ * Event E: Payment & Refund Notifications
+ * Trigger: Confirmed payment, escrow release, or refund
+ * Recipients: Customer and/or Vendor
+ */
+export async function notifyPaymentUpdate({
+  customerId,
+  vendorId = null,
+  amount,
+  transactionId,
+  bookingId = null,
+  jobTitle = 'Service',
+  type = 'payment', // 'payment' | 'refund' | 'escrow'
+  status = 'confirmed'
+}) {
+  const formattedAmount = amount ? `₹${amount}` : '';
+  let title = 'Payment update';
+  let message = `Payment status updated for "${jobTitle}".`;
+
+  if (type === 'payment' && status === 'confirmed') {
+    title = 'Payment Confirmed';
+    message = `Payment of ${formattedAmount} for "${jobTitle}" has been confirmed and secured in escrow.`;
+  } else if (type === 'refund') {
+    title = 'Refund Processed';
+    message = `A refund of ${formattedAmount} for "${jobTitle}" has been processed to your account.`;
+  } else if (type === 'escrow') {
+    title = 'Escrow Released';
+    message = `Funds of ${formattedAmount} for "${jobTitle}" have been successfully released.`;
+  }
+
+  const results = [];
+  if (customerId) {
+    const custRes = await createNotification({
+      recipientId: customerId,
+      senderId: vendorId,
+      type,
+      title,
+      message,
+      link: '/customer/payments',
+      relatedResource: {
+        resourceType: 'payment',
+        resourceId: transactionId || bookingId
+      },
+      idempotencyKey: `pay_${type}_${transactionId || bookingId}_${status}_cust`,
+      sendEmailNotification: true,
+      emailSubject: `${title} — ${jobTitle}`,
+      emailDetails: [
+        { label: 'Service', value: jobTitle },
+        { label: 'Amount', value: formattedAmount },
+        { label: 'Status', value: status.toUpperCase() }
+      ]
+    });
+    results.push(custRes);
+  }
+  return results;
+}
+
 export const notificationService = {
   createNotification,
   notifyNewQuotation,
   notifyBookingConfirmed,
   notifyStatusChange,
-  notifyCancellation
+  notifyCancellation,
+  notifyPaymentUpdate
 };
 
 export default notificationService;
+
 

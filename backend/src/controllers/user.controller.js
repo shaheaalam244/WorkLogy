@@ -51,10 +51,28 @@ export const updateCustomerProfile = async (req, res, next) => {
   }
 };
 
+export const getAddresses = async (req, res, next) => {
+  try {
+    let profile = await CustomerProfile.findOne({ user: req.user.id });
+    if (!profile) {
+      profile = await CustomerProfile.create({ user: req.user.id, addresses: [] });
+    }
+    res.status(200).json({
+      success: true,
+      count: profile.addresses?.length || 0,
+      addresses: profile.addresses || []
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const addAddress = async (req, res, next) => {
   try {
-    const profile = await CustomerProfile.findOne({ user: req.user.id });
-    if (!profile) return res.status(404).json({ success: false, message: 'Profile not found' });
+    let profile = await CustomerProfile.findOne({ user: req.user.id });
+    if (!profile) {
+      profile = await CustomerProfile.create({ user: req.user.id, addresses: [] });
+    }
 
     const addrData = { ...req.body };
     if (addrData.pincode && !addrData.zipCode) {
@@ -69,7 +87,38 @@ export const addAddress = async (req, res, next) => {
       };
     }
 
-    profile.addresses.push(addrData);
+    // Normalization & duplicate detection to prevent accidental duplicate addresses
+    const norm = (str) => (str || '').trim().toLowerCase();
+    const existingIndex = profile.addresses.findIndex((a) => {
+      const sameStreet = norm(a.street) === norm(addrData.street);
+      const sameLocality = norm(a.locality) === norm(addrData.locality);
+      const sameCity = norm(a.city) === norm(addrData.city);
+      const sameZip = norm(a.zipCode || a.pincode) === norm(addrData.zipCode || addrData.pincode);
+      return sameStreet && sameLocality && sameCity && sameZip;
+    });
+
+    if (existingIndex !== -1) {
+      // Update existing address instead of creating duplicate
+      const existing = profile.addresses[existingIndex];
+      if (addrData.label) existing.label = addrData.label;
+      if (addrData.houseNumber) existing.houseNumber = addrData.houseNumber;
+      if (addrData.landmark) existing.landmark = addrData.landmark;
+      if (addrData.coordinates) existing.coordinates = addrData.coordinates;
+      if (addrData.isDefault) {
+        profile.addresses.forEach((a, idx) => {
+          a.isDefault = idx === existingIndex;
+        });
+      }
+    } else {
+      if (addrData.isDefault || profile.addresses.length === 0) {
+        profile.addresses.forEach((a) => {
+          a.isDefault = false;
+        });
+        addrData.isDefault = true;
+      }
+      profile.addresses.push(addrData);
+    }
+
     await profile.save();
     res.status(200).json({ success: true, addresses: profile.addresses });
   } catch (error) {

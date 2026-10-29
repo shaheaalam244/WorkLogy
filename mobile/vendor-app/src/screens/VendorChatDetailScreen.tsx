@@ -482,7 +482,7 @@ export default function VendorChatDetailScreen({ route, navigation }: any) {
       >
         <TextInput
           style={styles.textInput}
-          placeholder="Type an update or ETA message..."
+          placeholder="Write a message or ETA update to the customer..."
           placeholderTextColor="#9CA3AF"
           value={inputText}
           onChangeText={setInputText}

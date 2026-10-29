@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -13,16 +13,13 @@ import {
   Dimensions,
   Platform,
   StatusBar,
-  KeyboardAvoidingView
+  KeyboardAvoidingView,
+  BackHandler
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { api } from '../api/client';
+import { api, getStoredAuthToken } from '../api/client';
 import { useNavigation } from '../context/NavigationContext';
-import { secureStorage } from '../storage/secureStorage';
-import { STORAGE_KEYS } from '../constants';
-import { COLORS } from '../theme/colors';
 import { getServiceImage } from '../utils/serviceImages';
 import type { ServiceListing } from '../types';
 
@@ -42,6 +39,196 @@ const COMMON_LOCALITIES = [
   'Janki Puram'
 ];
 
+/**
+ * Deterministic service title, summary & description auto-generation.
+ * Populates professional, trade-specific content without fabrication.
+ */
+export function generateServiceDefaults(categoryName: string, subcategoryName: string, customName?: string) {
+  const task = (customName || subcategoryName || '').trim();
+  if (!task || task === 'Other') {
+    return {
+      title: '',
+      shortSummary: '',
+      description: ''
+    };
+  }
+
+  const lower = task.toLowerCase();
+
+  // 1. Electrical Services
+  if (lower.includes('fan') || lower.includes('light')) {
+    return {
+      title: `${task} Service`,
+      shortSummary: 'Professional installation and repair of ceiling fans, wall lights and compatible fixtures.',
+      description: 'Comprehensive installation and repair of compatible fans and lighting fixtures, including secure mounting, connection safety checks, and full operational testing. Additional wiring or custom brackets quoted transparently.'
+    };
+  }
+  if (lower.includes('wiring') || lower.includes('rewiring')) {
+    return {
+      title: `${task} & Circuit Testing`,
+      shortSummary: 'Certified electrical wiring, short-circuit diagnostics, and standard load safety checks.',
+      description: 'Complete wiring and rewiring services for home or commercial premises using heat-resistant copper conductors. Includes circuit breaker inspection, earthing verification, and load balancing.'
+    };
+  }
+  if (lower.includes('switchboard') || lower.includes('socket')) {
+    return {
+      title: `${task} & Replacement`,
+      shortSummary: 'Safe switchboard repair, modular socket replacement, and earthing connection testing.',
+      description: 'Thorough inspection and replacement of spark-damaged or loose switchboards and sockets. Includes voltage testing, insulation check, and secure faceplate mounting.'
+    };
+  }
+  if (lower.includes('inverter') || lower.includes('backup')) {
+    return {
+      title: `${task} & Battery Maintenance`,
+      shortSummary: 'Inverter setup, battery terminal cleaning, distilled water top-up, and backup diagnostics.',
+      description: 'Diagnostic inspection and installation of domestic inverters and UPS systems. Covers electrolyte density checking, terminal corrosion removal, and automatic transfer switch testing.'
+    };
+  }
+  if (lower.includes('fault') || lower.includes('diagnosis') || lower.includes('electrician')) {
+    return {
+      title: `${task} & Emergency Troubleshooting`,
+      shortSummary: 'Rapid electrical fault isolation, tripping breaker diagnostics, and safety restoration.',
+      description: 'Step-by-step diagnostic isolation of short circuits, persistent MCB tripping, voltage fluctuations, and open grounds. Workmanship warranty on all rectified connections.'
+    };
+  }
+
+  // 2. AC & HVAC Services
+  if (lower.includes('ac repair') || lower.includes('cooling')) {
+    return {
+      title: `${task} & Performance Diagnostics`,
+      shortSummary: 'Comprehensive AC cooling diagnostics, gas pressure check, and electrical testing.',
+      description: 'Complete diagnostic check of indoor and outdoor units, cooling coil examination, compressor performance evaluation, capacitor check, and gas pressure audit.'
+    };
+  }
+  if (lower.includes('ac servicing') || lower.includes('jet cleaning') || lower.includes('jet wash')) {
+    return {
+      title: `${task} with Foam & Pressure Wash`,
+      shortSummary: 'Deep jet wash cleaning of cooling coils, filters, blower wheel, and outdoor condenser.',
+      description: 'High-pressure foam wash and jet cleaning for split or window air conditioners. Removes accumulated dust, enhances airflow efficiency, and cleans drain trays to prevent water leakage.'
+    };
+  }
+  if (lower.includes('ac installation') || lower.includes('uninstallation')) {
+    return {
+      title: `${task} with Level Balancing`,
+      shortSummary: 'Precision mounting of indoor unit, outdoor bracket fixing, copper piping, and vacuuming.',
+      description: 'Professional installation following manufacturer specifications: vibration-free bracket mounting, flare joint tightening, nitrogen pressure check, and operational testing.'
+    };
+  }
+  if (lower.includes('gas') || lower.includes('charging') || lower.includes('compressor')) {
+    return {
+      title: `${task} & Refrigerant Leak Sealing`,
+      shortSummary: 'Nitrogen leak testing, brazing repair, system evacuation, and pure refrigerant charging.',
+      description: 'Specialized refrigerant top-up and compressor servicing. Involves electronic leak detection, brazing fracture repair, vacuum pump moisture removal, and precise scale-based gas charging.'
+    };
+  }
+
+  // 3. Plumbing Services
+  if (lower.includes('pipe') || lower.includes('leakage') || lower.includes('seepage')) {
+    return {
+      title: `${task} & Concealed Line Sealing`,
+      shortSummary: 'Detection and permanent repair of fractured water supply pipes and concealed seepages.',
+      description: 'Acoustic and pressure-based detection of concealed plumbing leaks. Repair of CPVC, UPVC, or GI pipes using industrial solvent welds or compression fittings with zero mess.'
+    };
+  }
+  if (lower.includes('tap') || lower.includes('faucet') || lower.includes('mixer')) {
+    return {
+      title: `${task} & Cartridge Replacement`,
+      shortSummary: 'Repair of dripping taps, mixer cartridge replacement, and aerator descaling.',
+      description: 'Complete servicing of sink mixers, basin taps, and shower faucets. Includes spindle replacement, teflon sealing, and flow pressure calibration.'
+    };
+  }
+  if (lower.includes('drainage') || lower.includes('blockage') || lower.includes('clog')) {
+    return {
+      title: `${task} & Chemical Cleaning`,
+      shortSummary: 'High-torque snake rod drain clearing, kitchen sink unclogging, and trap disinfection.',
+      description: 'Mechanical clearing of stubborn clogs in bathroom gullies, kitchen sinks, and soil waste pipes. Restores free-flowing drainage and sanitizes pipe traps.'
+    };
+  }
+  if (lower.includes('tank') || lower.includes('water tank')) {
+    return {
+      title: `${task} & UV Disinfection`,
+      shortSummary: 'Automated sludge removal, high-pressure tank washing, and antibacterial UV treatment.',
+      description: 'Multi-stage overhead or underground water tank cleaning: dewatering, sludge vacuuming, high-pressure jet washing, antibacterial spray, and UV germicidal treatment.'
+    };
+  }
+
+  // 4. General / Custom Fallback
+  return {
+    title: `${task} Service`,
+    shortSummary: `Expert ${task.toLowerCase()} delivered by verified local specialists.`,
+    description: `Professional ${task.toLowerCase()} with standard preliminary inspection, certified tool application, transparent material procurement, and verified operational testing.`
+  };
+}
+
+/**
+ * Domain-Aware Dynamic Placeholders based on selected service trade.
+ */
+function getDomainPlaceholders(category: any) {
+  const catName = (category?.name || '').toLowerCase();
+  const slug = (category?.slug || '').toLowerCase();
+
+  if (catName.includes('ac') || slug.includes('ac') || catName.includes('hvac') || slug.includes('hvac')) {
+    return {
+      customSubcategory: 'e.g. Split AC Servicing & Gas Leakage Diagnosis',
+      title: 'e.g. Split AC Servicing & Cooling Issue Diagnosis',
+      summary: 'e.g. Complete split AC foam wash, filter cleaning, and cooling performance check.',
+      description: 'Explain the AC inspection process, gas pressure audit, cooling coil cleaning, and guarantee provided.'
+    };
+  }
+
+  if (catName.includes('electr') || slug.includes('electr')) {
+    return {
+      customSubcategory: 'e.g. Inverter Battery Descaling & Terminal Repair',
+      title: 'e.g. Ceiling Fan and Modular Light Installation',
+      summary: 'e.g. Professional installation of ceiling fans, wall lights, and modular switch fixtures.',
+      description: 'Explain the wiring inspection, circuit load balancing, safety earthing checks, and workmanship warranty.'
+    };
+  }
+
+  if (catName.includes('plumb') || slug.includes('plumb')) {
+    return {
+      customSubcategory: 'e.g. Overhead Tank Float Valve Replacement',
+      title: 'e.g. Tap Leakage Repair & Concealed Pipe Fitting',
+      summary: 'e.g. Fast detection and permanent repair of pipe fractures, dripping taps, and drainage leaks.',
+      description: 'Detail the plumbing diagnosis, CPVC pipe fitting, drain unclogging tools used, and parts guarantee.'
+    };
+  }
+
+  if (catName.includes('carpen') || slug.includes('carpen')) {
+    return {
+      customSubcategory: 'e.g. Modular Kitchen Hinge Alignment & Slide Repair',
+      title: 'e.g. Door Lock Repair & Modular Furniture Fitting',
+      summary: 'e.g. Precision fitting of wooden door locks, hinges, modular cabinets, and alignment repairs.',
+      description: 'Detail the carpentry woodwork, hinge alignment, hardware installation, and finishing quality.'
+    };
+  }
+
+  if (catName.includes('clean') || slug.includes('clean')) {
+    return {
+      customSubcategory: 'e.g. Balcony Floor Scrubbing & Bird Net Cleaning',
+      title: 'e.g. Deep Home & Bathroom Sanitization Service',
+      summary: 'e.g. Deep scrubbing, chemical disinfection, and eco-friendly sanitization of living spaces.',
+      description: 'Detail the cleaning chemicals used, machine scrubbing process, areas sanitized, and safety measures.'
+    };
+  }
+
+  if (catName.includes('paint') || slug.includes('paint')) {
+    return {
+      customSubcategory: 'e.g. Waterproof Exterior Wall Primer Application',
+      title: 'e.g. Interior Wall Painting & Putty Touch-Up',
+      summary: 'e.g. Two-coat premium emulsion painting with wall putty smoothing and primer base.',
+      description: 'Detail the surface preparation, sanding, primer coats, paint brands used, and masking protection.'
+    };
+  }
+
+  return {
+    customSubcategory: 'e.g. Specialized Diagnostic & Maintenance Service',
+    title: 'e.g. Professional Repair and Maintenance Service',
+    summary: 'e.g. Expert service delivered by verified trade specialists with quality guarantee.',
+    description: 'Explain the step-by-step repair process, materials provided, exclusions, and warranty terms.'
+  };
+}
+
 export default function VendorNewServiceScreen({ navigation, route }: any) {
   const insets = useSafeAreaInsets();
   const appNav = useNavigation();
@@ -53,29 +240,44 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
   const existingService: ServiceListing | undefined = route?.params?.service;
   const isEditing = Boolean(existingService?._id);
 
-  // Step state: 1 to 5
-  const [step, setStep] = useState(1);
-  const [submitting, setSubmitting] = useState(false);
-  const [categories, setCategories] = useState<any[]>([]);
-  const [loadingCategories, setLoadingCategories] = useState(true);
+  // Idempotency key scoped to this creation session
+  const idempotencyKeyRef = useRef<string>(
+    `svc_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`
+  );
 
-  // Form Fields - Step 1: Info
+  // 5-Step wizard state: 1 to 5
+  const [step, setStep] = useState(1);
+  const [submitStatus, setSubmitStatus] = useState<'idle' | 'validating' | 'submitting' | 'success' | 'error'>('idle');
+
+  // Vendor Domains and Canonical Categories
+  const [approvedCategories, setApprovedCategories] = useState<any[]>([]);
+  const [loadingCategories, setLoadingCategories] = useState(true);
+  const [hasNoApprovedDomains, setHasNoApprovedDomains] = useState(false);
+
+  // Step 1: Basic Info
   const [selectedCategory, setSelectedCategory] = useState<any>(null);
   const [subcategory, setSubcategory] = useState(existingService?.subcategory || '');
+  const [isCustom, setIsCustom] = useState(Boolean(existingService?.isCustom));
+  const [customSubcategory, setCustomSubcategory] = useState(
+    existingService?.isCustom ? (existingService?.customSubcategory || existingService?.subcategory || '') : ''
+  );
   const [title, setTitle] = useState(existingService?.title || '');
   const [shortSummary, setShortSummary] = useState(existingService?.shortSummary || '');
   const [description, setDescription] = useState(existingService?.description || '');
   const [experienceYears, setExperienceYears] = useState(
-    existingService?.experienceYears?.toString() || '4'
+    existingService?.experienceYears !== undefined ? existingService.experienceYears.toString() : '4'
   );
-  const [imageUrl, setImageUrl] = useState(existingService?.images?.[0] || '');
-  const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
-  // Form Fields - Step 2: Pricing
+  // User edit tracking (prevent unexpected overwrite of custom text)
+  const [hasEditedTitle, setHasEditedTitle] = useState(isEditing);
+  const [hasEditedSummary, setHasEditedSummary] = useState(isEditing);
+  const [hasEditedDesc, setHasEditedDesc] = useState(isEditing);
+
+  // Step 2: Pricing
   const [pricingType, setPricingType] = useState<'fixed' | 'starting' | 'quote'>(
     (existingService?.pricing?.type as any) || 'fixed'
   );
-  const [amount, setAmount] = useState(existingService?.pricing?.amount?.toString() || '499');
+  const [amount, setAmount] = useState(existingService?.pricing?.amount?.toString() || '450');
   const [minPrice, setMinPrice] = useState(existingService?.pricing?.minPrice?.toString() || '350');
   const [unit, setUnit] = useState<'per visit' | 'per hour' | 'per item' | 'per project'>(
     existingService?.pricing?.unit || 'per visit'
@@ -85,7 +287,7 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
     existingService?.pricing?.materialCostIncluded || false
   );
 
-  // Form Fields - Step 3: Coverage
+  // Step 3: Coverage Area
   const [city, setCity] = useState(existingService?.location?.city || 'Lucknow');
   const [locality, setLocality] = useState(existingService?.location?.locality || 'Gomti Nagar');
   const [radiusKm, setRadiusKm] = useState(existingService?.location?.radiusKm?.toString() || '25');
@@ -96,7 +298,7 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
     existingService?.location?.homeVisitAvailable ?? true
   );
 
-  // Form Fields - Step 4: Availability
+  // Step 4: Availability
   const [selectedDays, setSelectedDays] = useState<string[]>(
     existingService?.availability?.days || ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
   );
@@ -109,20 +311,32 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
     existingService?.availability?.maxDailyBookings?.toString() || '5'
   );
 
+  // Dynamic domain-aware placeholders
+  const domainPlaceholders = getDomainPlaceholders(selectedCategory);
+
+  // Load Vendor's Approved Domains & Area
   useEffect(() => {
-    loadCategories();
+    loadVendorDomainsAndArea();
   }, []);
 
+  // Hardware Back Handler & Discard Protection
   useEffect(() => {
-    const unregister = appNav.registerBackHandler(() => {
+    const onBackPress = () => {
+      if (submitStatus === 'submitting') {
+        return true; // Disallow back while submitting
+      }
+
       if (step > 1) {
-        setStep((prev) => prev - 1);
+        setStep((prev) => Math.max(1, prev - 1));
         return true;
       }
-      if (title.trim()) {
+
+      // On Step 1: Confirm discard if form was modified
+      const isDirty = Boolean(title.trim() || customSubcategory.trim());
+      if (isDirty && !isEditing) {
         Alert.alert(
-          'Discard Listing?',
-          'Are you sure you want to discard this service listing? Any unsaved edits will be lost.',
+          'Discard Service?',
+          'Are you sure you want to discard this service creation? Any unsaved edits will be lost.',
           [
             { text: 'Keep Editing', style: 'cancel' },
             {
@@ -134,75 +348,165 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
         );
         return true;
       }
-      return false;
-    });
-    return unregister;
-  }, [step, title, appNav, navigation]);
 
-  const loadCategories = async () => {
+      return false; // Let navigation handle it
+    };
+
+    const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => sub.remove();
+  }, [step, submitStatus, title, customSubcategory, isEditing, navigation]);
+
+  const loadVendorDomainsAndArea = async () => {
     try {
       setLoadingCategories(true);
-      const res = await api.categories.getAll();
-      const list = Array.isArray(res) ? res : res?.categories || [];
-      setCategories(list);
 
-      // Pre-select category if editing or matches domain
+      const [profileRes, catRes, areaRes] = await Promise.all([
+        api.vendors.getProfile().catch(() => null),
+        api.categories.getAll().catch(() => null),
+        api.vendors.getServiceArea().catch(() => null)
+      ]);
+
+      const allCategories: any[] = Array.isArray(catRes) ? catRes : catRes?.categories || [];
+      const vendorProf = profileRes?.vendor;
+
+      // Extract approved category IDs
+      const rawVendorCats = vendorProf?.categories || [];
+      const approvedIds = rawVendorCats
+        .map((c: any) => (typeof c === 'object' ? c._id?.toString() : c?.toString()))
+        .filter(Boolean);
+
+      // Filter canonical categories by vendor's approved domains only!
+      let filtered: any[] = [];
+      if (approvedIds.length > 0) {
+        filtered = allCategories.filter((c: any) => approvedIds.includes(c._id?.toString()));
+      }
+
+      if (filtered.length === 0) {
+        setHasNoApprovedDomains(true);
+        setApprovedCategories([]);
+        return;
+      }
+
+      setHasNoApprovedDomains(false);
+      setApprovedCategories(filtered);
+
+      // Select initial domain
+      let currentSelected: any = null;
       if (existingService?.domain || existingService?.category) {
         const catId = typeof existingService.category === 'object' ? existingService.category?._id : existingService.category;
-        const matched = list.find((c: any) => c._id === catId || c.slug === existingService.domain || c.name === existingService.domain);
-        if (matched) setSelectedCategory(matched);
-      } else if (list.length > 0 && !selectedCategory) {
-        setSelectedCategory(list[0]);
-        if (list[0].subcategories?.length > 0 && !subcategory) {
-          const firstSub = typeof list[0].subcategories[0] === 'string' ? list[0].subcategories[0] : list[0].subcategories[0].name;
+        currentSelected = filtered.find(
+          (c: any) => c._id === catId || c.slug === existingService.domain || c.name === existingService.domain
+        );
+      }
+
+      if (!currentSelected && filtered.length > 0) {
+        currentSelected = filtered[0];
+      }
+
+      if (currentSelected) {
+        setSelectedCategory(currentSelected);
+
+        // Pre-fill initial subcategory if not editing
+        if (!existingService && currentSelected.subcategories?.length > 0 && !subcategory) {
+          const firstSub = currentSelected.subcategories[0];
           setSubcategory(firstSub);
+          setIsCustom(false);
+          const defaults = generateServiceDefaults(currentSelected.name, firstSub);
+          setTitle(defaults.title);
+          setShortSummary(defaults.shortSummary);
+          setDescription(defaults.description);
         }
       }
+
+      // Pre-populate service area settings from vendor's coverage
+      if (!isEditing && areaRes?.coverage) {
+        if (areaRes.coverage.city) setCity(areaRes.coverage.city);
+        if (areaRes.coverage.baseAddress) setLocality(areaRes.coverage.baseAddress);
+        if (areaRes.coverage.radiusKm) setRadiusKm(areaRes.coverage.radiusKm.toString());
+      }
     } catch (err) {
-      console.warn('Failed to load categories:', err);
+      console.warn('Failed to load vendor domains:', err);
+      Alert.alert('Load Error', 'Unable to retrieve your approved service domains.');
     } finally {
       setLoadingCategories(false);
     }
   };
 
+  // Domain Switch Handler
   const handleSelectCategory = (cat: any) => {
+    if (selectedCategory?._id === cat._id) return;
+
     setSelectedCategory(cat);
-    if (cat.subcategories && cat.subcategories.length > 0) {
-      const firstSub = typeof cat.subcategories[0] === 'string' ? cat.subcategories[0] : cat.subcategories[0].name;
+
+    // If previous subcategory does not belong to new domain, reset subcategory
+    const subs: string[] = cat.subcategories || [];
+    const belongs = subs.some((s) => s.toLowerCase() === subcategory.toLowerCase());
+
+    if (!belongs && !isCustom) {
+      const firstSub = subs.length > 0 ? subs[0] : '';
       setSubcategory(firstSub);
+      setIsCustom(false);
+      setCustomSubcategory('');
+
+      // Auto-update suggestions if fields weren't manually edited
+      if (!hasEditedTitle || !hasEditedSummary || !hasEditedDesc) {
+        const defaults = generateServiceDefaults(cat.name, firstSub);
+        if (!hasEditedTitle) setTitle(defaults.title);
+        if (!hasEditedSummary) setShortSummary(defaults.shortSummary);
+        if (!hasEditedDesc) setDescription(defaults.description);
+      }
     }
   };
 
-  const handlePickServicePhoto = async () => {
-    if (uploadingPhoto) return;
-    try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission Denied', 'WorkLogy needs gallery permissions to upload service photos.');
-        return;
+  // Subcategory Selection Handler
+  const handleSelectSubcat = (name: string, customMode: boolean) => {
+    if (customMode) {
+      setIsCustom(true);
+      setSubcategory('Other');
+      // If user typed custom name previously, generate defaults
+      if (customSubcategory.trim()) {
+        const defaults = generateServiceDefaults(selectedCategory?.name || '', 'Other', customSubcategory.trim());
+        if (!hasEditedTitle) setTitle(defaults.title);
+        if (!hasEditedSummary) setShortSummary(defaults.shortSummary);
+        if (!hasEditedDesc) setDescription(defaults.description);
       }
+    } else {
+      setIsCustom(false);
+      setSubcategory(name);
+      setCustomSubcategory('');
 
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsEditing: true,
-        aspect: [4, 3],
-        quality: 0.85
-      });
-
-      if (result.canceled || !result.assets || result.assets.length === 0) return;
-
-      const asset = result.assets[0];
-      setUploadingPhoto(true);
-
-      const uploadRes = await api.media.uploadImage(asset.uri, asset.mimeType || 'image/jpeg');
-      if (uploadRes?.url) {
-        setImageUrl(uploadRes.url);
-      }
-    } catch (err: any) {
-      Alert.alert('Upload Failed', err?.message || 'Could not upload service photo.');
-    } finally {
-      setUploadingPhoto(false);
+      const defaults = generateServiceDefaults(selectedCategory?.name || '', name);
+      if (!hasEditedTitle) setTitle(defaults.title);
+      if (!hasEditedSummary) setShortSummary(defaults.shortSummary);
+      if (!hasEditedDesc) setDescription(defaults.description);
     }
+  };
+
+  // Custom Service Name Change Handler
+  const handleCustomSubcategoryChange = (text: string) => {
+    setCustomSubcategory(text);
+    if (!hasEditedTitle || !hasEditedSummary || !hasEditedDesc) {
+      const defaults = generateServiceDefaults(selectedCategory?.name || '', 'Other', text);
+      if (!hasEditedTitle) setTitle(defaults.title);
+      if (!hasEditedSummary) setShortSummary(defaults.shortSummary);
+      if (!hasEditedDesc) setDescription(defaults.description);
+    }
+  };
+
+  // Explicit Re-populate / Suggestion Refresh
+  const handleRegenerateSuggestions = () => {
+    const taskName = isCustom ? customSubcategory.trim() : subcategory;
+    if (!taskName) {
+      Alert.alert('Notice', 'Please select a subcategory or enter a custom service name first.');
+      return;
+    }
+    const defaults = generateServiceDefaults(selectedCategory?.name || '', subcategory, customSubcategory.trim());
+    setTitle(defaults.title);
+    setShortSummary(defaults.shortSummary);
+    setDescription(defaults.description);
+    setHasEditedTitle(false);
+    setHasEditedSummary(false);
+    setHasEditedDesc(false);
   };
 
   const toggleDay = (day: string) => {
@@ -233,19 +537,31 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
   const validateStep = (currentStep: number): boolean => {
     if (currentStep === 1) {
       if (!selectedCategory) {
-        Alert.alert('Validation Error', 'Please select a trade category.');
+        Alert.alert('Validation Error', 'Please select a verified service domain.');
         return false;
+      }
+      if (isCustom) {
+        if (!customSubcategory.trim() || customSubcategory.trim().length < 3 || customSubcategory.trim().length > 60) {
+          Alert.alert('Validation Error', 'Please enter a custom service name between 3 and 60 characters.');
+          return false;
+        }
+      } else {
+        if (!subcategory.trim()) {
+          Alert.alert('Validation Error', 'Please select a specific subcategory or task.');
+          return false;
+        }
       }
       if (!title.trim() || title.trim().length < 5) {
         Alert.alert('Validation Error', 'Please provide a clear service title (at least 5 characters).');
         return false;
       }
-      if (!subcategory.trim()) {
-        Alert.alert('Validation Error', 'Please select or specify a subcategory/task.');
+      if (!description.trim() || description.trim().length < 15) {
+        Alert.alert('Validation Error', 'Please provide a descriptive scope of work (at least 15 characters).');
         return false;
       }
-      if (!description.trim() || description.trim().length < 15) {
-        Alert.alert('Validation Error', 'Please write a descriptive summary of your work (at least 15 characters).');
+      const expNum = parseInt(experienceYears, 10);
+      if (isNaN(expNum) || expNum < 0 || expNum > 50) {
+        Alert.alert('Validation Error', 'Please enter valid years of experience (between 0 and 50).');
         return false;
       }
     }
@@ -276,6 +592,11 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
         Alert.alert('Validation Error', 'Please choose at least one working day.');
         return false;
       }
+      const maxSlots = parseInt(maxDailyBookings, 10);
+      if (isNaN(maxSlots) || maxSlots < 1) {
+        Alert.alert('Validation Error', 'Max daily appointments capacity must be at least 1.');
+        return false;
+      }
     }
 
     return true;
@@ -291,46 +612,65 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
     if (step > 1) {
       setStep((prev) => prev - 1);
     } else {
-      navigation.goBack();
+      const isDirty = Boolean(title.trim() || customSubcategory.trim());
+      if (isDirty && !isEditing) {
+        Alert.alert(
+          'Discard Service?',
+          'Are you sure you want to discard this service? Any unsaved edits will be lost.',
+          [
+            { text: 'Keep Editing', style: 'cancel' },
+            { text: 'Discard', style: 'destructive', onPress: () => navigation.goBack() }
+          ]
+        );
+      } else {
+        navigation.goBack();
+      }
     }
   };
 
+  // Submit Handler with Idempotency and Duplicate Protection
   const handleSave = async (publishStatus: 'draft' | 'published') => {
-    if (!validateStep(1) || !validateStep(2) || !validateStep(3) || !validateStep(4)) {
-      return;
+    if (submitStatus === 'submitting') return;
+
+    // Validate all steps before submitting
+    for (let s = 1; s <= 4; s++) {
+      if (!validateStep(s)) {
+        setStep(s);
+        return;
+      }
     }
 
-    const token = await secureStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+    const token = await getStoredAuthToken();
     if (!token) {
-      Alert.alert(
-        'Sign In Required',
-        'Please sign in to your WorkLogy Pro contractor account before saving or publishing service listings.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Sign In', onPress: () => navigation.navigate('VendorLogin') }
-        ]
-      );
+      Alert.alert('Authentication Required', 'Please sign in to publish or save your service listings.');
+      navigation.navigate('VendorLogin');
       return;
     }
 
     try {
-      setSubmitting(true);
+      setSubmitStatus('submitting');
+
       const parsedAmount = parseFloat(amount) || 0;
       const parsedMinPrice = parseFloat(minPrice) || 0;
       const parsedVisitFee = parseFloat(visitFee) || 0;
       const parsedRadius = parseFloat(radiusKm) || 25;
-      const parsedExp = parseInt(experienceYears, 10) || 3;
+      const parsedExp = parseInt(experienceYears, 10) || 4;
       const parsedMaxDaily = parseInt(maxDailyBookings, 10) || 5;
+
+      const finalSubcategory = isCustom ? customSubcategory.trim() : subcategory.trim();
 
       const payload = {
         title: title.trim(),
-        domain: selectedCategory?.slug || selectedCategory?.name || 'ac-hvac-services',
+        domain: selectedCategory?.slug,
         category: selectedCategory?._id,
-        subcategory: subcategory.trim(),
+        subcategory: finalSubcategory,
+        isCustom,
+        customSubcategory: isCustom ? finalSubcategory : '',
         shortSummary: shortSummary.trim() || title.trim(),
         description: description.trim(),
         experienceYears: parsedExp,
         deliveryType: 'home_service',
+        languages: ['Hindi', 'English'],
         pricing: {
           type: pricingType,
           amount: pricingType === 'quote' ? 0 : parsedAmount,
@@ -341,7 +681,6 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
           materialCostIncluded,
           cancellationTerms: 'Free cancellation up to 2 hours before scheduled slot'
         },
-        images: imageUrl.trim() ? [imageUrl.trim()] : [],
         location: {
           country: 'India',
           state: 'Uttar Pradesh',
@@ -361,36 +700,64 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
           emergencyAvailable,
           maxDailyBookings: parsedMaxDaily
         },
-        status: publishStatus
+        status: publishStatus,
+        idempotencyKey: idempotencyKeyRef.current
       };
 
       if (isEditing && existingService?._id) {
         await api.services.update(existingService._id, payload);
+        setSubmitStatus('success');
         Alert.alert(
           'Service Updated 🎉',
-          `Your service "${title}" has been updated and is ${publishStatus === 'published' ? 'Live on WorkLogy' : 'saved as Draft'}.`,
-          [{ text: 'View Services', onPress: () => navigation.goBack() }]
+          `Your service "${title.trim()}" has been updated and is ${publishStatus === 'published' ? 'Live on WorkLogy' : 'saved as Draft'}.`,
+          [
+            {
+              text: 'View Services',
+              onPress: () => navigation.navigate('VendorServices', { refresh: Date.now() })
+            }
+          ]
         );
       } else {
-        await api.services.create(payload);
+        await api.services.create(payload, idempotencyKeyRef.current);
+        setSubmitStatus('success');
         Alert.alert(
           'Service Created 🎉',
-          `Your service "${title}" is now ${publishStatus === 'published' ? 'Live & ready for bookings' : 'saved as Draft'}.`,
-          [{ text: 'Done', onPress: () => navigation.goBack() }]
+          `Your service "${title.trim()}" is now ${publishStatus === 'published' ? 'Live & ready for bookings' : 'saved as Draft'}.`,
+          [
+            {
+              text: 'View My Services',
+              onPress: () => navigation.navigate('VendorServices', { refresh: Date.now() })
+            }
+          ]
         );
       }
     } catch (err: any) {
-      console.warn('Failed to save service:', err);
-      Alert.alert('Save Failed', err.message || 'Could not save service listing to database.');
-    } finally {
-      setSubmitting(false);
+      setSubmitStatus('error');
+      console.warn('Failed to save service listing:', err);
+
+      // Handle duplicate listing gracefully
+      if (err?.status === 409 || err?.message?.includes('already exists') || err?.message?.includes('active listing')) {
+        Alert.alert(
+          'Listing Already Exists',
+          err.message || 'You already have an active service listing for this subcategory. You can view or edit your existing listings.',
+          [
+            {
+              text: 'View My Services',
+              onPress: () => navigation.navigate('VendorServices', { refresh: Date.now() })
+            },
+            {
+              text: 'Edit Current',
+              style: 'cancel'
+            }
+          ]
+        );
+      } else {
+        Alert.alert('Save Failed', err?.message || 'Could not save service listing to database.');
+      }
     }
   };
 
-  // Preview Image
-  const previewImage = imageUrl.trim()
-    ? { uri: imageUrl.trim() }
-    : getServiceImage(selectedCategory?.slug || 'ac-hvac-services');
+  const previewImage = getServiceImage(selectedCategory?.slug || 'electrical-services');
 
   return (
     <KeyboardAvoidingView
@@ -411,7 +778,7 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
           <View style={{ width: 36 }} />
         </View>
 
-        {/* 5-Step Stepper matching reference Screen 4 */}
+        {/* 5-Step Stepper */}
         <View style={styles.stepperContainer}>
           {[
             { num: 1, label: 'Basic Info' },
@@ -480,20 +847,35 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
           <View>
             <Text style={styles.stepHeading}>Step 1: Trade & Service Info</Text>
             <Text style={styles.stepSub}>
-              Select the skilled trade category and detail the specific work you deliver.
+              Select from your approved trade categories and specify the exact service you deliver.
             </Text>
 
-            {/* Category Selector */}
-            <Text style={styles.label}>Select Trade Category *</Text>
+            {/* Approved Domains Selector */}
+            <Text style={styles.label}>Select Trade Category (Your Approved Domains) *</Text>
             {loadingCategories ? (
               <ActivityIndicator size="small" color="#059669" style={{ marginVertical: 12 }} />
+            ) : hasNoApprovedDomains ? (
+              <View style={styles.noDomainsCard}>
+                <Ionicons name="alert-circle-outline" size={32} color="#D97706" />
+                <Text style={styles.noDomainsTitle}>No Approved Service Domains</Text>
+                <Text style={styles.noDomainsSub}>
+                  You have not registered or been approved for any service domains yet. Please configure your service domains in your profile to add services.
+                </Text>
+                <TouchableOpacity
+                  style={styles.manageDomainsBtn}
+                  onPress={() => navigation.navigate('VendorDomains')}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.manageDomainsBtnText}>Manage My Domains →</Text>
+                </TouchableOpacity>
+              </View>
             ) : (
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={styles.categoryScroll}
               >
-                {categories.map((cat) => {
+                {approvedCategories.map((cat) => {
                   const isSelected = selectedCategory?._id === cat._id;
                   return (
                     <TouchableOpacity
@@ -522,123 +904,147 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
               </ScrollView>
             )}
 
-            {/* Subcategory / Task */}
-            <Text style={styles.label}>Subcategory or Specific Task *</Text>
-            {selectedCategory?.subcategories && selectedCategory.subcategories.length > 0 ? (
-              <View style={styles.subcatWrap}>
-                {selectedCategory.subcategories.map((item: any, idx: number) => {
-                  const name = typeof item === 'string' ? item : item.name;
-                  const isChosen = subcategory === name;
-                  return (
-                    <TouchableOpacity
-                      key={idx}
-                      style={[styles.subcatChip, isChosen && styles.subcatChipChosen]}
-                      onPress={() => setSubcategory(name)}
-                    >
-                      <Text style={[styles.subcatChipText, isChosen && styles.subcatChipTextChosen]}>
-                        {name}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            ) : null}
+            {/* Subcategory or Specific Task */}
+            {!hasNoApprovedDomains && (
+              <>
+                <Text style={styles.label}>Subcategory or Specific Task *</Text>
+                <View style={styles.subcatWrap}>
+                  {(selectedCategory?.subcategories || []).map((name: string, idx: number) => {
+                    const isChosen = !isCustom && subcategory === name;
+                    return (
+                      <TouchableOpacity
+                        key={idx}
+                        style={[styles.subcatChip, isChosen && styles.subcatChipChosen]}
+                        onPress={() => handleSelectSubcat(name, false)}
+                        activeOpacity={0.75}
+                      >
+                        <Text style={[styles.subcatChipText, isChosen && styles.subcatChipTextChosen]}>
+                          {name}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                  {/* Canonical "Other" Option */}
+                  <TouchableOpacity
+                    style={[styles.subcatChip, isCustom && styles.subcatChipChosen]}
+                    onPress={() => handleSelectSubcat('Other', true)}
+                    activeOpacity={0.75}
+                  >
+                    <Ionicons
+                      name="add-circle-outline"
+                      size={14}
+                      color={isCustom ? '#047857' : '#64748B'}
+                      style={{ marginRight: 4 }}
+                    />
+                    <Text style={[styles.subcatChipText, isCustom && styles.subcatChipTextChosen]}>
+                      Other (Custom)
+                    </Text>
+                  </TouchableOpacity>
+                </View>
 
-            <TextInput
-              style={styles.input}
-              placeholder="Or enter custom task (e.g. Split AC Jet Wash)"
-              placeholderTextColor="#94A3B8"
-              value={subcategory}
-              onChangeText={setSubcategory}
-            />
+                {/* Custom Subcategory Name Input (visible only when Other is selected) */}
+                {isCustom && (
+                  <View style={styles.customTaskContainer}>
+                    <Text style={styles.customTaskLabel}>Custom Service Name *</Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder={domainPlaceholders.customSubcategory}
+                      placeholderTextColor="#94A3B8"
+                      value={customSubcategory}
+                      onChangeText={handleCustomSubcategoryChange}
+                      maxLength={60}
+                    />
+                    <Text style={styles.helperText}>
+                      Specify your specialized service within {selectedCategory?.name || 'this domain'}.
+                    </Text>
+                  </View>
+                )}
 
-            {/* Service Title */}
-            <Text style={styles.label}>Service Offering Title *</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="e.g. Split AC Deep Jet Cleaning & Gas Leakage Repair"
-              placeholderTextColor="#94A3B8"
-              value={title}
-              onChangeText={setTitle}
-            />
-
-            {/* Short Summary */}
-            <Text style={styles.label}>Short Summary (One-liner)</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="e.g. High-pressure foam wash, cooling coil inspection & gas check"
-              placeholderTextColor="#94A3B8"
-              value={shortSummary}
-              onChangeText={setShortSummary}
-            />
-
-            {/* Detailed Description */}
-            <Text style={styles.label}>Detailed Description of Scope *</Text>
-            <TextInput
-              style={[styles.input, styles.textArea]}
-              placeholder="Explain the step-by-step repair process, tools used, guarantee terms and what the customer can expect."
-              placeholderTextColor="#94A3B8"
-              value={description}
-              onChangeText={setDescription}
-              multiline
-              numberOfLines={4}
-              textAlignVertical="top"
-            />
-
-            {/* Experience in Years */}
-            <Text style={styles.label}>Years of Experience in this Trade</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="e.g. 5"
-              placeholderTextColor="#94A3B8"
-              value={experienceYears}
-              onChangeText={setExperienceYears}
-              keyboardType="number-pad"
-            />
-
-            {/* Service Cover Photo */}
-            <Text style={styles.label}>Service Cover Photo (Optional)</Text>
-            {imageUrl ? (
-              <View style={styles.servicePhotoCard}>
-                <Image source={{ uri: imageUrl }} style={styles.servicePhotoImg} resizeMode="cover" />
-                <TouchableOpacity
-                  style={styles.removeServicePhotoBtn}
-                  onPress={() => setImageUrl('')}
-                >
-                  <Ionicons name="trash-outline" size={16} color="#FFFFFF" />
-                </TouchableOpacity>
-              </View>
-            ) : null}
-
-            <TouchableOpacity
-              style={styles.uploadServicePhotoBtn}
-              onPress={handlePickServicePhoto}
-              disabled={uploadingPhoto}
-              activeOpacity={0.8}
-            >
-              {uploadingPhoto ? (
-                <ActivityIndicator size="small" color="#059669" />
-              ) : (
-                <>
-                  <Ionicons name="camera-outline" size={20} color="#059669" />
-                  <Text style={styles.uploadServicePhotoText}>
-                    {imageUrl ? 'Change Service Photo' : 'Upload Photo from Gallery'}
+                {/* Auto-Fill Regeneration Button */}
+                <View style={styles.suggestRow}>
+                  <Text style={styles.suggestNotice}>
+                    Smart suggestions automatically filled from your selected task.
                   </Text>
-                </>
-              )}
-            </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.suggestBtn}
+                    onPress={handleRegenerateSuggestions}
+                    activeOpacity={0.75}
+                  >
+                    <Ionicons name="sparkles-outline" size={13} color="#059669" />
+                    <Text style={styles.suggestBtnText}>Suggest Content</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Service Offering Title */}
+                <Text style={styles.label}>Service Offering Title *</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder={domainPlaceholders.title}
+                  placeholderTextColor="#94A3B8"
+                  value={title}
+                  onChangeText={(val) => {
+                    setTitle(val);
+                    setHasEditedTitle(true);
+                  }}
+                />
+
+                {/* Short Summary */}
+                <Text style={styles.label}>Short Summary (One-liner)</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder={domainPlaceholders.summary}
+                  placeholderTextColor="#94A3B8"
+                  value={shortSummary}
+                  onChangeText={(val) => {
+                    setShortSummary(val);
+                    setHasEditedSummary(true);
+                  }}
+                />
+
+                {/* Detailed Description */}
+                <Text style={styles.label}>Detailed Description of Scope *</Text>
+                <TextInput
+                  style={[styles.input, styles.textArea]}
+                  placeholder={domainPlaceholders.description}
+                  placeholderTextColor="#94A3B8"
+                  value={description}
+                  onChangeText={(val) => {
+                    setDescription(val);
+                    setHasEditedDesc(true);
+                  }}
+                  multiline
+                  numberOfLines={4}
+                  textAlignVertical="top"
+                />
+
+                {/* Years of Experience */}
+                <Text style={styles.label}>Years of Experience in this Trade</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Enter your years of experience, e.g. 4"
+                  placeholderTextColor="#94A3B8"
+                  value={experienceYears}
+                  onChangeText={setExperienceYears}
+                  keyboardType="number-pad"
+                  maxLength={2}
+                />
+                <Text style={styles.helperText}>
+                  Your verified hands-on experience in this skilled trade (0 - 50 years).
+                </Text>
+              </>
+            )}
           </View>
         )}
 
-        {/* ── STEP 2: PRICING AND DURATION ── */}
+        {/* ── STEP 2: PRICING ── */}
         {step === 2 && (
           <View>
-            <Text style={styles.stepHeading}>Step 2: Pricing & Payment Model</Text>
+            <Text style={styles.stepHeading}>Step 2: Transparent Pricing</Text>
             <Text style={styles.stepSub}>
-              Set transparent customer rates based on WorkLogy standard pricing models.
+              Choose how you charge customers. Clear, honest pricing builds direct customer trust.
             </Text>
 
-            {/* Pricing Model Tabs */}
+            {/* Pricing Model */}
             <Text style={styles.label}>Pricing Model *</Text>
             <View style={styles.modelRow}>
               <TouchableOpacity
@@ -647,7 +1053,7 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
               >
                 <Ionicons
                   name="pricetag-outline"
-                  size={18}
+                  size={20}
                   color={pricingType === 'fixed' ? '#059669' : '#64748B'}
                 />
                 <Text style={[styles.modelText, pricingType === 'fixed' && styles.modelTextActive]}>
@@ -661,11 +1067,11 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
               >
                 <Ionicons
                   name="trending-up-outline"
-                  size={18}
+                  size={20}
                   color={pricingType === 'starting' ? '#059669' : '#64748B'}
                 />
                 <Text style={[styles.modelText, pricingType === 'starting' && styles.modelTextActive]}>
-                  Starting From
+                  Starts At
                 </Text>
               </TouchableOpacity>
 
@@ -674,53 +1080,38 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
                 onPress={() => setPricingType('quote')}
               >
                 <Ionicons
-                  name="document-text-outline"
-                  size={18}
+                  name="chatbubbles-outline"
+                  size={20}
                   color={pricingType === 'quote' ? '#059669' : '#64748B'}
                 />
                 <Text style={[styles.modelText, pricingType === 'quote' && styles.modelTextActive]}>
-                  Quote on Visit
+                  Quote on Site
                 </Text>
               </TouchableOpacity>
             </View>
 
-            {/* Price Inputs */}
-            {pricingType === 'fixed' && (
+            {/* Amount Input */}
+            {pricingType !== 'quote' && (
               <>
-                <Text style={styles.label}>Fixed Service Price (₹) *</Text>
+                <Text style={styles.label}>
+                  {pricingType === 'starting' ? 'Starting Price (₹) *' : 'Fixed Price Amount (₹) *'}
+                </Text>
                 <View style={styles.currencyInputWrap}>
                   <Text style={styles.currencySymbol}>₹</Text>
                   <TextInput
                     style={styles.currencyInput}
-                    placeholder="499"
+                    placeholder={pricingType === 'starting' ? "Enter starting price in ₹, e.g. 350" : "Enter service price in ₹, e.g. 450"}
                     placeholderTextColor="#94A3B8"
-                    value={amount}
-                    onChangeText={setAmount}
+                    value={pricingType === 'starting' ? minPrice : amount}
+                    onChangeText={pricingType === 'starting' ? setMinPrice : setAmount}
                     keyboardType="numeric"
                   />
                 </View>
               </>
             )}
 
-            {pricingType === 'starting' && (
-              <>
-                <Text style={styles.label}>Minimum Starting Price (₹) *</Text>
-                <View style={styles.currencyInputWrap}>
-                  <Text style={styles.currencySymbol}>₹</Text>
-                  <TextInput
-                    style={styles.currencyInput}
-                    placeholder="350"
-                    placeholderTextColor="#94A3B8"
-                    value={minPrice}
-                    onChangeText={setMinPrice}
-                    keyboardType="numeric"
-                  />
-                </View>
-              </>
-            )}
-
-            {/* Rate Unit */}
-            <Text style={styles.label}>Rate Unit *</Text>
+            {/* Unit */}
+            <Text style={styles.label}>Billing Unit</Text>
             <View style={styles.unitRow}>
               {(['per visit', 'per hour', 'per item', 'per project'] as const).map((u) => (
                 <TouchableOpacity
@@ -735,29 +1126,12 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
               ))}
             </View>
 
-            {/* Inspection / Visit Fee */}
-            <Text style={styles.label}>Diagnostic / Visit Fee (₹)</Text>
-            <View style={styles.currencyInputWrap}>
-              <Text style={styles.currencySymbol}>₹</Text>
-              <TextInput
-                style={styles.currencyInput}
-                placeholder="0"
-                placeholderTextColor="#94A3B8"
-                value={visitFee}
-                onChangeText={setVisitFee}
-                keyboardType="numeric"
-              />
-            </View>
-            <Text style={styles.helperText}>
-              Fee charged for on-site inspection if the customer declines major repairs.
-            </Text>
-
-            {/* Material Cost Included Toggle */}
+            {/* Material cost toggle */}
             <View style={styles.switchRow}>
               <View style={{ flex: 1, marginRight: 12 }}>
-                <Text style={styles.switchTitle}>Material Cost Included</Text>
+                <Text style={styles.switchTitle}>Material & Spare Parts Included</Text>
                 <Text style={styles.switchSub}>
-                  Turn on if standard spare parts or cleaning chemical charges are included in the price.
+                  Turn on if standard replacement parts or hardware consumables are included in the price.
                 </Text>
               </View>
               <Switch
@@ -770,63 +1144,67 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
           </View>
         )}
 
-        {/* ── STEP 3: SERVICE COVERAGE ── */}
+        {/* ── STEP 3: SERVICE AREA ── */}
         {step === 3 && (
           <View>
-            <Text style={styles.stepHeading}>Step 3: Service Area & Travel Radius</Text>
+            <Text style={styles.stepHeading}>Step 3: Service Area & Localities</Text>
             <Text style={styles.stepSub}>
-              Define where you can physically travel to serve customers in your city.
+              Choose the localities where you can deliver this service reliably and promptly.
             </Text>
 
-            <Text style={styles.label}>Operating City *</Text>
+            {/* City */}
+            <Text style={styles.label}>Primary Operating City *</Text>
             <TextInput
               style={styles.input}
-              placeholder="e.g. Lucknow"
+              placeholder="Enter your operating city, e.g. Lucknow"
               placeholderTextColor="#94A3B8"
               value={city}
               onChangeText={setCity}
             />
 
-            <Text style={styles.label}>Base Locality / Workshop Hub *</Text>
+            {/* Base Workshop / Locality */}
+            <Text style={styles.label}>Base Workshop / Central Locality</Text>
             <TextInput
               style={styles.input}
-              placeholder="e.g. Gomti Nagar"
+              placeholder="Enter workshop or base locality, e.g. Gomti Nagar"
               placeholderTextColor="#94A3B8"
               value={locality}
               onChangeText={setLocality}
             />
 
-            <Text style={styles.label}>Max Travel Radius (km)</Text>
-            <View style={styles.unitRow}>
-              {['10', '20', '25', '35', '50'].map((r) => (
-                <TouchableOpacity
-                  key={r}
-                  style={[styles.unitChip, radiusKm === r && styles.unitChipActive]}
-                  onPress={() => setRadiusKm(r)}
-                >
-                  <Text style={[styles.unitChipText, radiusKm === r && styles.unitChipTextActive]}>
-                    {r} km
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+            {/* Radius */}
+            <Text style={styles.label}>Maximum Travel Radius (km)</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Enter travel radius in km, e.g. 25"
+              placeholderTextColor="#94A3B8"
+              value={radiusKm}
+              onChangeText={setRadiusKm}
+              keyboardType="numeric"
+            />
 
-            <Text style={styles.label}>Supported Localities in City *</Text>
-            <View style={styles.subcatWrap}>
+            {/* Localities Selection */}
+            <Text style={styles.label}>Covered Localities ({selectedLocalities.length} selected) *</Text>
+            <View style={styles.localityWrap}>
               {COMMON_LOCALITIES.map((loc) => {
                 const isSelected = selectedLocalities.includes(loc);
                 return (
                   <TouchableOpacity
                     key={loc}
-                    style={[styles.subcatChip, isSelected && styles.subcatChipChosen]}
+                    style={[styles.localityChip, isSelected && styles.localityChipSelected]}
                     onPress={() => toggleLocality(loc)}
                   >
                     <Ionicons
                       name={isSelected ? 'checkmark-circle' : 'add-circle-outline'}
-                      size={15}
+                      size={14}
                       color={isSelected ? '#059669' : '#64748B'}
                     />
-                    <Text style={[styles.subcatChipText, isSelected && styles.subcatChipTextChosen, { marginLeft: 4 }]}>
+                    <Text
+                      style={[
+                        styles.localityChipText,
+                        isSelected && styles.localityChipTextSelected
+                      ]}
+                    >
                       {loc}
                     </Text>
                   </TouchableOpacity>
@@ -834,12 +1212,12 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
               })}
             </View>
 
-            {/* Home Visit Available */}
+            {/* Home visit toggle */}
             <View style={styles.switchRow}>
               <View style={{ flex: 1, marginRight: 12 }}>
-                <Text style={styles.switchTitle}>At-Home Service Visit</Text>
+                <Text style={styles.switchTitle}>At-Home Service Available</Text>
                 <Text style={styles.switchSub}>
-                  You travel to the customer's home or office address to complete the job.
+                  You travel to customer homes or job sites with your standard toolkits.
                 </Text>
               </View>
               <Switch
@@ -889,7 +1267,7 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
                 <Text style={styles.label}>Start Hour</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="09:00"
+                  placeholder="Start time (24-hr), e.g. 09:00"
                   placeholderTextColor="#94A3B8"
                   value={startHour}
                   onChangeText={setStartHour}
@@ -899,7 +1277,7 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
                 <Text style={styles.label}>End Hour</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="19:00"
+                  placeholder="End time (24-hr), e.g. 19:00"
                   placeholderTextColor="#94A3B8"
                   value={endHour}
                   onChangeText={setEndHour}
@@ -911,7 +1289,7 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
             <Text style={styles.label}>Max Daily Appointments Capacity</Text>
             <TextInput
               style={styles.input}
-              placeholder="5"
+              placeholder="Max bookings capacity per day, e.g. 5"
               placeholderTextColor="#94A3B8"
               value={maxDailyBookings}
               onChangeText={setMaxDailyBookings}
@@ -958,7 +1336,7 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
               <View style={styles.previewBody}>
                 <Text style={styles.previewTitle}>{title || 'Service Title'}</Text>
                 <Text style={styles.previewSubcat}>
-                  {subcategory} • {experienceYears} yrs experience
+                  {isCustom ? customSubcategory : subcategory} • {experienceYears} yrs experience
                 </Text>
                 <Text style={styles.previewDesc} numberOfLines={3}>
                   {description || 'No description provided.'}
@@ -990,12 +1368,12 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
               </View>
             </View>
 
-            {/* Checklist */}
+            {/* Quality Checklist */}
             <View style={styles.checklistCard}>
               <Text style={styles.checklistTitle}>WorkLogy Quality Assurance</Text>
               <View style={styles.checkItem}>
                 <Ionicons name="checkmark-circle" size={16} color="#059669" />
-                <Text style={styles.checkText}>Accurate category and task description</Text>
+                <Text style={styles.checkText}>Accurate approved category and task description</Text>
               </View>
               <View style={styles.checkItem}>
                 <Ionicons name="checkmark-circle" size={16} color="#059669" />
@@ -1014,8 +1392,9 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
       <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 12) }]}>
         {step < 5 ? (
           <TouchableOpacity
-            style={styles.nextBtn}
+            style={[styles.nextBtn, hasNoApprovedDomains && styles.nextBtnDisabled]}
             onPress={handleNext}
+            disabled={hasNoApprovedDomains}
             activeOpacity={0.85}
           >
             <Text style={styles.nextBtnText}>
@@ -1033,10 +1412,10 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
             <TouchableOpacity
               style={styles.draftBtn}
               onPress={() => handleSave('draft')}
-              disabled={submitting}
+              disabled={submitStatus === 'submitting'}
               activeOpacity={0.8}
             >
-              {submitting ? (
+              {submitStatus === 'submitting' ? (
                 <ActivityIndicator size="small" color="#475569" />
               ) : (
                 <Text style={styles.draftBtnText}>Save Draft</Text>
@@ -1044,12 +1423,15 @@ export default function VendorNewServiceScreen({ navigation, route }: any) {
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={styles.publishMainBtn}
+              style={[
+                styles.publishMainBtn,
+                submitStatus === 'submitting' && styles.publishMainBtnDisabled
+              ]}
               onPress={() => handleSave('published')}
-              disabled={submitting}
+              disabled={submitStatus === 'submitting'}
               activeOpacity={0.85}
             >
-              {submitting ? (
+              {submitStatus === 'submitting' ? (
                 <ActivityIndicator size="small" color="#FFFFFF" />
               ) : (
                 <>
@@ -1098,12 +1480,6 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '800',
     color: '#0F172A'
-  },
-  headerSubtitle: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#059669',
-    marginTop: 1
   },
   stepperContainer: {
     flexDirection: 'row',
@@ -1240,6 +1616,40 @@ const styles = StyleSheet.create({
     color: '#047857',
     fontWeight: '700'
   },
+  noDomainsCard: {
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+    marginVertical: 12
+  },
+  noDomainsTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#92400E',
+    marginTop: 8,
+    marginBottom: 4
+  },
+  noDomainsSub: {
+    fontSize: 13,
+    color: '#B45309',
+    textAlign: 'center',
+    lineHeight: 18,
+    marginBottom: 14
+  },
+  manageDomainsBtn: {
+    backgroundColor: '#D97706',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8
+  },
+  manageDomainsBtnText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700'
+  },
   subcatWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1268,6 +1678,49 @@ const styles = StyleSheet.create({
   subcatChipTextChosen: {
     color: '#047857',
     fontWeight: '700'
+  },
+  customTaskContainer: {
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12
+  },
+  customTaskLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
+    marginBottom: 6
+  },
+  suggestRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
+    marginBottom: 4
+  },
+  suggestNotice: {
+    flex: 1,
+    fontSize: 11,
+    color: '#64748B',
+    marginRight: 8
+  },
+  suggestBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0'
+  },
+  suggestBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#059669'
   },
   modelRow: {
     flexDirection: 'row',
@@ -1374,6 +1827,36 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#64748B',
     lineHeight: 16
+  },
+  localityWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 6
+  },
+  localityChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#CBD5E1'
+  },
+  localityChipSelected: {
+    backgroundColor: '#ECFDF5',
+    borderColor: '#059669'
+  },
+  localityChipText: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#475569'
+  },
+  localityChipTextSelected: {
+    color: '#047857',
+    fontWeight: '700'
   },
   daysWrap: {
     backgroundColor: '#FFFFFF',
@@ -1531,6 +2014,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     gap: 8
   },
+  nextBtnDisabled: {
+    backgroundColor: '#94A3B8'
+  },
   nextBtnText: {
     color: '#FFFFFF',
     fontSize: 15,
@@ -1565,57 +2051,12 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     gap: 6
   },
+  publishMainBtnDisabled: {
+    backgroundColor: '#6EE7B7'
+  },
   publishMainBtnText: {
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '700'
-  },
-  servicePhotoCard: {
-    position: 'relative',
-    height: 180,
-    borderRadius: 14,
-    overflow: 'hidden',
-    marginBottom: 10,
-    backgroundColor: '#F1F5F9',
-    borderWidth: 1,
-    borderColor: '#E2E8F0'
-  },
-  servicePhotoImg: {
-    width: '100%',
-    height: '100%'
-  },
-  removeServicePhotoBtn: {
-    position: 'absolute',
-    top: 10,
-    right: 10,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(239, 68, 68, 0.9)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
-    elevation: 3
-  },
-  uploadServicePhotoBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    borderWidth: 1.5,
-    borderStyle: 'dashed',
-    borderColor: '#059669',
-    borderRadius: 14,
-    paddingVertical: 14,
-    backgroundColor: '#F0FDF4',
-    marginBottom: 8
-  },
-  uploadServicePhotoText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#059669'
   }
 });

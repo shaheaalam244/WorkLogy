@@ -4,8 +4,11 @@ export { COLORS };
 
 export const STORAGE_KEYS = {
   AUTH_TOKEN: 'worklogy_vendor_auth_token',
+  REFRESH_TOKEN: 'worklogy_vendor_refresh_token',
   AUTH_USER: 'worklogy_vendor_auth_user',
-  PUSH_TOKEN: 'worklogy_vendor_push_token'
+  PUSH_TOKEN: 'worklogy_vendor_push_token',
+  SERVER_TARGET: 'worklogy_server_target',
+  CUSTOM_LOCAL_HOST: 'worklogy_custom_local_host'
 };
 
 export const SOCKET_EVENTS = {

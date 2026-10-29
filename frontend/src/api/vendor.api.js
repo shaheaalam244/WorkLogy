@@ -26,6 +26,11 @@ export const vendorAPI = {
     return res.data;
   },
 
+  getPublicServices: async (params) => {
+    const res = await api.get('/vendors/services', { params });
+    return res.data;
+  },
+
   getMyServices: async (params) => {
     const res = await api.get('/vendors/services/my', { params });
     return res.data;

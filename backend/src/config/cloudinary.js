@@ -41,7 +41,7 @@ export const uploadToCloudinary = async (fileBuffer, folder = 'worklogy', option
 
           fs.writeFileSync(filePath, fileBuffer);
 
-          const host = options.reqHost || process.env.BACKEND_HOST || '10.211.183.171:5001';
+          const host = options.reqHost || process.env.BACKEND_HOST || '76.13.246.224:5001';
           const protocol = options.reqProtocol || 'http';
           const localUrl = `${protocol}://${host}/uploads/${filename}`;
 

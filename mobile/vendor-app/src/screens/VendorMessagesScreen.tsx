@@ -352,7 +352,7 @@ export default function VendorMessagesScreen({ navigation }: any) {
           </View>
           <TextInput
             style={styles.searchInput}
-            placeholder="Search customer, job or message..."
+            placeholder="Search conversations by customer name or service..."
             placeholderTextColor="#9CA3AF"
             value={searchQuery}
             onChangeText={setSearchQuery}

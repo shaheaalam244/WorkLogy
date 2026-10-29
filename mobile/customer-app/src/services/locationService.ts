@@ -611,43 +611,46 @@ export async function resolveActiveLocation(options?: {
     // ignore
   }
 
-  // Priority 2: Customer's persisted active service address from backend profile
+  // Priority 2: Customer's persisted active service address from backend profile (authenticated only)
   try {
-    const addrRes = await api.customer.getAddresses();
-    if (addrRes?.addresses && Array.isArray(addrRes.addresses) && addrRes.addresses.length > 0) {
-      const active = addrRes.addresses.find((a: any) => a.isDefault) || addrRes.addresses[0];
-      if (active) {
-        const city = active.city || 'Lucknow';
-        const locParts = [active.houseNumber, active.street, active.locality || active.landmark].filter(Boolean);
-        const streetPart = locParts.join(', ');
-        const displayLabel = streetPart
-          ? `${city}, ${streetPart}`
-          : active.locality
-          ? `${city}, ${active.locality}`
-          : city;
+    const token = await secureStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+    if (token) {
+      const addrRes = await api.customer.getAddresses();
+      if (addrRes?.addresses && Array.isArray(addrRes.addresses) && addrRes.addresses.length > 0) {
+        const active = addrRes.addresses.find((a: any) => a.isDefault) || addrRes.addresses[0];
+        if (active) {
+          const city = active.city || 'Lucknow';
+          const locParts = [active.houseNumber, active.street, active.locality || active.landmark].filter(Boolean);
+          const streetPart = locParts.join(', ');
+          const displayLabel = streetPart
+            ? `${city}, ${streetPart}`
+            : active.locality
+            ? `${city}, ${active.locality}`
+            : city;
 
-        const activeLoc: DetectedLocation = {
-          city,
-          locality: active.locality || active.street || '',
-          street: active.street || '',
-          houseNumber: active.houseNumber || '',
-          landmark: active.landmark || '',
-          state: active.state || 'Uttar Pradesh',
-          pincode: active.zipCode || active.pincode || '',
-          fullAddress: displayLabel,
-          coordinates:
-            active.coordinates &&
-            (Number(active.coordinates.lat) !== 0 || Number(active.coordinates.lng) !== 0)
-              ? active.coordinates
-              : undefined,
-          addressId: active._id,
-          isExplicit: false,
-          method: 'saved'
-        };
+          const activeLoc: DetectedLocation = {
+            city,
+            locality: active.locality || active.street || '',
+            street: active.street || '',
+            houseNumber: active.houseNumber || '',
+            landmark: active.landmark || '',
+            state: active.state || 'Uttar Pradesh',
+            pincode: active.zipCode || active.pincode || '',
+            fullAddress: displayLabel,
+            coordinates:
+              active.coordinates &&
+              (Number(active.coordinates.lat) !== 0 || Number(active.coordinates.lng) !== 0)
+                ? active.coordinates
+                : undefined,
+            addressId: active._id,
+            isExplicit: false,
+            method: 'saved'
+          };
 
-        // Cache without marking as explicit so manual choice can take precedence if needed
-        await saveLocation(activeLoc, { isExplicit: false });
-        return activeLoc;
+          // Cache without marking as explicit so manual choice can take precedence if needed
+          await saveLocation(activeLoc, { isExplicit: false });
+          return activeLoc;
+        }
       }
     }
   } catch {

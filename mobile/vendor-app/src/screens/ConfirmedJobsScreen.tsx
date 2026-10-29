@@ -407,7 +407,7 @@ export default function ConfirmedJobsScreen({ navigation }: any) {
 
             <TextInput
               style={styles.otpInput}
-              placeholder="e.g. 482910"
+              placeholder="Enter the 6-digit arrival OTP"
               placeholderTextColor="#94A3B8"
               keyboardType="number-pad"
               maxLength={6}
@@ -454,7 +454,7 @@ export default function ConfirmedJobsScreen({ navigation }: any) {
             <Text style={styles.fieldLabel}>Work Notes & Summary</Text>
             <TextInput
               style={styles.textArea}
-              placeholder="Describe work performed, parts replaced, or diagnostic results..."
+              placeholder="Summarize work completed, components replaced, and any customer instructions..."
               placeholderTextColor="#94A3B8"
               multiline
               numberOfLines={4}
