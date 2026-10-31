@@ -41,6 +41,12 @@
       ],
       "expo-secure-store",
       "expo-font"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "34c9f80f-ed81-4bf6-a11c-42b5177dfd15"
+      }
+    },
+    "owner": "shaheaalam244"
   }
 }
