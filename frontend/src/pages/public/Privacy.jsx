@@ -98,6 +98,13 @@ export default function Privacy() {
               <ArrowRight className="w-3.5 h-3.5" />
             </Link>
             <Link
+              to="/vendor-privacy"
+              className="text-xs font-bold text-emerald-700 hover:text-emerald-900 hover:underline inline-flex items-center gap-1"
+            >
+              <span>Vendor Privacy Policy</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </Link>
+            <Link
               to="/refund-policy"
               className="text-xs font-bold text-slate-600 hover:text-slate-900 hover:underline"
             >

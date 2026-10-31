@@ -140,6 +140,11 @@ export default function Footer() {
                 </Link>
               </li>
               <li>
+                <Link to="/vendor-privacy" className="hover:text-emerald-400 transition-colors">
+                  Vendor Privacy Policy
+                </Link>
+              </li>
+              <li>
                 <Link to="/refund-policy" className="hover:text-emerald-400 transition-colors">
                   Cancellation & Refund Policy
                 </Link>
@@ -158,6 +163,7 @@ export default function Footer() {
           <p>© {new Date().getFullYear()} WorkLogy Marketplace. Built for Indian Homeowners & Verified Pros.</p>
           <div className="flex flex-wrap items-center gap-5">
             <Link to="/privacy" className="hover:text-slate-300 transition-colors">Privacy Policy</Link>
+            <Link to="/vendor-privacy" className="hover:text-slate-300 transition-colors">Vendor Privacy</Link>
             <Link to="/terms" className="hover:text-slate-300 transition-colors">Terms of Service</Link>
             <Link to="/refund-policy" className="hover:text-slate-300 transition-colors">Cancellation & Refund Policy</Link>
           </div>
