@@ -84,7 +84,7 @@ export default function Privacy() {
               Data Deletion & Inquiries
             </h2>
             <p className="text-xs sm:text-sm text-slate-600">
-              You retain the right to edit your saved addresses, update contact details, or request account closure at any time through your profile or by emailing our data privacy officer at <span className="font-semibold text-slate-900">privacy@worklogy.com</span>.
+              You retain the right to edit your saved addresses, update contact details, or request account closure at any time through our online <Link to="/delete-account" className="font-bold text-[#06684F] hover:underline">Account Deletion Portal (/delete-account)</Link> or by emailing our data privacy officer at <span className="font-semibold text-slate-900">privacy@worklogy.com</span>.
             </p>
           </section>
 

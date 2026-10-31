@@ -23,7 +23,17 @@ const OtpChallengeSchema = new mongoose.Schema(
     },
     purpose: {
       type: String,
-      enum: ['vendor_login', 'vendor_register', 'customer_login', 'customer_register', 'phone_verification', 'password_reset'],
+      enum: [
+        'vendor_login',
+        'vendor_register',
+        'customer_login',
+        'customer_register',
+        'phone_verification',
+        'password_reset',
+        'account_deletion',
+        'vendor_deletion',
+        'customer_deletion'
+      ],
       default: 'vendor_login',
       index: true
     },

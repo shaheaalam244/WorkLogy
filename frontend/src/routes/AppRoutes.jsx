@@ -27,6 +27,7 @@ import EmergencyRequest from '../pages/public/EmergencyRequest';
 import Terms from '../pages/public/Terms';
 import Privacy from '../pages/public/Privacy';
 import VendorPrivacy from '../pages/public/VendorPrivacy';
+import DeleteAccount from '../pages/public/DeleteAccount';
 import RefundPolicy from '../pages/public/RefundPolicy';
 import ForgotPassword from '../pages/public/ForgotPassword';
 import ResetPassword from '../pages/public/ResetPassword';
@@ -108,6 +109,8 @@ export default function AppRoutes() {
         <Route path="/privacy" element={<Privacy />} />
         <Route path="/vendor-privacy" element={<VendorPrivacy />} />
         <Route path="/privacy/vendor" element={<VendorPrivacy />} />
+        <Route path="/delete-account" element={<DeleteAccount />} />
+        <Route path="/account-deletion" element={<DeleteAccount />} />
         <Route path="/refund-policy" element={<RefundPolicy />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset-password" element={<ResetPassword />} />

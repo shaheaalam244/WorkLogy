@@ -928,7 +928,7 @@ export default function VendorPrivacy() {
                   <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl">
                     <strong className="text-slate-900 text-xs block mb-1">Permanent Account Deletion Workflow</strong>
                     <p className="text-xs text-slate-600">
-                      Submit an account deletion request via Vendor Settings or email <strong>privacy@worklogy.com</strong> with your registered mobile number.
+                      Submit an account deletion request via Vendor Settings, our dedicated <Link to="/delete-account" className="font-bold text-[#06684F] hover:underline">Account Deletion Portal (/delete-account)</Link>, or email <strong>privacy@worklogy.com</strong> with your registered mobile number.
                     </p>
                     <ul className="mt-2 space-y-1 list-disc list-inside text-xs text-slate-500">
                       <li>Pending jobs must be completed or cancelled before closure.</li>
@@ -1144,3 +1144,4 @@ export default function VendorPrivacy() {
     </div>
   );
 }
+

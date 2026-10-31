@@ -23,6 +23,7 @@ import supportRoutes from './routes/support.routes.js';
 import customerRoutes from './routes/customer.routes.js';
 import locationRoutes from './routes/location.routes.js';
 import zoneRoutes from './routes/zone.routes.js';
+import accountDeletionRoutes from './routes/accountDeletion.routes.js';
 
 import { errorHandler, notFoundHandler } from './middleware/error.middleware.js';
 import { apiLimiter } from './middleware/rateLimiter.js';
@@ -89,6 +90,7 @@ app.use('/api/support', supportRoutes);
 app.use('/api/customer', customerRoutes);
 app.use('/api/location', locationRoutes);
 app.use('/api/zones', zoneRoutes);
+app.use('/api/account-deletion', accountDeletionRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
