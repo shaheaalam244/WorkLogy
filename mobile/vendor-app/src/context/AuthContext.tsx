@@ -10,6 +10,16 @@ interface AuthContextType {
   user: User | null;
   vendorProfile: VendorProfile | null;
   isLoading: boolean;
+  checkPhone: (phone: string) => Promise<{
+    success: boolean;
+    exists: boolean;
+    isRegistered: boolean;
+    status: 'active' | 'new' | 'suspended' | 'blocked';
+    phone: string;
+    name?: string;
+    message?: string;
+    suspensionReason?: string;
+  }>;
   sendOtp: (phone: string, purpose?: 'login' | 'register') => Promise<{
     success: boolean;
     message: string;
@@ -55,29 +65,72 @@ export const AuthProvider = ({ children }: { children?: React.ReactNode }) => {
     restoreSession();
   }, []);
 
+  const clearAuthStorage = async () => {
+    try {
+      await secureStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
+      await secureStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
+      await secureStorage.removeItem(STORAGE_KEYS.AUTH_USER);
+      await secureStorage.removeItem('worklogy_token');
+      await secureStorage.removeItem('token');
+    } catch {}
+  };
+
   const restoreSession = async () => {
     try {
       setIsLoading(true);
-      const token = await getStoredAuthToken();
+      let token = await getStoredAuthToken();
       const refreshToken = await secureStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
 
-      if (token || refreshToken) {
-        // Try getting current user profile (client.ts auto-refreshes if access token is expired)
-        const res = await api.auth.getCurrentUser();
-        if (res?.user) {
-          setUser(res.user);
-          pushNotificationService.registerForPushNotifications().catch(() => {});
+      if (!token && refreshToken) {
+        try {
+          token = await api.auth.refreshToken();
+        } catch {
+          token = null;
+        }
+      }
 
-          // Fetch full vendor profile
-          try {
-            const vRes = await api.vendor.getProfile();
-            if (vRes?.vendor) {
-              setVendorProfile(vRes.vendor);
+      if (token) {
+        try {
+          const res = await api.auth.getCurrentUser();
+          if (res?.user && res.user.role === 'vendor') {
+            setUser(res.user);
+            pushNotificationService.registerForPushNotifications().catch(() => {});
+
+            // Fetch full vendor profile
+            try {
+              const vRes = await api.vendor.getProfile();
+              if (vRes?.vendor) {
+                setVendorProfile(vRes.vendor);
+              }
+            } catch {
+              // ignore vendor profile load failure on startup
             }
-          } catch {
-            // ignore vendor profile load failure on startup
+          } else {
+            // Mismatched role or invalid user
+            await clearAuthStorage();
+            setUser(null);
+            setVendorProfile(null);
           }
-        } else {
+        } catch (fetchErr: any) {
+          // If token expired, try one silent refresh before wiping
+          if (fetchErr?.status === 401 || fetchErr?.isSessionExpired) {
+            try {
+              const refreshed = await api.auth.refreshToken();
+              if (refreshed) {
+                const retryRes = await api.auth.getCurrentUser();
+                if (retryRes?.user && retryRes.user.role === 'vendor') {
+                  setUser(retryRes.user);
+                  pushNotificationService.registerForPushNotifications().catch(() => {});
+                  try {
+                    const vRes = await api.vendor.getProfile();
+                    if (vRes?.vendor) setVendorProfile(vRes.vendor);
+                  } catch {}
+                  return;
+                }
+              }
+            } catch {}
+          }
+          await clearAuthStorage();
           setUser(null);
           setVendorProfile(null);
         }
@@ -85,19 +138,17 @@ export const AuthProvider = ({ children }: { children?: React.ReactNode }) => {
         setUser(null);
         setVendorProfile(null);
       }
-    } catch (err: any) {
-      console.warn('[AuthContext] Session restore note:', err?.message);
-      // Only clear if the session is definitively revoked or unauthorized
-      if (err?.data?.code === 'SESSION_REVOKED' || err?.data?.code === 'INVALID_REFRESH_TOKEN' || err?.status === 401) {
-        await secureStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
-        await secureStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
-        await secureStorage.removeItem(STORAGE_KEYS.AUTH_USER);
-        setUser(null);
-        setVendorProfile(null);
-      }
+    } catch {
+      await clearAuthStorage();
+      setUser(null);
+      setVendorProfile(null);
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const checkPhone = async (phone: string) => {
+    return await api.auth.checkPhone(phone, 'vendor');
   };
 
   const sendOtp = async (phone: string, purpose: 'login' | 'register' = 'login') => {
@@ -200,6 +251,7 @@ export const AuthProvider = ({ children }: { children?: React.ReactNode }) => {
         user,
         vendorProfile,
         isLoading,
+        checkPhone,
         sendOtp,
         verifyOtp,
         login,

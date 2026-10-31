@@ -181,6 +181,9 @@ JobSchema.index({ status: 1, category: 1, isDeleted: 1, createdAt: -1 });
 JobSchema.index({ customer: 1, isDeleted: 1, createdAt: -1 });
 JobSchema.index({ selectedVendor: 1, status: 1, isDeleted: 1 });
 JobSchema.index({ 'location.city': 1, status: 1 });
+JobSchema.index({ 'location.zoneId': 1, status: 1, isDeleted: 1, createdAt: -1 });
+JobSchema.index({ 'location.locality': 1, status: 1, isDeleted: 1, createdAt: -1 });
+JobSchema.index({ booking: 1 });
 
 export default mongoose.models.Job || mongoose.model('Job', JobSchema);
 

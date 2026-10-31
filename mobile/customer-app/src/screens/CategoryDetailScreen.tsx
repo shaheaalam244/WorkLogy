@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { Ionicons, Feather } from '@expo/vector-icons';
 import { api } from '../api/client';
+import { useAuth } from '../hooks/useAuth';
 import { COLORS } from '../theme/colors';
 import { formatCurrency } from '../utils/formatters';
 import { renderCategoryIcon } from '../utils/categoryIcons';
@@ -169,6 +170,7 @@ function parsePackage(rawSub: any, categoryName: string, categorySlug: string, i
 
 export default function CategoryDetailScreen({ route, navigation }: any) {
   const { slug, name } = route.params || {};
+  const { user, promptAuthGate } = useAuth();
   const [category, setCategory] = useState<ServiceCategory | null>(null);
   const [vendors, setVendors] = useState<VerifiedVendor[]>([]);
   const [loading, setLoading] = useState(true);
@@ -290,10 +292,32 @@ export default function CategoryDetailScreen({ route, navigation }: any) {
 
   // Open booking sheet for a specific package
   const handleOpenBooking = (pkg: ParsedPackage) => {
+    if (!user) {
+      promptAuthGate({
+        screen: 'CategoryDetail',
+        params: { slug, name },
+        heading: 'Sign in to book',
+        message: `Verify your mobile number to book ${pkg.name}.`
+      });
+      return;
+    }
     setSelectedPackage(pkg);
     setBookingError(null);
     setBookingSuccess(false);
     setIsBookingModalOpen(true);
+  };
+
+  const handlePostCustomJob = () => {
+    if (!user) {
+      promptAuthGate({
+        screen: 'CreateJob',
+        params: { categorySlug, categoryName },
+        heading: 'Sign in to post your request',
+        message: 'Verify your mobile number to post a job and receive quotations from local contractors.'
+      });
+    } else {
+      navigation.navigate('CreateJob', { categorySlug, categoryName });
+    }
   };
 
   // Submit direct booking through existing backend API
@@ -557,7 +581,7 @@ export default function CategoryDetailScreen({ route, navigation }: any) {
               </Text>
               <TouchableOpacity
                 style={styles.emptyPostBtn}
-                onPress={() => navigation.navigate('CreateJob', { categorySlug, categoryName })}
+                onPress={handlePostCustomJob}
                 activeOpacity={0.8}
               >
                 <Text style={styles.emptyPostBtnText}>Post a Custom Job Request</Text>
@@ -640,12 +664,7 @@ export default function CategoryDetailScreen({ route, navigation }: any) {
           <TouchableOpacity
             style={styles.customBtn}
             activeOpacity={0.8}
-            onPress={() =>
-              navigation.navigate('CreateJob', {
-                categorySlug,
-                categoryName
-              })
-            }
+            onPress={handlePostCustomJob}
           >
             <Text style={styles.customBtnText}>Post a Custom Job Request</Text>
           </TouchableOpacity>

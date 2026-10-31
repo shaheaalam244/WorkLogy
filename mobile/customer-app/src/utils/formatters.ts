@@ -144,3 +144,45 @@ export const formatChatDateSeparator = (dateString?: string): string => {
     return '';
   }
 };
+
+/**
+ * Checks whether an email is a system-generated placeholder email
+ */
+export const isTemporaryEmail = (email?: string): boolean => {
+  if (!email || typeof email !== 'string') return true;
+  const lower = email.trim().toLowerCase();
+  if (lower.endsWith('@worklogy.local')) return true;
+  if (lower.startsWith('customer_') && lower.includes('@')) return true;
+  if (lower.startsWith('temp_') && lower.includes('@')) return true;
+  return false;
+};
+
+/**
+ * Returns a displayable email or empty string if it's a placeholder
+ */
+export const getDisplayEmail = (email?: string): string => {
+  if (!email || isTemporaryEmail(email)) return '';
+  return email.trim();
+};
+
+/**
+ * Checks whether a name is a genuine user name or a default system placeholder
+ */
+export const isGenuineName = (name?: string): boolean => {
+  if (!name || typeof name !== 'string') return false;
+  const trimmed = name.trim();
+  if (trimmed.length < 2) return false;
+  const lower = trimmed.toLowerCase();
+  if (lower === 'new customer' || lower === 'new contractor' || lower === 'customer' || lower === 'user') {
+    return false;
+  }
+  return true;
+};
+
+/**
+ * Returns a clean display name or fallback
+ */
+export const getDisplayName = (name?: string, fallback: string = 'Welcome Customer'): string => {
+  if (isGenuineName(name)) return (name as string).trim();
+  return fallback;
+};

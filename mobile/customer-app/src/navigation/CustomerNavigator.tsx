@@ -26,7 +26,12 @@ import ChatDetailScreen from '../screens/ChatDetailScreen';
 import ReviewModalScreen from '../screens/ReviewModalScreen';
 import LoginScreen from '../screens/LoginScreen';
 import RegisterScreen from '../screens/RegisterScreen';
+import OtpVerificationScreen from '../screens/OtpVerificationScreen';
+import CustomerOnboardingProfileScreen from '../screens/CustomerOnboardingProfileScreen';
+import CustomerOnboardingAddressScreen from '../screens/CustomerOnboardingAddressScreen';
 import ProfessionalProfileScreen from '../screens/ProfessionalProfileScreen';
+import AuthGateModal from '../components/AuthGateModal';
+import { WorklogySplashScreen } from '../components/WorklogySplashScreen';
 import * as SplashScreen from 'expo-splash-screen';
 import { COLORS } from '../theme/colors';
 import { api } from '../api/client';
@@ -47,7 +52,16 @@ export const useNavigation = (): AppNavigation => {
 };
 
 const TAB_ROUTES = ['HomeTab', 'SearchTab', 'ExploreTab', 'MessagesTab', 'ProfileTab'];
-const SCREENS_WITH_CUSTOM_HEADER = ['ChatDetail', 'JobDetail'];
+const SCREENS_WITH_CUSTOM_HEADER = [
+  'ChatDetail',
+  'JobDetail',
+  'Login',
+  'OtpVerification',
+  'CustomerOnboardingProfile',
+  'CustomerOnboardingAddress'
+];
+
+let hasCustomerSplashCompletedOnce = false;
 
 export function CustomerAppContainer() {
   const insets = useSafeAreaInsets();
@@ -57,19 +71,43 @@ export function CustomerAppContainer() {
   );
   const bottomInset = insets.bottom;
 
-  const { user, isLoading } = useAuth();
-  const [history, setHistory] = useState<RouteEntry[]>([{ name: 'HomeTab', params: {} }]);
+  const { user, isLoading, onboardingStep, promptAuthGate } = useAuth();
+  const [history, setHistory] = useState<RouteEntry[]>([{ name: 'Login', params: {} }]);
+  const [initialRouteResolved, setInitialRouteResolved] = useState<boolean>(false);
   const [unreadNotificationsCount, setUnreadNotificationsCount] = useState<number>(0);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState<number>(0);
-
-  const hasHiddenSplashRef = useRef<boolean>(false);
+  const [splashFinished, setSplashFinished] = useState<boolean>(hasCustomerSplashCompletedOnce);
 
   useEffect(() => {
-    if (!isLoading && !hasHiddenSplashRef.current) {
-      hasHiddenSplashRef.current = true;
-      SplashScreen.hideAsync().catch(() => {});
+    if (!isLoading && !initialRouteResolved) {
+      let initialRoute = 'Login';
+      if (user) {
+        if (onboardingStep === 'profile_pending') {
+          initialRoute = 'CustomerOnboardingProfile';
+        } else if (onboardingStep === 'address_pending') {
+          initialRoute = 'CustomerOnboardingAddress';
+        } else {
+          initialRoute = 'HomeTab';
+        }
+      }
+      const initialHistory = [{ name: initialRoute, params: {} }];
+      historyRef.current = initialHistory;
+      setHistory(initialHistory);
+      setInitialRouteResolved(true);
     }
-  }, [isLoading]);
+  }, [isLoading, user, onboardingStep, initialRouteResolved]);
+
+  // Handle post-login logout synchronization
+  useEffect(() => {
+    if (initialRouteResolved && !user) {
+      const active = historyRef.current[historyRef.current.length - 1]?.name;
+      if (active !== 'Login' && active !== 'OtpVerification') {
+        const reset = [{ name: 'Login', params: {} }];
+        historyRef.current = reset;
+        setHistory(reset);
+      }
+    }
+  }, [user, initialRouteResolved]);
 
   const historyRef = useRef<RouteEntry[]>(history);
   historyRef.current = history;
@@ -391,6 +429,12 @@ export function CustomerAppContainer() {
         return <ReviewModalScreen navigation={navigation} route={route} />;
       case 'Login':
         return <LoginScreen navigation={navigation} route={route} />;
+      case 'OtpVerification':
+        return <OtpVerificationScreen navigation={navigation} route={route} />;
+      case 'CustomerOnboardingProfile':
+        return <CustomerOnboardingProfileScreen navigation={navigation} route={route} />;
+      case 'CustomerOnboardingAddress':
+        return <CustomerOnboardingAddressScreen navigation={navigation} route={route} />;
       case 'Register':
         return <RegisterScreen navigation={navigation} route={route} />;
       default:
@@ -426,7 +470,13 @@ export function CustomerAppContainer() {
       case 'ReviewModal':
         return 'Rate Experience';
       case 'Login':
-        return 'Customer Sign In';
+        return 'Welcome to WorkLogy';
+      case 'OtpVerification':
+        return 'Verify Mobile Number';
+      case 'CustomerOnboardingProfile':
+        return 'Profile Setup';
+      case 'CustomerOnboardingAddress':
+        return 'Service Address';
       case 'Register':
         return 'Create Account';
       default:
@@ -434,15 +484,11 @@ export function CustomerAppContainer() {
     }
   };
 
-  if (isLoading && !hasHiddenSplashRef.current) {
-    return <View style={styles.splashPlaceholder} />;
-  }
-
   return (
     <NavigationContext.Provider value={navigation}>
       <View style={styles.container}>
         {/* Top Back Header for Stack Screens with safe status bar positioning */}
-        {showNavHeader && (
+        {showNavHeader && splashFinished && (
           <>
             <StatusBar barStyle="dark-content" />
             <View style={[styles.navHeader, { paddingTop: topInset, minHeight: 52 + topInset }]}>
@@ -462,10 +508,16 @@ export function CustomerAppContainer() {
         )}
 
         {/* Main Screen Body */}
-        <View style={styles.screenBody}>{renderScreen()}</View>
+        <View style={styles.screenBody}>
+          {!splashFinished && isLoading ? (
+            <View style={styles.splashPlaceholder} />
+          ) : (
+            renderScreen()
+          )}
+        </View>
 
         {/* Persistent Bottom Tab Bar with Reference Design & Raised Center Action */}
-        {isTabScreen && (
+        {isTabScreen && splashFinished && (
           <View style={[styles.bottomBar, { paddingBottom: Math.max(bottomInset, Platform.OS === 'ios' ? 12 : 6), height: 60 + Math.max(bottomInset, Platform.OS === 'ios' ? 12 : 6) }]}>
             {/* 1. Home Tab */}
             <TouchableOpacity
@@ -503,7 +555,16 @@ export function CustomerAppContainer() {
             <TouchableOpacity
               style={styles.postJobBtnContainer}
               activeOpacity={0.85}
-              onPress={() => navigate('CreateJob')}
+              onPress={() => {
+                if (!user) {
+                  promptAuthGate({
+                    screen: 'CreateJob',
+                    message: 'Verify your mobile number to post a job or book a trusted professional.'
+                  });
+                } else {
+                  navigate('CreateJob');
+                }
+              }}
             >
               <View style={styles.postJobCircle}>
                 <Ionicons name="add" size={26} color="#FFFFFF" />
@@ -551,6 +612,19 @@ export function CustomerAppContainer() {
             </TouchableOpacity>
           </View>
         )}
+        {/* Global Authentication Gate Bottom Sheet Modal */}
+        <AuthGateModal navigation={navigation} />
+
+        {/* ── TWO-STAGE PRODUCTION SPLASH SCREEN ── */}
+        {!splashFinished && (
+          <WorklogySplashScreen
+            isReady={!isLoading}
+            onFinish={() => {
+              hasCustomerSplashCompletedOnce = true;
+              setSplashFinished(true);
+            }}
+          />
+        )}
       </View>
     </NavigationContext.Provider>
   );
@@ -559,7 +633,7 @@ export function CustomerAppContainer() {
 const styles = StyleSheet.create({
   splashPlaceholder: {
     flex: 1,
-    backgroundColor: '#FFFFFF'
+    backgroundColor: '#E8D9CA'
   },
   container: {
     flex: 1,

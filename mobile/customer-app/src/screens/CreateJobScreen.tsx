@@ -92,8 +92,23 @@ const CANONICAL_CATEGORY_SUGGESTIONS: Record<string, string[]> = {
 };
 
 export default function CreateJobScreen({ route, navigation }: any) {
-  const { categorySlug, categoryName, subservice, basePrice, title: initialTitle, urgency: initialUrgency } = route.params || {};
-  const { user } = useAuth();
+  const {
+    categorySlug,
+    categoryName,
+    subservice,
+    basePrice,
+    title: initialTitle,
+    urgency: initialUrgency,
+    description: initialDescription,
+    budgetType: initialBudgetType,
+    budgetAmount: initialBudgetAmount,
+    houseNumber: initialHouseNumber,
+    streetAddress: initialStreetAddress,
+    locality: initialLocality,
+    city: initialCity,
+    pincode: initialPincode
+  } = route.params || {};
+  const { user, promptAuthGate } = useAuth();
 
   // Category Selection State
   const [availableCategories, setAvailableCategories] = useState<any[]>([]);
@@ -104,7 +119,7 @@ export default function CreateJobScreen({ route, navigation }: any) {
 
   // Form Fields
   const [title, setTitle] = useState(initialTitle || (subservice ? `${subservice} Service` : ''));
-  const [description, setDescription] = useState('');
+  const [description, setDescription] = useState(initialDescription || '');
   const [urgency, setUrgency] = useState<'normal' | 'emergency'>(
     initialUrgency === 'high' || initialUrgency === 'emergency' ? 'emergency' : 'normal'
   );
@@ -114,14 +129,16 @@ export default function CreateJobScreen({ route, navigation }: any) {
   const [pickingPhoto, setPickingPhoto] = useState(false);
 
   // Pricing Preference: Mode B ("Request Quotes") is the recommended default
-  const [budgetType, setBudgetType] = useState<'quote' | 'fixed'>('quote');
-  const [budgetAmount, setBudgetAmount] = useState(basePrice && Number(basePrice) > 0 ? String(basePrice) : '');
+  const [budgetType, setBudgetType] = useState<'quote' | 'fixed'>(initialBudgetType || 'quote');
+  const [budgetAmount, setBudgetAmount] = useState(
+    initialBudgetAmount || (basePrice && Number(basePrice) > 0 ? String(basePrice) : '')
+  );
 
   // Separated Address & Locality Fields
-  const [houseNumber, setHouseNumber] = useState('');
-  const [streetAddress, setStreetAddress] = useState('');
-  const [locality, setLocality] = useState('');
-  const [city, setCity] = useState('');
+  const [houseNumber, setHouseNumber] = useState(initialHouseNumber || '');
+  const [streetAddress, setStreetAddress] = useState(initialStreetAddress || '');
+  const [locality, setLocality] = useState(initialLocality || '');
+  const [city, setCity] = useState(initialCity || '');
   const [stateName, setStateName] = useState('Uttar Pradesh');
   const [pincode, setPincode] = useState('');
   const [zoneId, setZoneId] = useState<string | null>(null);
@@ -574,14 +591,25 @@ export default function CreateJobScreen({ route, navigation }: any) {
 
     // Validate Authentication
     if (!user?._id) {
-      Alert.alert(
-        'Sign In Required',
-        'Please sign in to your customer account to submit a service request.',
-        [
-          { text: 'Sign In', onPress: () => navigation.navigate('Login') },
-          { text: 'Cancel', style: 'cancel' }
-        ]
-      );
+      promptAuthGate({
+        screen: 'CreateJob',
+        params: {
+          categorySlug: selectedCategorySlug,
+          categoryName: selectedCategoryName,
+          title,
+          description,
+          budgetType,
+          budgetAmount,
+          urgency,
+          streetAddress,
+          houseNumber,
+          locality: finalLocality,
+          city: finalCity,
+          pincode
+        },
+        heading: 'Sign in to post your request',
+        message: 'Verify your mobile number so verified local experts can send quotations and contact you.'
+      });
       return;
     }
 

@@ -15,16 +15,30 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../hooks/useAuth';
 import { COLORS } from '../theme/colors';
 
-export default function VendorRegisterScreen({ navigation }: any) {
+export default function VendorRegisterScreen({ navigation, route }: any) {
   const { sendOtp } = useAuth();
-  const [phone, setPhone] = useState('');
+  const initialPhone = route?.params?.phone ? String(route.params.phone).replace(/\D/g, '').slice(0, 10) : '';
+  const [phone, setPhone] = useState(initialPhone);
   const [isSendingOtp, setIsSendingOtp] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isExistingUser, setIsExistingUser] = useState(false);
+
+  React.useEffect(() => {
+    if (route?.params?.phone) {
+      const p = String(route.params.phone).replace(/\D/g, '').slice(0, 10);
+      if (p) {
+        setPhone(p);
+        setIsExistingUser(false);
+        setErrorMessage(null);
+      }
+    }
+  }, [route?.params?.phone]);
 
   const handlePhoneChange = (text: string) => {
     const cleaned = text.replace(/\D/g, '').slice(0, 10);
     setPhone(cleaned);
     if (errorMessage) setErrorMessage(null);
+    if (isExistingUser) setIsExistingUser(false);
   };
 
   const handleSendOtp = async () => {
@@ -41,6 +55,7 @@ export default function VendorRegisterScreen({ navigation }: any) {
 
     setIsSendingOtp(true);
     setErrorMessage(null);
+    setIsExistingUser(false);
 
     try {
       const res = await sendOtp(cleanPhone, 'register');
@@ -52,9 +67,14 @@ export default function VendorRegisterScreen({ navigation }: any) {
       });
     } catch (err: any) {
       if (err?.data?.code === 'ALREADY_REGISTERED' || err?.status === 409) {
+        setIsExistingUser(true);
         setErrorMessage(
-          'An account is already registered with this mobile number. Please sign in instead.'
+          `An active contractor account is already registered with +91 ${cleanPhone}. Please sign in to manage your services.`
         );
+      } else if (err?.isNetworkError) {
+        setErrorMessage('Network connection error. Please check your internet connection and try again.');
+      } else if (err?.status >= 500) {
+        setErrorMessage('Server error encountered. Please try again shortly or contact support.');
       } else {
         setErrorMessage(err.message || 'Unable to send registration OTP. Please check your number.');
       }
@@ -118,21 +138,34 @@ export default function VendorRegisterScreen({ navigation }: any) {
               </View>
             )}
 
-            <TouchableOpacity
-              style={[styles.primaryBtn, isSendingOtp && styles.btnDisabled]}
-              onPress={handleSendOtp}
-              disabled={isSendingOtp}
-              activeOpacity={0.85}
-            >
-              {isSendingOtp ? (
-                <View style={styles.btnLoadingRow}>
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                  <Text style={styles.primaryBtnText}>Sending OTP...</Text>
+            {isExistingUser ? (
+              <TouchableOpacity
+                style={[styles.primaryBtn, { backgroundColor: '#06684F', marginTop: 14 }]}
+                onPress={() => navigation.navigate('VendorLogin', { phone })}
+                activeOpacity={0.85}
+              >
+                <View style={styles.btnRow}>
+                  <Ionicons name="log-in-outline" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
+                  <Text style={styles.primaryBtnText}>Sign In with +91 {phone}</Text>
                 </View>
-              ) : (
-                <Text style={styles.primaryBtnText}>Continue with OTP</Text>
-              )}
-            </TouchableOpacity>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[styles.primaryBtn, isSendingOtp && styles.btnDisabled]}
+                onPress={handleSendOtp}
+                disabled={isSendingOtp}
+                activeOpacity={0.85}
+              >
+                {isSendingOtp ? (
+                  <View style={styles.btnLoadingRow}>
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                    <Text style={styles.primaryBtnText}>Sending OTP...</Text>
+                  </View>
+                ) : (
+                  <Text style={styles.primaryBtnText}>Continue with OTP</Text>
+                )}
+              </TouchableOpacity>
+            )}
 
             <Text style={styles.helperNote}>
               We will send a 6-digit verification code to verify your mobile number before setting up your profile.
@@ -142,7 +175,7 @@ export default function VendorRegisterScreen({ navigation }: any) {
           {/* Footer Back to Login */}
           <View style={styles.footerRow}>
             <Text style={styles.footerText}>Already registered? </Text>
-            <TouchableOpacity onPress={() => navigation.navigate('VendorLogin')}>
+            <TouchableOpacity onPress={() => navigation.navigate('VendorLogin', { phone })}>
               <Text style={styles.loginLink}>Sign In Here</Text>
             </TouchableOpacity>
           </View>
@@ -306,6 +339,11 @@ const styles = StyleSheet.create({
   btnLoadingRow: {
     flexDirection: 'row',
     alignItems: 'center'
+  },
+  btnRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center'
   },
   primaryBtnText: {
     color: '#FFFFFF',

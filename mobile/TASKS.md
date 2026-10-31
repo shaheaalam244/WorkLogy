@@ -23,12 +23,12 @@ A backlog item transitions to **Done** if and only if:
 | Category | Total Tasks | Done | In Progress | Todo | Blocked |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **Phase 1: Architecture & Isolation (P0)** | 6 | 6 | 0 | 0 | 0 |
-| **Phase 2: Customer Mobile App Core (P1)** | 13 | 13 | 0 | 0 | 0 |
-| **Phase 3: Vendor Mobile App Core (P1)** | 11 | 11 | 0 | 0 | 0 |
+| **Phase 2: Customer Mobile App Core (P1)** | 17 | 17 | 0 | 0 | 0 |
+| **Phase 3: Vendor Mobile App Core (P1)** | 12 | 12 | 0 | 0 | 0 |
 | **Phase 4: Shared Mobile Architecture (P1)** | 5 | 5 | 0 | 0 | 0 |
 | **Phase 5: Enhanced Field Capabilities (P2)** | 4 | 0 | 0 | 4 | 0 |
 | **Phase 6: Future Scale & Localization (P3)** | 3 | 0 | 0 | 3 | 0 |
-| **Total** | **42** | **35** | **0** | **7** | **0** |
+| **Total** | **47** | **40** | **0** | **7** | **0** |
 
 ---
 
@@ -855,4 +855,412 @@ A backlog item transitions to **Done** if and only if:
   3. Removed obsolete `logoEmblem` and `logoPinDot` elements from `HomeScreen.tsx`.
   4. Verified TypeScript checks (`tsc --noEmit`) and Android Expo production export with 0 errors.
 - **Acceptance Criteria**: Official WorkLogy logo cleanly renders immediately before "WorkLogy" with transparency; no white box or checkerboard; home screen controls intact; vendor app untouched.
+- **Status**: Done
+
+---
+
+### TSK-MOB-050: Production-Ready Customer Mobile App OTP Authentication & Step-by-Step Onboarding
+- **Title**: Implement production-grade mobile OTP sign-in, session persistence, and step-by-step onboarding in Customer App
+- **Priority**: P0
+- **Relevant Area**: Customer Mobile App Authentication & User Onboarding
+- **Problem Statement**:
+  1. The Customer Mobile App previously used legacy email/password inputs with a hardcoded demo account, contrary to modern consumer app patterns and mobile number-first workflows.
+  2. Customers lacked a frictionless OTP login experience mirroring the finalized Vendor Pro App.
+  3. New customer registrations required manual step-by-step profile and address setup without breaking on navigation or app restart.
+  4. Backend authentication routes (`/api/auth/otp/send` and `/api/auth/otp/verify`) were coupled to vendors and needed safe generalization without regressing the Vendor App.
+- **Expected Behavior**:
+  1. **Screen 1 — Welcome / Login**:
+     - Official WorkLogy logo branding, heading "Welcome to WorkLogy", and subtitle.
+     - India (+91) country code pill and 10-digit mobile number input with inline validation.
+     - Primary button "Continue with OTP" with disabled state and loading indicators.
+     - Terms of Service and Privacy Policy interactive modals.
+     - Zero hardcoded demo credentials or private numbers.
+  2. **Screen 2 — Dedicated OTP Verification**:
+     - Masked mobile number with "Change number" action returning to edit phone.
+     - 6-digit visual OTP boxes with auto-submit upon entering 6 digits.
+     - 60-second cooldown countdown and enabled "Resend OTP".
+     - Backend timing-safe verification, rate limiting, and replay attack prevention.
+     - Dev mode auto-fill banner for instant local development and testing.
+  3. **Screen 3 — Customer Profile Setup**:
+     - Step 1 of 2 indicator.
+     - Full name (required) with validation (min 2 characters).
+     - Optional email with format validation.
+     - Optional profile photo picker using `expo-image-picker` with Cloudinary/local upload.
+     - "Continue" and "Skip for now" actions.
+  4. **Screen 4 — First Service Address (Optional)**:
+     - Step 2 of 2 indicator.
+     - GPS auto-detection button ("Use Current Location") with `expo-location` reverse geocoding.
+     - Form: House/Flat No., Street, Locality, City, PIN Code, Label (Home/Work/Other pills), default address toggle.
+     - "Save & Continue" persists address to MongoDB and marks onboarding complete.
+     - "Skip for now" marks onboarding complete and immediately navigates to Customer Home.
+  5. **Session Persistence & Resumption**:
+     - 90-day server sessions in `Session` model, 15-minute JWT access tokens, and rotating refresh tokens in `secureStorage`.
+     - Silent refresh on token expiration; clean session restoration on app restart.
+     - Returning customers bypass onboarding and land directly on Customer Home with profile and addresses loaded.
+     - Partially onboarded customers resume from their exact incomplete step.
+  6. **Strict Isolation & Zero Regression**:
+     - `mobile/vendor-app/` strictly untouched.
+     - All vendor OTP endpoints remain 100% backward-compatible.
+- **Implementation Scope**:
+  1. Updated [`backend/src/models/CustomerProfile.js`](file:///Users/shaheaalam/Desktop/worklogy/backend/src/models/CustomerProfile.js) with `onboardingStep` enum (`profile_pending`, `address_pending`, `completed`).
+  2. Generalized [`backend/src/controllers/auth.controller.js`](file:///Users/shaheaalam/Desktop/worklogy/backend/src/controllers/auth.controller.js) (`sendLoginOtp` and `verifyLoginOtp`) to support both `customer` and `vendor` roles with independent challenge scopes, customer auto-provisioning, session creation, and tokens.
+  3. Sanitized email and profile updates in [`backend/src/controllers/user.controller.js`](file:///Users/shaheaalam/Desktop/worklogy/backend/src/controllers/user.controller.js).
+  4. Added `REFRESH_TOKEN` to `STORAGE_KEYS` in [`mobile/customer-app/src/constants/index.ts`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/constants/index.ts).
+  5. Updated [`mobile/customer-app/src/api/client.ts`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/api/client.ts) with `sendOtp`, `verifyOtp`, `refreshToken`, `logout`, and `customer.updateProfile`.
+  6. Upgraded [`mobile/customer-app/src/context/AuthContext.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/context/AuthContext.tsx) with OTP lifecycle, `onboardingStep` state machine, silent token renewal, and step completion methods.
+  7. Replaced [`mobile/customer-app/src/screens/LoginScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/LoginScreen.tsx) with modern Screen 1 Welcome/Login with official logo and OTP request.
+  8. Created [`mobile/customer-app/src/screens/OtpVerificationScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/OtpVerificationScreen.tsx) for 6-digit OTP entry and resend.
+  9. Created [`mobile/customer-app/src/screens/CustomerOnboardingProfileScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/CustomerOnboardingProfileScreen.tsx) for name, optional email, and photo setup.
+  10. Created [`mobile/customer-app/src/screens/CustomerOnboardingAddressScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/CustomerOnboardingAddressScreen.tsx) for GPS auto-detection, address inputs, and label selection.
+  11. Updated [`mobile/customer-app/src/navigation/CustomerNavigator.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/navigation/CustomerNavigator.tsx) to register routes, hide bottom tab bar on auth/onboarding screens, and manage session restoration navigation.
+  12. Updated [`mobile/customer-app/src/screens/ProfileScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/ProfileScreen.tsx) logout handler to reset to `Login`.
+  13. Verified with live API curl tests (new customer creation, invalid OTP, cooldown rate limits, replay protection, profile update, address creation, returning customer login, token rotation, and vendor backward compatibility).
+  14. Verified clean TypeScript compilation in both apps and Android production bundle export (`npx expo export --platform android --dev false`).
+- **Acceptance Criteria**: Full OTP authentication and step-by-step onboarding works end-to-end; returning customer lands on Home; Vendor App remains 100% functional and untouched.
+- **Status**: Done
+
+---
+
+### TSK-MOB-051: Customer App Login UI Polish, Guest Mode Browsing & Mandatory Auth Gates
+- **Title**: Production-ready Customer App login UI polish, seamless guest browsing, and mandatory authentication gates for booking and job posting
+- **Priority**: P0
+- **Relevant Area**: Customer Mobile App Authentication & Guest Flow Gates
+- **Problem Statement**:
+  1. The Customer App required a production-grade UI polish for its Welcome/Login screen matching top consumer apps: clean spacing, balanced official logo, responsive card layout, interactive terms/privacy modals, and active green CTA states.
+  2. First-time users should be able to explore the app as guests without being immediately forced to log in.
+  3. All actions involving transactions or customer mutations (posting a job, booking a service/package, hiring a verified professional, or emergency dispatch) must be strictly gated with an authentication challenge.
+  4. When an unauthenticated guest attempts a protected action, the user's intended action and form inputs must be safely preserved so they can resume immediately after OTP verification without retyping or duplicate charges.
+- **Expected Behavior**:
+  1. **Polished Welcome/Login Screen**:
+     - Official WorkLogy logo centered at 76x76 with clean spacing.
+     - Heading "Welcome to WorkLogy" and subtitle "Book trusted local professionals in just a few steps."
+     - Mobile input card with India (+91) country flag and inline 10-digit validation (`/^[6-9]\d{9}$/`).
+     - "Continue with OTP" button styled with `#059669` green background upon valid number entry.
+     - "Skip for now" pill button with helper text: "Explore services without signing in. Sign-in is required when you book or post a job."
+     - Responsive trust badge row: "Verified Experts", "Escrow Protected", "Instant Quotes".
+     - Interactive "Terms of Service" and "Privacy Policy" links opening clean bottom-sheet dialogs.
+  2. **Guest Mode Browsing**:
+     - Tapping "Skip for now" navigates to Customer Home (`HomeTab`) in guest mode without creating a fake session or saving dummy tokens.
+     - Guests can freely browse categories, service listings, search professionals, view technician profiles, reviews, and rates.
+  3. **Mandatory Authentication Gates**:
+     - Protected actions are intercepted via `promptAuthGate({ screen, params, message, title })`:
+       - "+ Post Job" tab button in bottom navigation bar.
+       - "Submit Service Request" in `CreateJobScreen`.
+       - "Book Now" / direct booking in `ProfessionalProfileScreen`.
+       - Package direct booking and custom job post in `CategoryDetailScreen`.
+       - "Book Plumber", "Book now", and "Post a Job Now" banners on `HomeScreen`.
+       - Emergency broadcast in `EmergencyScreen`.
+     - Displays an elegant `<AuthGateModal />` bottom sheet explaining why authentication is needed.
+     - Tapping "Continue with OTP" navigates to `LoginScreen` with target action stored in `pendingAction`.
+  4. **Seamless Action Resumption**:
+     - Upon successful OTP verification (and onboarding address confirmation/skip), the app checks `pendingAction`.
+     - If a pending action exists, it resumes navigation to the exact screen with pre-filled parameters.
+     - `CreateJobScreen` pre-fills in-progress category, title, description, address, budget, and urgency from state params.
+     - Never automatically executes charges or irreversible actions without explicit customer review.
+  5. **Strict Security & Zero Vendor App Regression**:
+     - Server-side RBAC endpoints strictly enforce authentication on `/api/jobs`, `/api/bookings/direct`, and customer mutation routes.
+     - `mobile/vendor-app/` remains 100% untouched.
+- **Implementation Scope**:
+  1. Enhanced [`mobile/customer-app/src/context/AuthContext.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/context/AuthContext.tsx) with `isGuest`, `pendingAction`, `setPendingAction`, `clearPendingAction`, `authGateModal`, `promptAuthGate`, and `closeAuthGate`.
+  2. Created [`mobile/customer-app/src/components/AuthGateModal.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/components/AuthGateModal.tsx) with shield icon, trust pills, "Continue with OTP", and "Maybe later".
+  3. Polished [`mobile/customer-app/src/screens/LoginScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/LoginScreen.tsx) with responsive layout, dynamic button state, guest pill, trust row, and Terms & Privacy modals.
+  4. Updated [`mobile/customer-app/src/screens/OtpVerificationScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/OtpVerificationScreen.tsx) and [`mobile/customer-app/src/screens/CustomerOnboardingAddressScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/CustomerOnboardingAddressScreen.tsx) to resume `pendingAction` upon completion.
+  5. Updated [`mobile/customer-app/src/navigation/CustomerNavigator.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/navigation/CustomerNavigator.tsx) to mount `<AuthGateModal />` and gate the center "+ Post Job" tab for guests.
+  6. Updated [`mobile/customer-app/src/screens/HomeScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/HomeScreen.tsx), [`mobile/customer-app/src/screens/CreateJobScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/CreateJobScreen.tsx), [`mobile/customer-app/src/screens/ProfessionalProfileScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/ProfessionalProfileScreen.tsx), [`mobile/customer-app/src/screens/CategoryDetailScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/CategoryDetailScreen.tsx), and [`mobile/customer-app/src/screens/EmergencyScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/EmergencyScreen.tsx) with authentication gates.
+  7. Verified TypeScript checks in both mobile apps (`tsc --noEmit`) with 0 errors.
+  8. Verified Android bundle compilation (`npx expo export --platform android --dev false`).
+- **Acceptance Criteria**: Login UI is polished with guest option and terms/privacy; guests can browse services and profiles; booking and job posting prompt authentication; pending actions resume post-login; Vendor App completely untouched.
+- **Status**: Done
+
+---
+
+### TSK-MOB-052: MSG91 SMS OTP Production Integration & Zero-Mock Enforcement
+- **Title**: Production-grade MSG91 SMS OTP delivery, server-side verification, zero-mock enforcement, and session provisioning for WorkLogy Customer App
+- **Priority**: P0
+- **Relevant Area**: Customer Mobile Authentication & Provider SMS Gateway Integration
+- **Problem Statement**:
+  1. The Customer App previously had dev-mode OTP autofill banners, client-visible `debugCode` responses, and local mock OTP generation paths.
+  2. Production requirements mandate real SMS OTP delivery via MSG91's official SMS service under Indian DLT regulations.
+  3. Client-side security requires that sensitive secrets (MSG91 AuthKey, DLT templates, JWT signing keys) must NEVER exist on the mobile client.
+  4. The solution must support both official MSG91 OTP API (REST) and MSG91 OTP Widget token validation while maintaining zero native breaking dependencies on Expo SDK 57 and zero regressions to the finalized Vendor App.
+- **Expected Behavior**:
+  1. **Strict Zero-Mock Enforcement**:
+     - Removed all `debugCode` parameters, mock banners, and fake local success paths from the Customer App.
+     - Customer mobile requests cannot succeed unless real SMS dispatch is confirmed by MSG91.
+     - Unconfigured MSG91 returns HTTP 503 `SMS_SERVICE_UNCONFIGURED` without mock fallback.
+  2. **Official MSG91 Integration**:
+     - Real OTP dispatch via MSG91 v5 OTP API (`POST https://control.msg91.com/api/v5/otp?template_id=...&mobile=91...`).
+     - Real OTP verification via MSG91 server verification API (`GET https://control.msg91.com/api/v5/otp/verify?otp=...&mobile=91...`).
+     - Real OTP retry via MSG91 retry API (`GET https://control.msg91.com/api/v5/otp/retry?authkey=...&retrytype=text&mobile=91...`).
+     - Server-side MSG91 OTP Widget token validation (`POST /api/auth/otp/verify-widget`) calling MSG91's `verifyAccessToken`.
+  3. **WorkLogy Authenticated Session**:
+     - Verified customer mobile numbers provision a 90-day server `Session` in MongoDB.
+     - Issues finite 15-minute JWT access tokens and rotating refresh tokens stored securely in `expo-secure-store`.
+  4. **Mobile Native SMS Autofill**:
+     - `OtpVerificationScreen` implements `autoComplete="sms-otp"` and `textContentType="oneTimeCode"` on the hidden input for native Android SMS autofill.
+  5. **Vendor App Preservation**:
+     - `mobile/vendor-app/` remains 100% untouched and fully backward-compatible.
+- **Implementation Scope**:
+  1. Created [`backend/src/services/msg91.service.js`](file:///Users/shaheaalam/Desktop/worklogy/backend/src/services/msg91.service.js) handling `sendOtp`, `verifyOtp`, `retryOtp`, and `verifyAccessToken`.
+  2. Updated [`backend/src/models/OtpChallenge.js`](file:///Users/shaheaalam/Desktop/worklogy/backend/src/models/OtpChallenge.js) with `provider` and `reqId` fields, and cleaned duplicate schema index.
+  3. Updated [`backend/src/models/Session.js`](file:///Users/shaheaalam/Desktop/worklogy/backend/src/models/Session.js) cleaned duplicate schema index.
+  4. Updated [`backend/src/utils/sms.js`](file:///Users/shaheaalam/Desktop/worklogy/backend/src/utils/sms.js) with MSG91 official provider integration and stripped debug codes from customer flow.
+  5. Updated [`backend/src/controllers/auth.controller.js`](file:///Users/shaheaalam/Desktop/worklogy/backend/src/controllers/auth.controller.js) with MSG91 dispatch, remote verification, and `verifyWidgetAccessToken`.
+  6. Registered `POST /api/auth/otp/verify-widget` in [`backend/src/routes/auth.routes.js`](file:///Users/shaheaalam/Desktop/worklogy/backend/src/routes/auth.routes.js).
+  7. Updated [`backend/.env.example`](file:///Users/shaheaalam/Desktop/worklogy/backend/.env.example) and [`backend/.env`](file:///Users/shaheaalam/Desktop/worklogy/backend/.env) with MSG91 configuration keys.
+  8. Cleaned [`mobile/customer-app/src/screens/LoginScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/LoginScreen.tsx) and [`mobile/customer-app/src/screens/OtpVerificationScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/OtpVerificationScreen.tsx) of `debugCode` and mock UI banners.
+  9. Added `autoComplete="sms-otp"` and `textContentType="oneTimeCode"` to OTP input in [`mobile/customer-app/src/screens/OtpVerificationScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/OtpVerificationScreen.tsx).
+  10. Updated [`mobile/customer-app/src/context/AuthContext.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/context/AuthContext.tsx) and [`mobile/customer-app/src/api/client.ts`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/api/client.ts).
+  11. Verified with integration test suite (6/6 tests passing) and live MSG91 API checks.
+  12. Verified clean TypeScript compilation in both apps (`tsc --noEmit`) and Expo Android production bundle export (`npx expo export --platform android --dev false`).
+- **Acceptance Criteria**: MSG91 real OTP integration is live on server; zero mock code in production paths; session establishment verified; Vendor App 100% untouched.
+- **Status**: Done
+
+---
+
+### TSK-MOB-053: Customer App Keyboard Focus Fix & Vendor App Auth Resilience
+- **Title**: Fix Customer App Mobile Number Keyboard Opening & Vendor App Session Warning / Route 404 Resolution
+- **Priority**: P0
+- **Relevant Area**: Mobile Authentication & UI Touch Reliability
+- **Problem Statement**:
+  1. On the Customer App Login screen, tapping the mobile number input area failed to open the Android soft keyboard due to an unfocused `View` wrapper without press forwarding, `paddingVertical: 0` collapsing the touch area, and `keyboardType="phone-pad"` lacking `showSoftInputOnFocus`.
+  2. On the Vendor App Login screen, users with registered contractor numbers (e.g. `7572076103`) encountered an incorrect error: "No registered contractor account found for this number. Please register as a new partner." whenever the local backend was offline and the request fell back to the VPS which returned HTTP 404 Route Not Found, falsely matching `err?.status === 404`.
+  3. A persistent yellow/black dev LogBox banner (`[AuthContext] Session restore note: Invalid or expired...`) displayed across the bottom of the screen due to an unhandled `console.warn` during expired session checks.
+- **Expected Behavior**:
+  1. Tapping anywhere inside the mobile number input container reliably focuses the `TextInput` and brings up the numeric keyboard.
+  2. The input properly supports cursor placement, editing, selection, and deletion with green selection color.
+  3. The bottom developer warning banner is suppressed in production screens and expired sessions are cleared cleanly without user alerts.
+  4. Vendor login error only displays "No registered contractor account found" when the backend explicitly returns `code === 'NOT_REGISTERED'`, and correctly reports server connection issues when 404 route errors occur.
+  5. The backend server explicitly binds to `0.0.0.0:${PORT}` and handles mobile requests from local LAN devices.
+- **Implementation Scope**:
+  1. Updated [`mobile/customer-app/src/screens/LoginScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/LoginScreen.tsx):
+     - Wrapped `phoneInputRow` with a `Pressable` that forwards taps directly to `phoneInputRef.current?.focus()`.
+     - Attached `ref={phoneInputRef}` to `TextInput`.
+     - Configured `keyboardType="number-pad"` and `showSoftInputOnFocus={true}`.
+     - Updated `styles.phoneInput` with `height: '100%'`, `flex: 1`, `paddingVertical: Platform.OS === 'android' ? 0 : 12`, and `textAlignVertical: 'center'`.
+  2. Updated [`mobile/customer-app/src/screens/OtpVerificationScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/OtpVerificationScreen.tsx):
+     - Added `showSoftInputOnFocus={true}` to prevent keyboard auto-dismiss on Android.
+  3. Updated [`mobile/vendor-app/src/context/AuthContext.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/vendor-app/src/context/AuthContext.tsx):
+     - Replaced `console.warn` with `console.log` during session restoration to suppress React Native LogBox toasts.
+     - Added clean token storage cleanup on 401/403 session errors.
+  4. Updated [`mobile/vendor-app/src/screens/VendorLoginScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/vendor-app/src/screens/VendorLoginScreen.tsx):
+     - Decoupled `err?.status === 404` from `err?.data?.code === 'NOT_REGISTERED'` to prevent false unregistered user errors.
+  5. Updated [`backend/src/server.js`](file:///Users/shaheaalam/Desktop/worklogy/backend/src/server.js):
+     - Explicitly bound server to `0.0.0.0:${PORT}`.
+     - Verified live connectivity from both localhost and LAN IP `10.211.183.171:5001`.
+- **Acceptance Criteria**: Tapping phone row opens keyboard reliably; Vendor 404 no longer triggers false unregistered error; dev session warnings suppressed; backend responds with real MSG91 SMS OTP.
+- **Status**: Done
+
+---
+
+### TSK-MOB-054: Eliminate Chat 401 Polling Loops & Enforce Secure Production OTP Logging
+- **Title**: Eliminate Unauthenticated Chat Polling in Vendor App & Secure Backend OTP Diagnostic Logging
+- **Priority**: P0
+- **Relevant Area**: Vendor Authentication, Navigation Security & SMS Provider Hardening
+- **Problem Statement**:
+  1. `mobile/vendor-app/src/navigation/VendorNavigator.tsx` unconditionally triggered `api.chat.getUnreadCount()` immediately on mount and on a 20-second interval regardless of authentication status. When users were on `VendorLogin` or session restoration was in-flight, this caused continuous `GET /api/chat/unread-count 401` console spam and unnecessary network consumption.
+  2. Plaintext OTP codes were being printed in server logs (`🔔 [WorkLogy OTP] ...`), violating production security standards.
+  3. Phone numbers were logged unmasked in diagnostic traces.
+  4. MSG91 SMS OTP requests were returning HTTP 200 from the provider's entry API, but actual GSM delivery was held in pending status by Indian telecom compliance (`pauseReason: 'code: 211'` - DLT Template ID Missing, balance `0`).
+- **Expected Behavior**:
+  1. `VendorNavigator` only polls unread messages and notifications when `user?._id` is actively authenticated. Unauthenticated states reset counts to 0 and cancel interval polling.
+  2. All diagnostic logs mask mobile numbers (`+91 ******XXXX`) and never print raw OTP codes.
+  3. API responses never leak OTP codes or mock parameters (`debugCode` eliminated).
+  4. Real MSG91 provider status and balance are inspected and verified via official delivery log APIs.
+- **Implementation Scope**:
+  1. Updated [`mobile/vendor-app/src/navigation/VendorNavigator.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/vendor-app/src/navigation/VendorNavigator.tsx):
+     - Added guard `if (!user?._id) return;` to `fetchUnread`.
+     - Guarded `setInterval(fetchUnread, 20000)` and socket connections behind active `user?._id`.
+  2. Updated [`backend/src/controllers/auth.controller.js`](file:///Users/shaheaalam/Desktop/worklogy/backend/src/controllers/auth.controller.js):
+     - Removed all plaintext OTP console logs.
+     - Enforced masked logging (`+91 ******${normalizedPhone.slice(-4)}`).
+     - Removed `debugCode` from JSON API responses.
+  3. Updated [`backend/src/utils/sms.js`](file:///Users/shaheaalam/Desktop/worklogy/backend/src/utils/sms.js):
+     - Removed plaintext OTP logging and stripped `debugCode`.
+  4. Verified provider status via official MSG91 delivery report API (`/api/v5/report/logs/p/otp`) and route balance API (`balance.php`).
+- **Acceptance Criteria**: Zero 401 polling loops when unauthenticated; zero plaintext OTPs in logs or API responses; all phone numbers masked; exact MSG91 delivery failure reason (`code: 211`) documented.
+- **Status**: Done
+
+---
+
+### TSK-MOB-055: WorkLogy Vendor App — Fix Splash Screen Sequence & Eliminate Old Custom Splash
+- **Title**: Eliminate Unwanted Slogan Splash & Enforce Strict Two-Stage Startup Sequence in WorkLogy Vendor App
+- **Priority**: P0
+- **Relevant Area**: Vendor App Startup Lifecycle & Native Splash Handoff
+- **Problem Statement**:
+  1. The Vendor App displayed 3 splash screens plus a glitch:
+     - 1. Native WorkLogy Pro logo splash
+     - 2. Unwanted old custom slogan splash ("WorkLogy Pro", "Your Skills. More Opportunities.", trust badges)
+     - 3. Homepage flash
+     - 4. Promotional image (`WorkLogy vendor splash.png`) appearing briefly
+     - 5. Settle on Vendor Login
+  2. The custom slogan splash was obsolete and conflicting with the native splash.
+  3. `history` in `VendorNavigator.tsx` initialized with `VendorHomeTab`, causing premature mounting and render flashes of `VendorHomeScreen` during startup.
+- **Expected Behavior**:
+  - Exactly TWO splash screens:
+    1. First: Existing Native WorkLogy Pro logo splash (`native-splash.png`).
+    2. Second: Full-screen promotional image `WorkLogy vendor splash.png` (only custom splash screen in JavaScript).
+    3. Destination: Directly to `VendorHomeTab` (if authenticated) or `VendorLogin` (if unauthenticated).
+  - ZERO homepage flash before promotional splash.
+  - Promotional image never appears after homepage.
+  - Zero old slogan text or trust badges.
+  - Edge-to-edge dark green (`#043821`) presentation with responsive `contain` layout preserving logo, technician faces, and icons across all Android aspect ratios (9:16, 19.5:9, 20:9, tablets).
+- **Implementation Scope**:
+  1. Rewrote [`mobile/vendor-app/src/components/WorklogySplashScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/vendor-app/src/components/WorklogySplashScreen.tsx):
+     - Completely removed the old Stage 1 custom logo & slogan UI ("Your Skills. More Opportunities.", trust badges, `WORKLOGY_LOGO`).
+     - Rendered ONLY `WorkLogy vendor splash.png` edge-to-edge in `#043821` container with matching `#043821` translucent status bar.
+     - Connected `onLoadEnd` to dismiss the native splash screen smoothly via `SplashScreen.hideAsync()` once the promotional image is ready to render.
+     - Single 2.2s minimum display timer combined with `isReady` (`!isLoading`) gate and 5.0s safety timeout.
+  2. Updated [`mobile/vendor-app/src/navigation/VendorNavigator.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/vendor-app/src/navigation/VendorNavigator.tsx):
+     - Initialized `history` dynamically to prevent premature mounting of `VendorHomeScreen` when unauthenticated.
+     - Rendered `<View style={styles.splashPlaceholder} />` while `!splashFinished && isLoading`, preventing any underlying screen flash or unauthenticated API calls.
+     - Guarded `showNavHeader` and bottom bar behind `splashFinished`.
+     - Controlled splash completion with module-level `hasVendorSplashCompletedOnce` guard.
+- **Acceptance Criteria**: Strict 2-stage sequence (Native Logo -> Full-Screen Promotional Splash -> Direct Destination); zero old slogan screens; zero homepage flash; zero promotional splash after homepage; passes `tsc --noEmit` and `expo export --platform android`.
+- **Status**: Done
+
+---
+
+### TSK-MOB-056: WorkLogy Vendor Splash — Seamless Background & Responsive Production Implementation
+- **Title**: Seamless Edge-to-Edge Background Integration & Responsive Multi-Screen Layout for Vendor Promotional Splash
+- **Priority**: P0
+- **Relevant Area**: Vendor App Startup UI & Responsive Poster Rendering
+- **Problem Statement**:
+  1. In `media_1793446594708_7a84f8f3.jpg`, the promotional splash displayed as a centered floating box (`resizeMode="contain"`), resulting in 158px empty green blocks at the top and bottom on 20:9 devices.
+  2. The bottom of the artwork terminated with a sharp horizontal cut between the light floor/technician trousers and the container background, breaking visual immersion.
+- **Expected Behavior**:
+  - The entire splash screen appears as one continuous, professionally composed full-screen poster.
+  - Natural top and bottom background extension with zero visible separation, horizontal lines, or empty color blocks.
+  - WorkLogy logo and house branding remain 100% visible near top, under the translucent status bar (`#014B2D`).
+  - All 3 technicians in green uniforms and all 6 service trade icons remain 100% visible on both short (9:16) and tall (19.5:9, 20:9, 21:9) displays.
+  - Zero distortion, stretching, or artificial letterboxing.
+- **Implementation Scope**:
+  1. Created production high-resolution seamless artwork [`mobile/vendor-app/src/assets/worklogy-vendor-splash-seamless.png`](file:///Users/shaheaalam/Desktop/worklogy/mobile/vendor-app/src/assets/worklogy-vendor-splash-seamless.png) (1024 × 2275, 9:20 ratio), naturally extending the top emerald gradient and seamlessly blending the bottom trousers into deep dark forest green (`#011A10`) using smoothstep curve interpolation. Original source file [`WorkLogy vendor splash.png`](file:///Users/shaheaalam/Desktop/worklogy/mobile/vendor-app/src/assets/WorkLogy%20vendor%20splash.png) preserved 100% intact.
+  2. Updated [`mobile/vendor-app/src/components/WorklogySplashScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/vendor-app/src/components/WorklogySplashScreen.tsx):
+     - Implemented dynamic aspect ratio-aware layout computation using `useMemo` and `Dimensions.get('window')`.
+     - Standard to tall phones (9:16, 19.5:9, 20:9) anchor to top (`top: 0, left: 0`) with 100% screen width, letting extra bottom dark green height extend seamlessly without cropping the logo, technician heads, or trade icons.
+     - Ultra-tall phones (21:9) match screen height with centered horizontal alignment.
+     - Wide screens / tablets center horizontally while matching height.
+     - Set status bar to `#014B2D` matching exact top gradient.
+  3. Updated [`mobile/vendor-app/src/navigation/VendorNavigator.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/vendor-app/src/navigation/VendorNavigator.tsx) `splashPlaceholder` to `#01381F`.
+- **Acceptance Criteria**: Zero horizontal line or rectangular border; edge-to-edge dark emerald composition; logo and all 3 technicians fully visible across 9:16, 19.5:9, 20:9, and tablets; clean `tsc --noEmit` and `expo export --platform android`.
+- **Status**: Done
+
+---
+
+### TSK-MOB-057: WorkLogy Vendor Splash — Bottom Branding & Value Proposition Typography
+- **Title**: Add Premium Headings, Value Proposition & Trust Badges to Vendor Splash Bottom Area
+- **Priority**: P0
+- **Relevant Area**: Vendor App Startup UI & Typography Design
+- **Problem Statement**:
+  1. The bottom seamless dark green area beneath the technicians' artwork was empty and lacked direct promotional branding and contractor value messaging.
+  2. The splash screen needed a balanced, premium typography composition directly under the technicians without overlapping tools, toolbelts, or overflowing the screen on smaller devices.
+- **Expected Behavior**:
+  - Main Heading: "Your Skills. More Opportunities." in pure white `#FFFFFF` (`fontWeight: 800`).
+  - Subheading: "Grow Your Business with WorkLogy" in subtle light-green accent `#34D399` (`fontWeight: 700`).
+  - Description: "Connect with nearby customers, discover local jobs and build your professional reputation." in soft white/grey `#E2E8F0`.
+  - Trust Highlights: "Trusted Professionals" and "More Local Opportunities" with small green Ionicons badges (`shield-checkmark` and `briefcase`).
+  - The dark green background continues seamlessly with zero cards, borders, or boxes.
+  - Adaptive font sizes and padding across compact (<720px), medium (720-880px), and tall (>=880px) Android screens.
+  - Safe-area aware (`useSafeAreaInsets`) so navigation bars / gesture pills never clip text.
+  - Existing artwork, native splash, and 2-stage splash sequence preserved.
+- **Implementation Scope**:
+  1. Updated [`mobile/vendor-app/src/components/WorklogySplashScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/vendor-app/src/components/WorklogySplashScreen.tsx):
+     - Integrated `useSafeAreaInsets()` and adaptive typography styling.
+     - Positioned `bottomContent` in the lower seamless dark green area with `pointerEvents="none"`.
+     - Added Main Heading, Subheading, Description, and Trust Highlights row with subtle emerald circular icon backdrops.
+  2. Verified TypeScript compiler checks and Android Expo release exports.
+- **Acceptance Criteria**: Seamless typography integration; zero overlap with technicians or toolbelts; zero clipping on navigation bars; passes `tsc --noEmit` and `expo export --platform android`.
+- **Status**: Done
+
+---
+
+### TSK-MOB-058: WorkLogy Customer Splash Screen Sequence & Old Custom Splash Removal
+- **Title**: Eliminate Duplicate Intermediate Splash, Login Flash, and Implement Authoritative Two-Stage Splash Sequence in Customer App
+- **Priority**: P0
+- **Relevant Area**: Customer App Startup UI & Navigation Lifecycle
+- **Problem Statement**:
+  1. Customer App previously displayed an unwanted custom intermediate splash (WorkLogy logo with "Trusted Local Services") after native splash.
+  2. The underlying `LoginScreen` ("Welcome to WorkLogy" / "Book trusted local professionals...") flashed briefly between splash stages.
+  3. The promotional image `WorkLogy Customer Splash.png` appeared after the login screen was already visible.
+  4. Multiple competing splash dismissals existed between `CustomerNavigator.tsx` and `WorklogySplashScreen.tsx`.
+- **Expected Behavior**:
+  - Strict 2-stage splash sequence:
+    1. First: Existing native WorkLogy logo splash (`native-splash.png` on `#FFFFFF`).
+    2. Second: Full-screen customer promotional splash (`WorkLogy Customer Splash.png`) displayed for 2.0–2.5 seconds or until authentication restoration completes.
+    3. Third: Direct transition to destination (`HomeTab` if authenticated, onboarding if profile incomplete, or `Login` screen with guest browsing support).
+  - Never flash `LoginScreen` or `HomeScreen` before or between splash screens.
+  - Zero old custom logo/slogan splash screens.
+  - Responsive edge-to-edge layout across 9:16, 19.5:9, 20:9, and tablet devices matching `#EAD8C7` warm beige background.
+  - Promotional splash runs strictly once per cold launch.
+  - Vendor App must remain completely untouched.
+- **Implementation Scope**:
+  1. Rewrote [`mobile/customer-app/src/components/WorklogySplashScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/components/WorklogySplashScreen.tsx):
+     - Completely removed old Stage 1 custom logo & slogan UI ("Trusted Local Services", `WORKLOGY_LOGO`, duplicate entrance animations).
+     - Rendered ONLY `WorkLogy Customer Splash.png` with `resizeMode="contain"` inside `#EAD8C7` edge-to-edge container.
+     - Configured translucent `StatusBar` with `backgroundColor="#EAD8C7"` and `barStyle="dark-content"`.
+     - Connected `onLoadEnd` to `SplashScreen.hideAsync()` so the native splash screen smoothly transfers to the promotional image without white flash.
+     - Implemented single authoritative 2.2s display timer and 5.0s safety timeout.
+  2. Updated [`mobile/customer-app/src/navigation/CustomerNavigator.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/navigation/CustomerNavigator.tsx):
+     - Removed redundant `SplashScreen.hideAsync()` call from navigator `useEffect`.
+     - Guarded `showNavHeader` and `bottomBar` behind `splashFinished`.
+     - Rendered `<View style={styles.splashPlaceholder} />` with `#EAD8C7` background while `!splashFinished && isLoading`, preventing any premature rendering or flash of `LoginScreen`.
+     - Controlled splash completion with module-level `hasCustomerSplashCompletedOnce` guard.
+- **Acceptance Criteria**: Strict 2-stage sequence (Native Logo -> Customer Promotional Splash -> Main App Destination); zero intermediate logo splash; zero login flash; zero promotional splash after homepage; passes `tsc --noEmit` and `expo export --platform android`.
+- **Status**: Done
+
+---
+
+### TSK-MOB-059: WorkLogy Customer Splash — Seamless Background & Responsive Production Implementation
+- **Title**: Seamless Edge-to-Edge Background Integration & Responsive Multi-Screen Layout for Customer Promotional Splash
+- **Priority**: P0
+- **Relevant Area**: Customer App Startup UI & Responsive Poster Rendering
+- **Problem Statement**:
+  1. The Customer promotional splash originally displayed with `resizeMode="contain"`, leaving letterbox empty blocks at the top and bottom on modern 19.5:9 and 20:9 Android displays.
+  2. The image terminated with a visible horizontal separation where the bottom table/carpet met the container background.
+- **Expected Behavior**:
+  - The entire splash screen appears as one continuous, professionally composed full-screen poster.
+  - Natural top and bottom background extension with zero visible separation, horizontal lines, or empty color blocks.
+  - WorkLogy logo and house branding remain 100% visible near the top under the translucent status bar (`#E8D9CA`).
+  - The smiling couple and all 5 service trade bubbles remain in full prime view across 9:16, 19.5:9, 20:9, 21:9, and tablets.
+  - Zero distortion, stretching, or artificial letterboxing.
+  - Vendor App remains completely untouched.
+- **Implementation Scope**:
+  1. Created production high-resolution seamless artwork [`mobile/customer-app/src/assets/worklogy-customer-splash-seamless.png`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/assets/worklogy-customer-splash-seamless.png) (1024 × 2275, 9:20 ratio), naturally extending the ceiling beam upward and seamlessly blending the bottom coffee table and carpet into a warm honey-oak/taupe living room floor gradient (`#CDA687` to `#AF8A6C`) using smoothstep interpolation. Original source file [`WorkLogy Customer Splash.png`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/assets/WorkLogy%20Customer%20Splash.png) preserved 100% intact.
+  2. Updated [`mobile/customer-app/src/components/WorklogySplashScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/components/WorklogySplashScreen.tsx):
+     - Implemented dynamic aspect ratio-aware layout computation using `useMemo` and `Dimensions.get('window')`.
+     - Standard to tall phones (9:16, 19.5:9, 20:9) anchor to top (`top: 0, left: 0`) with 100% screen width, letting the seamless living room floor flow to the bottom edge without cropping the logo, couple, or service bubbles.
+     - Ultra-tall phones (21:9) match screen height with centered horizontal alignment.
+     - Wide screens / tablets fit height and center horizontally.
+     - Set status bar to `#E8D9CA` matching exact top ceiling gradient with `barStyle="dark-content"`.
+  3. Updated [`mobile/customer-app/src/navigation/CustomerNavigator.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/navigation/CustomerNavigator.tsx) `splashPlaceholder` to `#E8D9CA`.
+- **Acceptance Criteria**: Zero horizontal line or rectangular border; edge-to-edge warm home interior composition; logo, couple, and all 5 service bubbles fully visible across 9:16, 19.5:9, 20:9, and tablets; passes `tsc --noEmit` and `expo export --platform android`.
+- **Status**: Done
+
+---
+
+### TSK-MOB-060: WorkLogy Customer Splash — Bottom Branding & Value Proposition Typography
+- **Title**: Add Premium Headings, Value Proposition & Trust Badges to Customer Splash Bottom Area
+- **Priority**: P0
+- **Relevant Area**: Customer App Startup UI & Typography Design
+- **Problem Statement**:
+  1. The bottom warm honey-oak/taupe floor area beneath the coffee table artwork was empty and lacked direct customer branding and value proposition messaging.
+  2. The splash screen needed a balanced, premium typography composition directly under the coffee table without overlapping the couple, the coffee table, or overflowing the screen on compact devices.
+- **Expected Behavior**:
+  - Main Heading: "Your Home, Our Responsibility." in bold dark green `#123D2C` (`fontWeight: 800`).
+  - Subheading: "Trusted Help, Just a Tap Away." in medium-bold green `#16845D` (`fontWeight: 700`).
+  - Description: "From repairs to home care, find trusted professionals for every need." in muted warm dark grey `#554B43` (`fontWeight: 500`).
+  - Trust Highlights: "Verified Professionals", "Quick & Easy Booking", and "Complete Home Solutions" with subtle green Ionicons badges (`shield-checkmark`, `flash`, and `home`).
+  - Seamlessly embedded in the warm living room floor tone with zero cards, borders, or boxes.
+  - Adaptive font sizes and padding across compact (<720px), medium (720-880px), and tall (>=880px) Android screens.
+  - Safe-area aware (`useSafeAreaInsets`) so navigation bars / gesture pills never clip text.
+  - Existing artwork, native splash, and 2-stage splash sequence preserved.
+  - Vendor App remains completely untouched.
+- **Implementation Scope**:
+  1. Updated [`mobile/customer-app/src/components/WorklogySplashScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/components/WorklogySplashScreen.tsx):
+     - Integrated `useSafeAreaInsets()` and adaptive typography sizing.
+     - Positioned `bottomContent` in the lower warm taupe area with `pointerEvents="none"`.
+     - Added Main Heading, Subheading, Description, and Trust Highlights row with subtle emerald circular icon backdrops.
+  2. Verified TypeScript compiler checks and Android Expo release exports.
+- **Acceptance Criteria**: Seamless typography integration; zero overlap with couple or coffee table; zero clipping on navigation bars; passes `tsc --noEmit` and `expo export --platform android`.
 - **Status**: Done

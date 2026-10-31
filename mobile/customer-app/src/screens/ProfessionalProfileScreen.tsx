@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { Ionicons, Feather, MaterialIcons, FontAwesome5 } from '@expo/vector-icons';
 import { api } from '../api/client';
+import { useAuth } from '../hooks/useAuth';
 import { COLORS } from '../theme/colors';
 import { formatCurrency, formatDate } from '../utils/formatters';
 import { getServiceImage } from '../utils/serviceImages';
@@ -53,6 +54,7 @@ const TIME_SLOTS = [
 export default function ProfessionalProfileScreen({ route, navigation }: any) {
   const { vendorId: initialVendorId, id, proId, vendor: initialVendor } = route.params || {};
   const vendorId = initialVendorId || id || proId || initialVendor?._id;
+  const { user, promptAuthGate } = useAuth();
 
   // Profile data states
   const [vendor, setVendor] = useState<any>(initialVendor || null);
@@ -296,6 +298,15 @@ export default function ProfessionalProfileScreen({ route, navigation }: any) {
 
   // Start booking action
   const handleOpenBooking = (service?: ServiceItem) => {
+    if (!user) {
+      promptAuthGate({
+        screen: 'ProfessionalProfile',
+        params: { ...route.params, openBooking: true },
+        heading: 'Sign in to book',
+        message: `Verify your mobile number to book a service with ${professionalName}.`
+      });
+      return;
+    }
     setSelectedService(service || normalizedServices[0]);
     setBookingError(null);
     setBookingSuccess(false);
@@ -331,6 +342,17 @@ export default function ProfessionalProfileScreen({ route, navigation }: any) {
 
   // Submit direct booking through existing backend API
   const handleConfirmBooking = async () => {
+    if (!user) {
+      setIsBookingModalOpen(false);
+      promptAuthGate({
+        screen: 'ProfessionalProfile',
+        params: { ...route.params, openBooking: true },
+        heading: 'Sign in to confirm booking',
+        message: `Verify your mobile number to book a service with ${professionalName}.`
+      });
+      return;
+    }
+
     if (!selectedService) {
       setBookingError('Please choose a service to book.');
       return;

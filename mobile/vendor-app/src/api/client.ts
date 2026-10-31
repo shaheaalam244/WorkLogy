@@ -207,19 +207,29 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
   };
 
   if (requiresAuth) {
-    const token = await getStoredAuthToken();
+    let token = await getStoredAuthToken();
+    if (!token && !_isRetry) {
+      token = await refreshSessionToken();
+    }
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
+    } else {
+      const authErr: any = new Error('Not authorized to access this route (token missing)');
+      authErr.isAuthError = true;
+      authErr.isTokenMissing = true;
+      authErr.status = 401;
+      throw authErr;
     }
   }
 
   let response: Response;
   const currentBase = activeBaseUrl;
   const isLocalHost =
-    currentBase.includes('10.211.') ||
+    currentBase.includes('10.') ||
     currentBase.includes('localhost') ||
     currentBase.includes('127.0.0.1') ||
-    currentBase.includes('192.168.');
+    currentBase.includes('192.168.') ||
+    currentBase.includes('172.');
 
   const timeout = customTimeout || (isLocalHost ? 10000 : 15000);
   const primaryUrl = `${currentBase}${endpoint}`;
@@ -291,6 +301,23 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
 export const api = {
   // Auth
   auth: {
+    checkPhone: async (phone: string, role: string = 'vendor') => {
+      return await request<{
+        success: boolean;
+        exists: boolean;
+        isRegistered: boolean;
+        status: 'active' | 'new' | 'suspended' | 'blocked';
+        phone: string;
+        name?: string;
+        message?: string;
+        suspensionReason?: string;
+      }>('/auth/vendor/check-phone', {
+        method: 'POST',
+        body: JSON.stringify({ phone, role }),
+        requiresAuth: false
+      });
+    },
+
     // Mobile OTP (Login & Registration)
     sendOtp: async (phone: string, purpose: 'login' | 'register' = 'login') => {
       return await request<{
@@ -304,6 +331,21 @@ export const api = {
       }>('/auth/otp/send', {
         method: 'POST',
         body: JSON.stringify({ phone, purpose }),
+        requiresAuth: false
+      });
+    },
+
+    getOtpStatus: async (phone: string, reqId?: string) => {
+      const q = new URLSearchParams({ phone });
+      if (reqId) q.append('reqId', reqId);
+      return await request<{
+        success: boolean;
+        deliveryStatus: 'REQUEST_ACCEPTED' | 'DELIVERY_PENDING' | 'DELIVERED' | 'DELIVERY_FAILED' | 'REJECTED' | 'PROVIDER_ERROR';
+        provider: string;
+        reqId?: string;
+        details?: any;
+      }>(`/auth/otp/status?${q.toString()}`, {
+        method: 'GET',
         requiresAuth: false
       });
     },
@@ -806,6 +848,8 @@ export const api = {
     },
 
     getUnreadCount: async () => {
+      const token = await getStoredAuthToken();
+      if (!token) return { success: true, count: 0, unreadCount: 0 };
       return await request<{ success: boolean; count?: number; unreadCount?: number }>('/notifications/unread-count');
     },
 
@@ -905,6 +949,8 @@ export const api = {
     },
 
     getUnreadCount: async () => {
+      const token = await getStoredAuthToken();
+      if (!token) return { success: true, count: 0, unreadCount: 0 };
       return await request<{ success: boolean; count?: number; unreadCount?: number }>('/chat/unread-count');
     }
   },

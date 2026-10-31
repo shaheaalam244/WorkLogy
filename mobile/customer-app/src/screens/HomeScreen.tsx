@@ -119,7 +119,20 @@ export default function HomeScreen({ navigation }: any) {
     insets.top,
     Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 0
   );
-  const { user } = useAuth();
+  const { user, promptAuthGate } = useAuth();
+
+  const handleProtectedBooking = (screen: string = 'CreateJob', params: any = {}) => {
+    if (!user) {
+      promptAuthGate({
+        screen,
+        params,
+        heading: 'Sign in to continue',
+        message: 'Verify your mobile number to post a job or book a trusted professional.'
+      });
+    } else {
+      navigation.navigate(screen, params);
+    }
+  };
   const [categories, setCategories] = useState<ServiceCategory[]>([]);
   const [activeBookings, setActiveBookings] = useState<Booking[]>([]);
   const [nearbyVendors, setNearbyVendors] = useState<VerifiedVendor[]>([]);
@@ -610,7 +623,7 @@ export default function HomeScreen({ navigation }: any) {
                   <TouchableOpacity
                     style={[styles.promoCtaBtn, { backgroundColor: slide.btnBg }]}
                     activeOpacity={0.85}
-                    onPress={() => navigation.navigate('CreateJob', { categorySlug: slide.categorySlug, title: slide.title })}
+                    onPress={() => handleProtectedBooking('CreateJob', { categorySlug: slide.categorySlug, title: slide.title })}
                   >
                     <Text style={styles.promoCtaText}>{slide.ctaText}</Text>
                     <Ionicons name="arrow-forward" size={14} color="#FFFFFF" style={{ marginLeft: 4 }} />
@@ -731,7 +744,7 @@ export default function HomeScreen({ navigation }: any) {
               <TouchableOpacity
                 style={styles.sameDayButton}
                 activeOpacity={0.85}
-                onPress={() => navigation.navigate('CreateJob', { urgency: 'high', title: 'Same-Day Urgent Home Service' })}
+                onPress={() => handleProtectedBooking('CreateJob', { urgency: 'high', title: 'Same-Day Urgent Home Service' })}
               >
                 <Text style={styles.sameDayButtonText}>Book now</Text>
                 <Ionicons name="arrow-forward" size={13} color="#FFFFFF" style={{ marginLeft: 4 }} />
@@ -1074,7 +1087,7 @@ export default function HomeScreen({ navigation }: any) {
             <TouchableOpacity
               style={styles.quoteSubmitBtn}
               activeOpacity={0.85}
-              onPress={() => navigation.navigate('CreateJob')}
+              onPress={() => handleProtectedBooking('CreateJob')}
             >
               <Text style={styles.quoteSubmitBtnText}>Post a Job Now</Text>
               <Ionicons name="arrow-forward" size={14} color="#FFFFFF" style={{ marginLeft: 6 }} />
@@ -1095,7 +1108,7 @@ export default function HomeScreen({ navigation }: any) {
             <TouchableOpacity
               style={styles.finalCtaButton}
               activeOpacity={0.85}
-              onPress={() => navigation.navigate('CreateJob')}
+              onPress={() => handleProtectedBooking('CreateJob')}
             >
               <Ionicons name="add" size={17} color="#0F172A" style={{ marginRight: 4 }} />
               <Text style={styles.finalCtaButtonText}>Post a Job</Text>

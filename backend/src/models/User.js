@@ -98,6 +98,7 @@ const UserSchema = new mongoose.Schema(
 );
 
 UserSchema.index({ 'pushTokens.token': 1 });
+UserSchema.index({ phone: 1, role: 1 });
 
 UserSchema.pre('save', async function (next) {
   if (!this.isModified('password')) return next();

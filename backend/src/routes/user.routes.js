@@ -15,6 +15,7 @@ import { authorize } from '../middleware/role.middleware.js';
 
 const router = express.Router();
 
+router.get('/profile', protect, getUserProfile);
 router.get('/profile/:id', protect, getUserProfile);
 router.put('/profile', protect, updateUserProfile);
 router.get('/customer/profile', protect, authorize('customer', 'admin'), getCustomerProfile);

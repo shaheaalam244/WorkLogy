@@ -322,5 +322,7 @@ VendorProfileSchema.virtual('serviceDomainIds')
 VendorProfileSchema.index({ location: '2dsphere' });
 VendorProfileSchema.index({ zoneId: 1, approvalStatus: 1 });
 VendorProfileSchema.index({ locality: 1, approvalStatus: 1 });
+VendorProfileSchema.index({ categories: 1, approvalStatus: 1 });
+VendorProfileSchema.index({ city: 1, approvalStatus: 1 });
 
 export default mongoose.models.VendorProfile || mongoose.model('VendorProfile', VendorProfileSchema);

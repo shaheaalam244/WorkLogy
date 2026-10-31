@@ -70,6 +70,7 @@ app.get('/api/health', (req, res) => {
 });
 
 app.use('/api/auth', authRoutes);
+app.use('/api/customer/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/vendors', vendorRoutes);
 app.use('/api/jobs', jobRoutes);

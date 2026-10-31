@@ -163,12 +163,35 @@ export async function pingServerHealth(baseUrl: string, timeoutMs = 3500): Promi
 // ── In-Flight Request Deduplication Map for GET requests ──
 const inFlightGetRequests = new Map<string, Promise<any>>();
 
+const isPlaceholderEmail = (email?: string): boolean => {
+  if (!email || typeof email !== 'string') return true;
+  const lower = email.trim().toLowerCase();
+  return lower.endsWith('@worklogy.local') || (lower.startsWith('customer_') && lower.includes('@')) || (lower.startsWith('temp_') && lower.includes('@'));
+};
+
+const isPlaceholderName = (name?: string): boolean => {
+  if (!name || typeof name !== 'string') return true;
+  const lower = name.trim().toLowerCase();
+  return lower === 'new customer' || lower === 'new contractor' || lower === 'customer' || lower === 'user';
+};
+
 const normalizeUser = (u: any): User => {
   if (!u) return u;
+  const rawEmail = typeof u.email === 'string' ? u.email.trim() : '';
+  const cleanEmail = isPlaceholderEmail(rawEmail) ? '' : rawEmail;
+  const rawName = typeof u.name === 'string' ? u.name.trim() : '';
+  const cleanName = isPlaceholderName(rawName) ? '' : rawName;
+
   return {
     ...u,
     _id: u._id || u.id,
-    id: u.id || u._id
+    id: u.id || u._id,
+    email: cleanEmail,
+    name: cleanName,
+    isPlaceholderEmail: isPlaceholderEmail(rawEmail),
+    hasGenuineEmail: !isPlaceholderEmail(rawEmail) && cleanEmail.length > 0,
+    isDummyName: isPlaceholderName(rawName),
+    hasGenuineName: !isPlaceholderName(rawName) && cleanName.length >= 2
   };
 };
 
@@ -221,10 +244,11 @@ async function executeRequest<T>(endpoint: string, options: RequestOptions = {})
   let response: Response;
   const currentBase = activeBaseUrl;
   const isLocalHost =
-    currentBase.includes('10.211.') ||
+    currentBase.includes('10.') ||
     currentBase.includes('localhost') ||
     currentBase.includes('127.0.0.1') ||
-    currentBase.includes('192.168.');
+    currentBase.includes('192.168.') ||
+    currentBase.includes('172.');
 
   // If hitting local host, use a fast 3500ms timeout so failover is instantaneous; otherwise 12000ms
   const timeout = customTimeout || (isLocalHost ? 3500 : 12000);
@@ -335,8 +359,136 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
 export const api = {
   // Auth
   auth: {
+    sendOtp: async (phone: string, purpose: 'login' | 'register' | 'customer_login' | 'customer_register' = 'login') => {
+      return await request<{
+        success: boolean;
+        message: string;
+        phone: string;
+        purpose?: string;
+        cooldownSeconds: number;
+        expiresInSeconds: number;
+        provider?: string;
+      }>('/auth/otp/send', {
+        method: 'POST',
+        body: JSON.stringify({ phone, purpose, role: 'customer' }),
+        requiresAuth: false
+      });
+    },
+
+    getOtpStatus: async (phone: string, reqId?: string) => {
+      const q = new URLSearchParams({ phone });
+      if (reqId) q.append('reqId', reqId);
+      return await request<{
+        success: boolean;
+        deliveryStatus: 'REQUEST_ACCEPTED' | 'DELIVERY_PENDING' | 'DELIVERED' | 'DELIVERY_FAILED' | 'REJECTED' | 'PROVIDER_ERROR';
+        provider: string;
+        reqId?: string;
+        details?: any;
+      }>(`/auth/otp/status?${q.toString()}`, {
+        method: 'GET',
+        requiresAuth: false
+      });
+    },
+
+    verifyOtp: async (params: {
+      phone: string;
+      otp: string;
+      deviceInfo?: any;
+    }) => {
+      const data = await request<{
+        success: boolean;
+        token: string;
+        refreshToken?: string;
+        session?: { id: string; expiresAt: string };
+        user: any;
+        profile?: any;
+        isNewUser?: boolean;
+        onboardingStep?: string;
+      }>('/auth/otp/verify', {
+        method: 'POST',
+        body: JSON.stringify({ ...params, role: 'customer' }),
+        requiresAuth: false
+      });
+
+      if (data.token) {
+        setCachedAuthToken(data.token);
+        await secureStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, data.token);
+        await secureStorage.setItem('worklogy_token', data.token);
+        if (data.refreshToken) {
+          await secureStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, data.refreshToken);
+        }
+        const normalized = normalizeUser(data.user);
+        await secureStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(normalized));
+        return { ...data, user: normalized };
+      }
+      return data;
+    },
+
+    verifyWidgetToken: async (accessToken: string, deviceInfo?: any) => {
+      const data = await request<{
+        success: boolean;
+        token: string;
+        refreshToken?: string;
+        session?: { id: string; expiresAt: string };
+        user: any;
+        profile?: any;
+        isNewUser?: boolean;
+        onboardingStep?: string;
+      }>('/auth/otp/verify-widget', {
+        method: 'POST',
+        body: JSON.stringify({ accessToken, deviceInfo, role: 'customer' }),
+        requiresAuth: false
+      });
+
+      if (data.token) {
+        setCachedAuthToken(data.token);
+        await secureStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, data.token);
+        await secureStorage.setItem('worklogy_token', data.token);
+        if (data.refreshToken) {
+          await secureStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, data.refreshToken);
+        }
+        const normalized = normalizeUser(data.user);
+        await secureStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(normalized));
+        return { ...data, user: normalized };
+      }
+      return data;
+    },
+
+    refreshToken: async () => {
+      const storedRefreshToken = await secureStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
+      if (!storedRefreshToken) {
+        throw new Error('No refresh token available');
+      }
+
+      const res = await request<{
+        success: boolean;
+        token: string;
+        refreshToken?: string;
+        user: any;
+      }>('/auth/token/refresh', {
+        method: 'POST',
+        body: JSON.stringify({ refreshToken: storedRefreshToken }),
+        requiresAuth: false
+      });
+
+      if (res?.token) {
+        setCachedAuthToken(res.token);
+        await secureStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, res.token);
+        await secureStorage.setItem('worklogy_token', res.token);
+        if (res.refreshToken) {
+          await secureStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, res.refreshToken);
+        }
+        if (res.user) {
+          const normalized = normalizeUser(res.user);
+          await secureStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(normalized));
+        }
+        return res;
+      }
+      throw new Error('Failed to refresh authentication token');
+    },
+
     login: async (credentials: { email: string; password: string }) => {
-      const data = await request<{ success: boolean; token: string; user: any }>('/auth/login', {
+      const data = await request<{ success: boolean; token: string; refreshToken?: string; user: any }>('/auth/login', {
         method: 'POST',
         body: JSON.stringify(credentials),
         requiresAuth: false
@@ -345,6 +497,9 @@ export const api = {
         setCachedAuthToken(data.token);
         await secureStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, data.token);
         await secureStorage.setItem('worklogy_token', data.token);
+        if (data.refreshToken) {
+          await secureStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, data.refreshToken);
+        }
         const normalized = normalizeUser(data.user);
         await secureStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(normalized));
         return { ...data, user: normalized };
@@ -353,7 +508,7 @@ export const api = {
     },
 
     register: async (userData: { name: string; email: string; phone?: string; password: string; role?: string }) => {
-      const data = await request<{ success: boolean; token: string; user: any }>('/auth/register', {
+      const data = await request<{ success: boolean; token: string; refreshToken?: string; user: any }>('/auth/register', {
         method: 'POST',
         body: JSON.stringify({ ...userData, role: 'customer' }),
         requiresAuth: false
@@ -362,6 +517,9 @@ export const api = {
         setCachedAuthToken(data.token);
         await secureStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, data.token);
         await secureStorage.setItem('worklogy_token', data.token);
+        if (data.refreshToken) {
+          await secureStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, data.refreshToken);
+        }
         const normalized = normalizeUser(data.user);
         await secureStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(normalized));
         return { ...data, user: normalized };
@@ -424,9 +582,15 @@ export const api = {
     },
 
     logout: async () => {
+      try {
+        await request('/auth/session/logout', { method: 'POST' }).catch(() => {});
+      } catch {
+        // Ignore network error on logout
+      }
       setCachedAuthToken(null);
       clearMemoryCache();
       await secureStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
+      await secureStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
       await secureStorage.removeItem(STORAGE_KEYS.AUTH_USER);
       await secureStorage.removeItem('worklogy_token');
       await secureStorage.removeItem('token');
@@ -691,6 +855,13 @@ export const api = {
   customer: {
     getProfile: async () => {
       return await request<{ success: boolean; profile: any }>('/users/customer/profile');
+    },
+
+    updateProfile: async (data: { onboardingStep?: string; defaultAddress?: any; [key: string]: any }) => {
+      return await request<{ success: boolean; profile: any }>('/users/customer/profile', {
+        method: 'PUT',
+        body: JSON.stringify(data)
+      });
     },
 
     getAddresses: async () => {

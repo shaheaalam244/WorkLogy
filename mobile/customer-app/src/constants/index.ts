@@ -4,6 +4,7 @@ export { COLORS };
 
 export const STORAGE_KEYS = {
   AUTH_TOKEN: 'worklogy_customer_auth_token',
+  REFRESH_TOKEN: 'worklogy_customer_refresh_token',
   AUTH_USER: 'worklogy_customer_auth_user',
   PUSH_TOKEN: 'worklogy_customer_push_token',
   SAVED_LOCATION: 'worklogy_customer_location',

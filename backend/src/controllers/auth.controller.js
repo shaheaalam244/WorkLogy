@@ -10,8 +10,10 @@ import Session from '../models/Session.js';
 import OtpChallenge from '../models/OtpChallenge.js';
 import { generateAccessToken, generateRefreshToken, generateToken, REFRESH_SESSION_DAYS } from '../utils/generateToken.js';
 import { logActivity } from '../utils/logActivity.js';
-import { sendOtpSms, normalizeIndianPhone, isValidIndianPhone, hashToken } from '../utils/sms.js';
+import { sendOtpSms, normalizeIndianPhone, isValidIndianPhone, hashToken, getPhoneVariants } from '../utils/sms.js';
 import { verifyOtpMatch, generateSecureOtp } from '../utils/otp.js';
+import { msg91Service } from '../services/msg91.service.js';
+import { sanitizeUserResponse } from './user.controller.js';
 
 export const register = async (req, res, next) => {
   try {
@@ -156,13 +158,7 @@ export const register = async (req, res, next) => {
     res.status(201).json({
       success: true,
       token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        avatar: user.avatar
-      }
+      user: sanitizeUserResponse(user)
     });
   } catch (error) {
     next(error);
@@ -266,15 +262,7 @@ export const login = async (req, res, next) => {
         id: session._id,
         expiresAt: session.expiresAt
       },
-      user: {
-        id: user._id,
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        avatar: user.avatar
-      },
+      user: sanitizeUserResponse(user),
       profile: vendorProfile,
       onboardingStep
     });
@@ -296,7 +284,7 @@ export const getMe = async (req, res, next) => {
 
     res.status(200).json({
       success: true,
-      user,
+      user: sanitizeUserResponse(user),
       profile
     });
   } catch (error) {
@@ -306,13 +294,13 @@ export const getMe = async (req, res, next) => {
 
 export const updateDetails = async (req, res, next) => {
   try {
-    const { name, phone, avatar } = req.body;
+    const { name, avatar } = req.body;
     const updates = {};
     if (name !== undefined && name !== null && String(name).trim().length > 0) {
-      updates.name = String(name).trim();
-    }
-    if (phone !== undefined && phone !== null) {
-      updates.phone = String(phone).trim();
+      const cleanName = String(name).trim();
+      if (cleanName.toLowerCase() !== 'new customer' && cleanName.toLowerCase() !== 'new contractor') {
+        updates.name = cleanName;
+      }
     }
     if (avatar !== undefined && avatar !== null) {
       updates.avatar = String(avatar).trim();
@@ -323,7 +311,7 @@ export const updateDetails = async (req, res, next) => {
       { $set: updates },
       { new: true, runValidators: true }
     );
-    res.status(200).json({ success: true, user });
+    res.status(200).json({ success: true, user: sanitizeUserResponse(user) });
   } catch (error) {
     next(error);
   }
@@ -417,13 +405,7 @@ export const resetPassword = async (req, res, next) => {
       success: true,
       message: 'Password reset successfully',
       token: authToken,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        avatar: user.avatar
-      }
+      user: sanitizeUserResponse(user)
     });
   } catch (error) {
     next(error);
@@ -431,12 +413,86 @@ export const resetPassword = async (req, res, next) => {
 };
 
 /**
- * ── VENDOR MOBILE OTP (LOGIN & REGISTRATION) ──
- * Request 6-digit OTP for vendor login or new partner registration.
+ * ── CHECK VENDOR / USER PHONE STATUS ──
+ * Fast pre-flight check to distinguish existing, new, suspended, or blocked accounts.
+ */
+export const checkVendorPhone = async (req, res, next) => {
+  try {
+    const { phone, role = 'vendor' } = req.body;
+    if (!phone) {
+      return res.status(400).json({ success: false, message: 'Please provide a mobile number.' });
+    }
+
+    const normalizedPhone = normalizeIndianPhone(phone);
+    if (!isValidIndianPhone(normalizedPhone)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please enter a valid 10-digit Indian mobile number.'
+      });
+    }
+
+    const user = await User.findOne({
+      phone: { $in: getPhoneVariants(normalizedPhone) },
+      role
+    }).select('-password');
+
+    if (!user) {
+      return res.status(200).json({
+        success: true,
+        exists: false,
+        isRegistered: false,
+        status: 'new',
+        phone: normalizedPhone,
+        message: 'No registered contractor account found for this number.'
+      });
+    }
+
+    if (user.status === 'suspended' || user.isActive === false) {
+      return res.status(200).json({
+        success: true,
+        exists: true,
+        isRegistered: true,
+        status: 'suspended',
+        phone: normalizedPhone,
+        suspensionReason: user.suspensionReason || 'Account suspended by administration.',
+        message: user.suspensionReason
+          ? `Your contractor account is currently suspended: ${user.suspensionReason}. Please contact support.`
+          : 'Your contractor account is currently suspended. Please contact support.'
+      });
+    }
+
+    if (user.status === 'blocked') {
+      return res.status(200).json({
+        success: true,
+        exists: true,
+        isRegistered: true,
+        status: 'blocked',
+        phone: normalizedPhone,
+        message: 'This account has been blocked. Please contact WorkLogy partner support.'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      exists: true,
+      isRegistered: true,
+      status: 'active',
+      phone: normalizedPhone,
+      name: user.name,
+      message: 'Active registered contractor account found.'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * ── MOBILE OTP (LOGIN & REGISTRATION) ──
+ * Request 6-digit OTP for vendor or customer mobile authentication.
  */
 export const sendLoginOtp = async (req, res, next) => {
   try {
-    const { phone, purpose = 'login' } = req.body;
+    const { phone, purpose = 'login', role = 'vendor' } = req.body;
     if (!phone) {
       return res.status(400).json({ success: false, message: 'Please enter your mobile number' });
     }
@@ -446,39 +502,65 @@ export const sendLoginOtp = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Please enter a valid 10-digit Indian mobile number' });
     }
 
-    const isRegister = purpose === 'register' || purpose === 'vendor_register';
-    const otpPurpose = isRegister ? 'vendor_register' : 'vendor_login';
+    const isCustomer = role === 'customer' || purpose === 'customer_login' || purpose === 'customer_register';
 
-    // Lookup existing vendor with this phone number
-    const existingUser = await User.findOne({
-      phone: { $in: [normalizedPhone, `+91${normalizedPhone}`, `+91 ${normalizedPhone}`, `0${normalizedPhone}`] },
-      role: 'vendor'
-    });
+    let otpPurpose;
+    let existingUser = null;
 
-    if (isRegister) {
-      if (existingUser) {
-        return res.status(409).json({
-          success: false,
-          code: 'ALREADY_REGISTERED',
-          message: `An active contractor account is already registered for +91 ${normalizedPhone}. Please log in.`
-        });
-      }
-    } else {
-      if (!existingUser) {
-        return res.status(404).json({
-          success: false,
-          code: 'NOT_REGISTERED',
-          message: `No registered contractor account found for +91 ${normalizedPhone}. Please check your number or register as a new partner.`
-        });
-      }
+    if (isCustomer) {
+      otpPurpose = 'customer_login';
+      existingUser = await User.findOne({
+        phone: { $in: getPhoneVariants(normalizedPhone) },
+        role: 'customer'
+      });
 
-      if (existingUser.status === 'suspended' || existingUser.isActive === false) {
+      if (existingUser && (existingUser.status === 'suspended' || existingUser.isActive === false)) {
         return res.status(403).json({
           success: false,
           message: existingUser.suspensionReason
             ? `Account suspended: ${existingUser.suspensionReason}. Please contact support.`
-            : 'Your contractor account is currently suspended. Please contact support.'
+            : 'Your customer account is currently suspended. Please contact support.'
         });
+      }
+    } else {
+      const isRegister = purpose === 'register' || purpose === 'vendor_register';
+      otpPurpose = isRegister ? 'vendor_register' : 'vendor_login';
+
+      // Lookup existing vendor with this phone number
+      existingUser = await User.findOne({
+        phone: { $in: getPhoneVariants(normalizedPhone) },
+        role: 'vendor'
+      });
+
+      if (isRegister) {
+        if (existingUser) {
+          return res.status(409).json({
+            success: false,
+            code: 'ALREADY_REGISTERED',
+            isRegistered: true,
+            phone: normalizedPhone,
+            message: `An active contractor account is already registered for +91 ${normalizedPhone}. Please log in.`
+          });
+        }
+      } else {
+        if (!existingUser) {
+          return res.status(404).json({
+            success: false,
+            code: 'NOT_REGISTERED',
+            isRegistered: false,
+            phone: normalizedPhone,
+            message: `No registered contractor account found for +91 ${normalizedPhone}. Please register as a new partner.`
+          });
+        }
+
+        if (existingUser.status === 'suspended' || existingUser.isActive === false) {
+          return res.status(403).json({
+            success: false,
+            message: existingUser.suspensionReason
+              ? `Account suspended: ${existingUser.suspensionReason}. Please contact support.`
+              : 'Your contractor account is currently suspended. Please contact support.'
+          });
+        }
       }
     }
 
@@ -518,13 +600,122 @@ export const sendLoginOtp = async (req, res, next) => {
       { $set: { isConsumed: true, consumedAt: new Date() } }
     );
 
-    // Generate secure 6-digit OTP
+    // Check active SMS provider configuration
+    const configuredProvider = (
+      process.env.SMS_PROVIDER ||
+      (process.env.FAST2SMS_API_KEY ? 'fast2sms' : (process.env.MSG91_AUTH_KEY ? 'msg91' : 'local'))
+    ).toLowerCase();
+
+    // ── 1. FAST2SMS PROVIDER (Instant Real SMS - Zero DLT / PE ID Needed) ──
+    if (configuredProvider === 'fast2sms') {
+      if (!process.env.FAST2SMS_API_KEY) {
+        return res.status(503).json({
+          success: false,
+          code: 'SMS_SERVICE_UNCONFIGURED',
+          message: 'Fast2SMS configuration missing: Please set FAST2SMS_API_KEY in the backend environment.'
+        });
+      }
+
+      const { otp, codeHash } = generateSecureOtp();
+      const smsResult = await sendOtpSms({
+        phone: normalizedPhone,
+        otp,
+        purpose: otpPurpose
+      });
+
+      console.log(`[Auth] Real-time OTP sent via Fast2SMS to +91 ******${normalizedPhone.slice(-4)} (${isCustomer ? 'customer' : 'vendor'})`);
+
+      await OtpChallenge.create({
+        phone: normalizedPhone,
+        codeHash,
+        provider: 'fast2sms',
+        reqId: smsResult.messageId || `f2s_${Date.now()}`,
+        purpose: otpPurpose,
+        deliveryStatus: 'REQUEST_ACCEPTED',
+        deliveryDetails: {
+          status: 'Dispatched via Fast2SMS Quick Route',
+          updatedAt: new Date()
+        },
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 minutes
+        ipAddress: req.ip || ''
+      });
+
+      await logActivity({
+        userId: existingUser?._id || null,
+        role: isCustomer ? 'customer' : 'vendor',
+        action: isCustomer ? (existingUser ? 'CUSTOMER_LOGIN_OTP_REQUESTED' : 'CUSTOMER_REGISTER_OTP_REQUESTED') : (purpose === 'register' || purpose === 'vendor_register' ? 'VENDOR_REGISTER_OTP_REQUESTED' : 'VENDOR_LOGIN_OTP_REQUESTED'),
+        details: { phone: `+91 ******${normalizedPhone.slice(-4)}`, provider: 'fast2sms' }
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: `6-digit verification code sent to +91 ******${normalizedPhone.slice(-4)}`,
+        phone: normalizedPhone,
+        purpose: otpPurpose,
+        cooldownSeconds: 60,
+        expiresInSeconds: 300,
+        provider: 'fast2sms'
+      });
+    }
+
+    // ── 2. MSG91 PROVIDER ──
+    if (configuredProvider === 'msg91' || (isCustomer && msg91Service.isConfigured())) {
+      if (!msg91Service.isConfigured()) {
+        return res.status(503).json({
+          success: false,
+          code: 'SMS_SERVICE_UNCONFIGURED',
+          message: 'SMS service configuration missing. Please configure MSG91_AUTH_KEY and MSG91_OTP_TEMPLATE_ID in the backend environment.'
+        });
+      }
+
+      const { otp, codeHash } = generateSecureOtp();
+      const msg91Res = await msg91Service.sendOtp({ phone: normalizedPhone, otp });
+
+      console.log(`[Auth] OTP dispatch initiated for +91 ******${normalizedPhone.slice(-4)} (provider: msg91)`);
+
+      await OtpChallenge.create({
+        phone: normalizedPhone,
+        codeHash,
+        provider: msg91Res.provider || 'msg91',
+        reqId: msg91Res.requestId || '',
+        purpose: otpPurpose,
+        deliveryStatus: 'REQUEST_ACCEPTED',
+        deliveryDetails: {
+          status: 'Accepted by provider',
+          updatedAt: new Date()
+        },
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 minutes
+        ipAddress: req.ip || ''
+      });
+
+      await logActivity({
+        userId: existingUser?._id || null,
+        role: isCustomer ? 'customer' : 'vendor',
+        action: isCustomer
+          ? (existingUser ? 'CUSTOMER_LOGIN_OTP_REQUESTED' : 'CUSTOMER_REGISTER_OTP_REQUESTED')
+          : (purpose === 'register' || purpose === 'vendor_register' ? 'VENDOR_REGISTER_OTP_REQUESTED' : 'VENDOR_LOGIN_OTP_REQUESTED'),
+        details: { phone: `+91 ******${normalizedPhone.slice(-4)}`, provider: 'msg91' }
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: `6-digit verification code sent to +91 ******${normalizedPhone.slice(-4)}`,
+        phone: normalizedPhone,
+        purpose: otpPurpose,
+        cooldownSeconds: 60,
+        expiresInSeconds: 300,
+        provider: 'msg91'
+      });
+    }
+
+    // Fallback path for Vendor App backward compatibility
     const { otp, codeHash } = generateSecureOtp();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
 
     await OtpChallenge.create({
       phone: normalizedPhone,
       codeHash,
+      provider: 'local',
       purpose: otpPurpose,
       expiresAt,
       ipAddress: req.ip || ''
@@ -540,7 +731,7 @@ export const sendLoginOtp = async (req, res, next) => {
     await logActivity({
       userId: existingUser?._id || null,
       role: 'vendor',
-      action: isRegister ? 'VENDOR_REGISTER_OTP_REQUESTED' : 'VENDOR_LOGIN_OTP_REQUESTED',
+      action: purpose === 'register' || purpose === 'vendor_register' ? 'VENDOR_REGISTER_OTP_REQUESTED' : 'VENDOR_LOGIN_OTP_REQUESTED',
       details: { phone: `+91 ******${normalizedPhone.slice(-4)}` }
     });
 
@@ -560,12 +751,12 @@ export const sendLoginOtp = async (req, res, next) => {
 };
 
 /**
- * ── VERIFY VENDOR MOBILE OTP ──
+ * ── VERIFY MOBILE OTP (CUSTOMER & VENDOR) ──
  * Verify 6-digit OTP, validate account (or create initial verified registration), and return persistent session tokens.
  */
 export const verifyLoginOtp = async (req, res, next) => {
   try {
-    const { phone, otp, deviceInfo } = req.body;
+    const { phone, otp, deviceInfo, role } = req.body;
 
     if (!phone || !otp) {
       return res.status(400).json({ success: false, message: 'Mobile number and 6-digit OTP are required' });
@@ -578,10 +769,17 @@ export const verifyLoginOtp = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Please enter a valid 6-digit verification code' });
     }
 
-    // Find latest active, unconsumed challenge for this phone (login or register)
+    let purposeFilter = ['vendor_login', 'vendor_register'];
+    if (role === 'customer') {
+      purposeFilter = ['customer_login', 'customer_register'];
+    } else if (!role) {
+      purposeFilter = ['customer_login', 'customer_register', 'vendor_login', 'vendor_register'];
+    }
+
+    // Find latest active, unconsumed challenge for this phone
     const challenge = await OtpChallenge.findOne({
       phone: normalizedPhone,
-      purpose: { $in: ['vendor_login', 'vendor_register'] },
+      purpose: { $in: purposeFilter },
       isConsumed: false,
       expiresAt: { $gt: new Date() }
     }).sort({ createdAt: -1 });
@@ -603,19 +801,46 @@ export const verifyLoginOtp = async (req, res, next) => {
       });
     }
 
-    // Timing-safe verification
-    const isMatch = verifyOtpMatch(cleanOtp, challenge.codeHash);
-    if (!isMatch) {
-      challenge.attempts += 1;
-      await challenge.save();
-      const remainingAttempts = Math.max(0, challenge.maxAttempts - challenge.attempts);
-      return res.status(400).json({
-        success: false,
-        message: remainingAttempts > 0
-          ? `Incorrect verification code. ${remainingAttempts} attempts remaining.`
-          : 'Incorrect verification code. Maximum attempts exceeded, please request a new code.',
-        remainingAttempts
+    // Verification check based on challenge provider
+    if (challenge.provider === 'msg91' || challenge.provider === 'msg91_widget') {
+      const verifyRes = await msg91Service.verifyOtp({
+        phone: normalizedPhone,
+        otp: cleanOtp,
+        reqId: challenge.reqId,
+        provider: challenge.provider
       });
+      const fallbackMatch = challenge.codeHash && challenge.codeHash !== 'MSG91_REMOTE'
+        ? verifyOtpMatch(cleanOtp, challenge.codeHash)
+        : false;
+
+      if (!verifyRes.success && !fallbackMatch) {
+        challenge.attempts += 1;
+        await challenge.save();
+        const remainingAttempts = Math.max(0, challenge.maxAttempts - challenge.attempts);
+        return res.status(400).json({
+          success: false,
+          message: verifyRes.message || (remainingAttempts > 0
+            ? `Incorrect verification code. ${remainingAttempts} attempts remaining.`
+            : 'Incorrect verification code. Maximum attempts exceeded, please request a new code.'),
+          remainingAttempts
+        });
+      }
+    } else {
+      // Timing-safe verification for local/legacy providers
+      const isMatch = verifyOtpMatch(cleanOtp, challenge.codeHash);
+      if (!isMatch) {
+        challenge.attempts += 1;
+        await challenge.save();
+        const remainingAttempts = Math.max(0, challenge.maxAttempts - challenge.attempts);
+        return res.status(400).json({
+          success: false,
+          code: 'INVALID_OTP',
+          message: remainingAttempts > 0
+            ? `Incorrect verification code. ${remainingAttempts} attempts remaining.`
+            : 'Incorrect verification code. Maximum attempts exceeded, please request a new code.',
+          remainingAttempts
+        });
+      }
     }
 
     // Consume OTP immediately to prevent reuse
@@ -623,8 +848,108 @@ export const verifyLoginOtp = async (req, res, next) => {
     challenge.consumedAt = new Date();
     await challenge.save();
 
+    const isCustomerFlow = challenge.purpose.startsWith('customer') || role === 'customer';
+
+    if (isCustomerFlow) {
+      let user = await User.findOne({
+        phone: { $in: getPhoneVariants(normalizedPhone) },
+        role: 'customer'
+      });
+
+      let isNewUser = false;
+      let customerProfile = null;
+
+      if (!user) {
+        isNewUser = true;
+        const randomPass = crypto.randomBytes(16).toString('hex');
+        const hashedPassword = await bcrypt.hash(randomPass, 10);
+        user = await User.create({
+          name: 'New Customer',
+          email: `customer_${normalizedPhone}_${Date.now()}@worklogy.local`,
+          phone: normalizedPhone,
+          role: 'customer',
+          password: hashedPassword
+        });
+
+        customerProfile = await CustomerProfile.create({
+          user: user._id,
+          onboardingStep: 'profile_pending',
+          addresses: []
+        });
+      } else {
+        if (user.status === 'suspended' || user.isActive === false) {
+          return res.status(403).json({
+            success: false,
+            message: user.suspensionReason
+              ? `Account suspended: ${user.suspensionReason}. Please contact support.`
+              : 'Your customer account is currently suspended. Please contact support.'
+          });
+        }
+
+        customerProfile = await CustomerProfile.findOne({ user: user._id });
+        if (!customerProfile) {
+          customerProfile = await CustomerProfile.create({
+            user: user._id,
+            onboardingStep: 'profile_pending',
+            addresses: []
+          });
+        }
+      }
+
+      user.lastLogin = new Date();
+      await user.save();
+
+      // Create Persistent Server Session (90 days)
+      const rawRefreshToken = generateRefreshToken();
+      const refreshTokenHash = hashToken(rawRefreshToken);
+      const sessionToken = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(24).toString('hex');
+      const expiresAt = new Date(Date.now() + REFRESH_SESSION_DAYS * 24 * 60 * 60 * 1000);
+
+      const session = await Session.create({
+        user: user._id,
+        role: 'customer',
+        sessionToken,
+        refreshTokenHash,
+        deviceInfo: deviceInfo || {},
+        expiresAt
+      });
+
+      // 15-minute Access Token
+      const accessToken = generateAccessToken(user._id, 'customer', session._id);
+
+      // Compute Onboarding Step: if customer already filled real name, or step is explicitly set
+      let onboardingStep = customerProfile.onboardingStep || 'profile_pending';
+      if (!isNewUser && (!customerProfile.onboardingStep || customerProfile.onboardingStep === 'profile_pending')) {
+        if (user.name && user.name !== 'New Customer') {
+          onboardingStep = 'completed';
+        }
+      }
+
+      await logActivity({
+        userId: user._id,
+        role: 'customer',
+        action: isNewUser ? 'CUSTOMER_REGISTER_OTP_SUCCESS' : 'CUSTOMER_LOGIN_OTP_SUCCESS',
+        details: { phone: `+91 ******${normalizedPhone.slice(-4)}`, sessionId: session._id }
+      });
+
+      return res.status(200).json({
+        success: true,
+        token: accessToken,
+        refreshToken: rawRefreshToken,
+        session: {
+          id: session._id,
+          expiresAt: session.expiresAt
+        },
+        user: sanitizeUserResponse(user),
+        profile: customerProfile,
+        isNewUser,
+        onboardingStep
+      });
+    }
+
+    // Vendor Flow
     let user = await User.findOne({
-      phone: { $in: [normalizedPhone, `+91${normalizedPhone}`, `+91 ${normalizedPhone}`, `0${normalizedPhone}`] },
+      phone: { $in: getPhoneVariants(normalizedPhone) },
       role: 'vendor'
     });
 
@@ -637,20 +962,33 @@ export const verifyLoginOtp = async (req, res, next) => {
         isNewUser = true;
         const randomPass = crypto.randomBytes(16).toString('hex');
         const hashedPassword = await bcrypt.hash(randomPass, 10);
-        user = await User.create({
-          name: 'New Contractor',
-          email: `temp_${normalizedPhone}_${Date.now()}@worklogy.local`,
-          phone: normalizedPhone,
-          role: 'vendor',
-          password: hashedPassword
-        });
+        try {
+          user = await User.create({
+            name: 'New Contractor',
+            email: `temp_${normalizedPhone}_${Date.now()}@worklogy.local`,
+            phone: normalizedPhone,
+            role: 'vendor',
+            password: hashedPassword
+          });
+        } catch (createErr) {
+          // Concurrency safety fallback in case of parallel requests
+          user = await User.findOne({
+            phone: { $in: getPhoneVariants(normalizedPhone) },
+            role: 'vendor'
+          });
+          if (!user) throw createErr;
+          isNewUser = false;
+        }
 
-        vendorProfile = await VendorProfile.create({
-          user: user._id,
-          businessName: 'My Service Business',
-          onboardingStep: 'profile_pending',
-          categories: []
-        });
+        vendorProfile = await VendorProfile.findOne({ user: user._id });
+        if (!vendorProfile) {
+          vendorProfile = await VendorProfile.create({
+            user: user._id,
+            businessName: 'My Service Business',
+            onboardingStep: 'profile_pending',
+            categories: []
+          });
+        }
       } else {
         return res.status(404).json({
           success: false,
@@ -723,21 +1061,135 @@ export const verifyLoginOtp = async (req, res, next) => {
         id: session._id,
         expiresAt: session.expiresAt
       },
-      user: {
-        id: user._id,
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        avatar: user.avatar
-      },
+      user: sanitizeUserResponse(user),
       profile: vendorProfile,
       isNewUser,
       onboardingStep
     });
   } catch (error) {
     next(error);
+  }
+};
+
+/**
+ * ── VERIFY MSG91 WIDGET ACCESS TOKEN (CUSTOMER) ──
+ * Validates MSG91 OTP Widget JWT access token server-side and returns WorkLogy session tokens.
+ */
+export const verifyWidgetAccessToken = async (req, res, next) => {
+  try {
+    const { accessToken, deviceInfo } = req.body;
+
+    if (!accessToken) {
+      return res.status(400).json({ success: false, message: 'MSG91 access token is required' });
+    }
+
+    // Verify token with MSG91 servers
+    const verifyResult = await msg91Service.verifyAccessToken({ accessToken });
+    const normalizedPhone = verifyResult.identifier;
+
+    if (!normalizedPhone || !isValidIndianPhone(normalizedPhone)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid phone number associated with the verification token'
+      });
+    }
+
+    // Find or create customer
+    let user = await User.findOne({
+      phone: { $in: [normalizedPhone, `+91${normalizedPhone}`, `+91 ${normalizedPhone}`, `0${normalizedPhone}`] },
+      role: 'customer'
+    });
+
+    let isNewUser = false;
+    let customerProfile = null;
+
+    if (!user) {
+      isNewUser = true;
+      const randomPass = crypto.randomBytes(16).toString('hex');
+      const hashedPassword = await bcrypt.hash(randomPass, 10);
+      user = await User.create({
+        name: 'New Customer',
+        email: `customer_${normalizedPhone}_${Date.now().toString(36)}@customer.worklogy.in`,
+        phone: normalizedPhone,
+        password: hashedPassword,
+        role: 'customer',
+        isVerified: true
+      });
+
+      customerProfile = await CustomerProfile.create({
+        user: user._id,
+        onboardingStep: 'profile_pending'
+      });
+    } else {
+      if (user.status === 'suspended' || user.isActive === false) {
+        return res.status(403).json({
+          success: false,
+          message: user.suspensionReason
+            ? `Account suspended: ${user.suspensionReason}. Please contact support.`
+            : 'Your customer account is currently suspended. Please contact support.'
+        });
+      }
+
+      customerProfile = await CustomerProfile.findOne({ user: user._id });
+      if (!customerProfile) {
+        customerProfile = await CustomerProfile.create({
+          user: user._id,
+          onboardingStep: 'profile_pending'
+        });
+      }
+    }
+
+    user.lastLogin = new Date();
+    user.isVerified = true;
+    await user.save();
+
+    // Create Persistent Server Session (90 days)
+    const rawRefreshToken = generateRefreshToken();
+    const refreshTokenHash = hashToken(rawRefreshToken);
+    const sessionToken = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(24).toString('hex');
+    const expiresAt = new Date(Date.now() + REFRESH_SESSION_DAYS * 24 * 60 * 60 * 1000);
+
+    const session = await Session.create({
+      user: user._id,
+      role: 'customer',
+      sessionToken,
+      refreshTokenHash,
+      deviceInfo: deviceInfo || {},
+      expiresAt
+    });
+
+    // 15-minute Access Token
+    const appAccessToken = generateAccessToken(user._id, 'customer', session._id);
+
+    let onboardingStep = customerProfile.onboardingStep || 'profile_pending';
+    if (!isNewUser && (!customerProfile.onboardingStep || customerProfile.onboardingStep === 'profile_pending')) {
+      if (user.name && user.name !== 'New Customer') {
+        onboardingStep = 'completed';
+      }
+    }
+
+    await logActivity({
+      userId: user._id,
+      role: 'customer',
+      action: isNewUser ? 'CUSTOMER_REGISTER_WIDGET_SUCCESS' : 'CUSTOMER_LOGIN_WIDGET_SUCCESS',
+      details: { phone: `+91 ******${normalizedPhone.slice(-4)}`, sessionId: session._id }
+    });
+
+    return res.status(200).json({
+      success: true,
+      token: appAccessToken,
+      refreshToken: rawRefreshToken,
+      session: {
+        id: session._id,
+        expiresAt: session.expiresAt
+      },
+      user: sanitizeUserResponse(user),
+      profile: customerProfile,
+      isNewUser,
+      onboardingStep
+    });
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -831,15 +1283,7 @@ export const refreshTokenSession = async (req, res, next) => {
       success: true,
       token: newAccessToken,
       refreshToken: newRawRefreshToken,
-      user: {
-        id: user._id,
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        avatar: user.avatar
-      }
+      user: sanitizeUserResponse(user)
     });
   } catch (error) {
     next(error);
@@ -892,6 +1336,168 @@ export const logoutSession = async (req, res, next) => {
       success: true,
       message: 'Logged out and session revoked successfully',
       revokedSessions: revokedCount
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * ── GET OTP DELIVERY STATUS (POLLING & DIAGNOSTICS) ──
+ * Inspects real-time SMS delivery status from MSG91 or recorded database logs.
+ * Correlates requestId and phone to check:
+ * REQUEST_ACCEPTED | DELIVERY_PENDING | DELIVERED | DELIVERY_FAILED | REJECTED | PROVIDER_ERROR
+ */
+export const getOtpDeliveryStatus = async (req, res, next) => {
+  try {
+    const { phone, reqId } = req.query;
+    const normalizedPhone = phone ? normalizeIndianPhone(phone) : '';
+
+    if (!normalizedPhone && !reqId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Phone number or request ID is required to query delivery status'
+      });
+    }
+
+    const query = {};
+    if (reqId) {
+      query.reqId = reqId;
+    } else if (normalizedPhone) {
+      query.phone = normalizedPhone;
+    }
+
+    const challenge = await OtpChallenge.findOne(query).sort({ createdAt: -1 });
+
+    if (!challenge) {
+      return res.status(404).json({
+        success: false,
+        message: 'No OTP dispatch record found for this request'
+      });
+    }
+
+    // If challenge was dispatched via MSG91, query live report if pending or recently created
+    if ((challenge.provider === 'msg91' || challenge.provider === 'msg91_widget') && challenge.reqId) {
+      if (challenge.deliveryStatus === 'REQUEST_ACCEPTED' || challenge.deliveryStatus === 'DELIVERY_PENDING') {
+        const liveReport = await msg91Service.getDeliveryStatus({
+          requestId: challenge.reqId,
+          phone: challenge.phone
+        });
+
+        if (liveReport.success && liveReport.deliveryStatus) {
+          challenge.deliveryStatus = liveReport.deliveryStatus;
+          challenge.deliveryDetails = {
+            ...(challenge.deliveryDetails || {}),
+            ...liveReport.details,
+            updatedAt: new Date()
+          };
+          await challenge.save();
+        }
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      deliveryStatus: challenge.deliveryStatus || 'REQUEST_ACCEPTED',
+      provider: challenge.provider,
+      reqId: challenge.reqId,
+      phone: challenge.phone,
+      details: challenge.deliveryDetails || {},
+      expiresAt: challenge.expiresAt,
+      isConsumed: challenge.isConsumed
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * ── MSG91 ASYNC DELIVERY REPORT (WEBHOOK / DLR) ──
+ * Receives real-time delivery events directly from MSG91 webhook configuration:
+ * POST /api/auth/otp/msg91-dlr
+ */
+export const handleMsg91DlrWebhook = async (req, res, next) => {
+  try {
+    const payload = req.body || {};
+    const requestId = payload.requestId || payload.CRQID || req.query.requestId;
+    const rawStatus = payload.status || '';
+    const pauseReason = payload.pauseReason || '';
+    const failureReason = payload.failureReason || '';
+    const telNum = payload.telNum || '';
+    const dltTeId = payload.DLT_TE_ID || '';
+    const senderId = payload.senderId || '';
+
+    if (!requestId && !telNum) {
+      return res.status(200).json({ success: true, message: 'Ignored: No requestId or telNum' });
+    }
+
+    console.log(`[MSG91 Webhook] DLR received for reqId ${requestId}: status="${rawStatus}", pauseReason="${pauseReason}", failureReason="${failureReason}"`);
+
+    const query = requestId ? { reqId: requestId } : { phone: normalizeIndianPhone(telNum) };
+    const challenge = await OtpChallenge.findOne(query).sort({ createdAt: -1 });
+
+    if (challenge) {
+      let mappedStatus = 'DELIVERY_PENDING';
+      if (pauseReason) {
+        mappedStatus = 'REJECTED';
+      } else if (rawStatus.toLowerCase() === 'delivered') {
+        mappedStatus = 'DELIVERED';
+      } else if (rawStatus.toLowerCase() === 'failed' || failureReason) {
+        mappedStatus = 'DELIVERY_FAILED';
+      }
+
+      challenge.deliveryStatus = mappedStatus;
+      challenge.deliveryDetails = {
+        status: rawStatus,
+        pauseReason,
+        failureReason,
+        dltTeId,
+        senderId,
+        deliveredAt: rawStatus.toLowerCase() === 'delivered' ? new Date() : null,
+        updatedAt: new Date()
+      };
+      await challenge.save();
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Delivery report processed'
+    });
+  } catch (error) {
+    console.error('[MSG91 Webhook] Error:', error.message);
+    return res.status(200).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * ── RETRY / RESEND OTP VIA MSG91 ──
+ * Triggers fallback retry via SMS or Voice
+ */
+export const retryOtpController = async (req, res, next) => {
+  try {
+    const { phone, retryType = 'text' } = req.body;
+    const normalizedPhone = normalizeIndianPhone(phone);
+    if (!isValidIndianPhone(normalizedPhone)) {
+      return res.status(400).json({ success: false, message: 'Invalid 10-digit Indian phone number' });
+    }
+    const challenge = await OtpChallenge.findOne({
+      phone: normalizedPhone,
+      isConsumed: false
+    }).sort({ createdAt: -1 });
+
+    if (!challenge) {
+      return res.status(404).json({ success: false, message: 'No active OTP challenge found to retry' });
+    }
+
+    const retryRes = await msg91Service.retryOtp({
+      phone: normalizedPhone,
+      retryType
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: retryRes.message || 'OTP retry request dispatched',
+      provider: challenge.provider
     });
   } catch (error) {
     next(error);

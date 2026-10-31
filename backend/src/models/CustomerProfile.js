@@ -44,9 +44,17 @@ const CustomerProfileSchema = new mongoose.Schema(
     totalJobsPosted: {
       type: Number,
       default: 0
+    },
+    onboardingStep: {
+      type: String,
+      enum: ['profile_pending', 'address_pending', 'completed'],
+      default: 'profile_pending'
     }
   },
   { timestamps: true }
 );
+
+CustomerProfileSchema.index({ 'addresses.locality': 1 });
+CustomerProfileSchema.index({ 'addresses.city': 1 });
 
 export default mongoose.models.CustomerProfile || mongoose.model('CustomerProfile', CustomerProfileSchema);

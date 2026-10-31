@@ -181,6 +181,8 @@ ServiceListingSchema.index(
   }
 );
 ServiceListingSchema.index({ vendor: 1, idempotencyKey: 1 });
+ServiceListingSchema.index({ domain: 1, status: 1 });
+ServiceListingSchema.index({ category: 1, status: 1 });
 
 export default mongoose.models.ServiceListing || mongoose.model('ServiceListing', ServiceListingSchema);
 

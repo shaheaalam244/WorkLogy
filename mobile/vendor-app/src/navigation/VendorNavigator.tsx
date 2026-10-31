@@ -37,7 +37,6 @@ import VendorOtpVerificationScreen from '../screens/VendorOtpVerificationScreen'
 import VendorOnboardingProfileScreen from '../screens/VendorOnboardingProfileScreen';
 import VendorOnboardingDomainsScreen from '../screens/VendorOnboardingDomainsScreen';
 import VendorOnboardingServiceScreen from '../screens/VendorOnboardingServiceScreen';
-import * as SplashScreen from 'expo-splash-screen';
 import { WorklogySplashScreen } from '../components/WorklogySplashScreen';
 import { COLORS } from '../theme/colors';
 import { api } from '../api/client';
@@ -84,6 +83,8 @@ const AUTH_AND_ONBOARDING_ROUTES = [
   'VendorOnboardingService'
 ];
 
+let hasVendorSplashCompletedOnce = false;
+
 export function VendorAppContainer() {
   const insets = useSafeAreaInsets();
   const topInset = Math.max(
@@ -93,10 +94,12 @@ export function VendorAppContainer() {
   const bottomInset = insets.bottom;
 
   const { user, isLoading } = useAuth();
-  const [history, setHistory] = useState<RouteEntry[]>([{ name: 'VendorHomeTab', params: {} }]);
+  const [history, setHistory] = useState<RouteEntry[]>(() => {
+    return [{ name: user ? 'VendorHomeTab' : 'VendorLogin', params: {} }];
+  });
   const [unreadMessagesCount, setUnreadMessagesCount] = useState<number>(0);
   const [showActionModal, setShowActionModal] = useState<boolean>(false);
-  const [splashFinished, setSplashFinished] = useState<boolean>(false);
+  const [splashFinished, setSplashFinished] = useState<boolean>(hasVendorSplashCompletedOnce);
 
   const historyRef = useRef<RouteEntry[]>(history);
   historyRef.current = history;
@@ -137,6 +140,7 @@ export function VendorAppContainer() {
   const routeParams = currentEntry.params || {};
 
   const fetchUnread = useCallback(async () => {
+    if (!user?._id) return;
     try {
       const res = await api.chat.getUnreadCount();
       const count =
@@ -149,9 +153,14 @@ export function VendorAppContainer() {
     } catch {
       // background poll silently ignored
     }
-  }, []);
+  }, [user?._id]);
 
   useEffect(() => {
+    if (!user?._id) {
+      setUnreadMessagesCount(0);
+      return;
+    }
+
     fetchUnread();
     const interval = setInterval(fetchUnread, 20000);
 
@@ -497,7 +506,7 @@ export function VendorAppContainer() {
     <NavigationContext.Provider value={navigation}>
       <View style={styles.container}>
         {/* Top Stack Navigation Header (only on non-tab screens without custom header) */}
-        {showNavHeader && (
+        {showNavHeader && splashFinished && (
           <View style={[styles.navHeader, { paddingTop: topInset, minHeight: 52 + topInset }]}>
             <TouchableOpacity onPress={() => handleBack()} style={styles.backBtn} activeOpacity={0.7}>
               <Ionicons name="arrow-back" size={20} color={COLORS.textDark} />
@@ -508,10 +517,16 @@ export function VendorAppContainer() {
         )}
 
         {/* Main Screen Body */}
-        <View style={styles.screenBody}>{renderScreen()}</View>
+        <View style={styles.screenBody}>
+          {!splashFinished && isLoading ? (
+            <View style={styles.splashPlaceholder} />
+          ) : (
+            renderScreen()
+          )}
+        </View>
 
         {/* ── FIXED BOTTOM NAVIGATION BAR (5 ITEMS: Home, Jobs, [Post Service], Messages, Profile) ── */}
-        {isTabScreen && !!user && (
+        {isTabScreen && !!user && splashFinished && (
           <View
             style={[
               styles.bottomBarContainer,
@@ -740,11 +755,14 @@ export function VendorAppContainer() {
           </TouchableOpacity>
         </Modal>
 
-        {/* ── AUTHORITATIVE PRODUCTION SPLASH SCREEN ── */}
+        {/* ── AUTHORITATIVE VENDOR PROMOTIONAL SPLASH SCREEN ── */}
         {!splashFinished && (
           <WorklogySplashScreen
             isReady={!isLoading}
-            onFinish={() => setSplashFinished(true)}
+            onFinish={() => {
+              hasVendorSplashCompletedOnce = true;
+              setSplashFinished(true);
+            }}
           />
         )}
       </View>
@@ -755,7 +773,7 @@ export function VendorAppContainer() {
 const styles = StyleSheet.create({
   splashPlaceholder: {
     flex: 1,
-    backgroundColor: '#FFFFFF'
+    backgroundColor: '#01381F'
   },
   container: {
     flex: 1,

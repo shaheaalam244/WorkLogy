@@ -18,9 +18,11 @@ import { dataSyncService } from '../services/dataSyncService';
 import { secureStorage } from '../storage/secureStorage';
 import { STORAGE_KEYS } from '../constants';
 import { getStoredLocation, detectCurrentLocation } from '../services/locationService';
+import { useAuth } from '../hooks/useAuth';
 import type { ServiceAddress } from '../types';
 
 export default function EmergencyScreen({ navigation }: any) {
+  const { user, promptAuthGate } = useAuth();
   const [selectedTrade, setSelectedTrade] = useState('Electrical Breakdown');
   const [description, setDescription] = useState('');
   const [address, setAddress] = useState('');
@@ -148,6 +150,15 @@ export default function EmergencyScreen({ navigation }: any) {
   }, [description, address, selectedTrade, navigation]);
 
   const handleTriggerEmergency = async () => {
+    if (!user) {
+      promptAuthGate({
+        screen: 'Emergency',
+        heading: 'Sign in for Emergency Dispatch',
+        message: 'Verify your mobile number so certified emergency technicians can contact you and reach your address.'
+      });
+      return;
+    }
+
     if (!description.trim() || description.trim().length < 5) {
       Alert.alert('Describe the Emergency', 'Please briefly describe the urgent breakdown (at least 5 characters).');
       return;

@@ -17,6 +17,10 @@ export interface User {
   isVerified?: boolean;
   isEmailVerified?: boolean;
   status?: string;
+  isPlaceholderEmail?: boolean;
+  hasGenuineEmail?: boolean;
+  isDummyName?: boolean;
+  hasGenuineName?: boolean;
   notificationPreferences?: NotificationPreferences;
   createdAt: string;
 }

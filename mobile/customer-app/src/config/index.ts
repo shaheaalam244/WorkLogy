@@ -1,7 +1,7 @@
 const isProd = !__DEV__;
 
 export const SERVERS = {
-  LOCAL_LAN_HOST: '10.211.183.171:5001',
+  LOCAL_LAN_HOST: '10.236.107.171:5001',
   LOCAL_LOCALHOST: 'localhost:5001',
   VPS_HOST: '76.13.246.224:5001'
 };

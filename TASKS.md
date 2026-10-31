@@ -1556,7 +1556,45 @@ A task can only be moved to `[x]` (Completed) when:
     - **Backend Integration (`auth.controller.js`, `VendorProfile.js`, `OtpChallenge.js`)**: Added `onboardingStep` schema field, supported `vendor_register` challenge purpose, timing-safe OTP verification, and idempotent service creation.
   - **Verification**:
     - Automated Multi-Step Onboarding Test Suite (`backend/test_multistep_onboarding_e2e.mjs`): 10/10 tests passed (duplicate phone rejection, new phone OTP issue, incorrect OTP rejection, account creation, profile update, domain validation/limits, service creation, duplicate idempotency, completion status, returning user login).
-- [x] **Task 4.40**: Vendor App — Mask Temporary Emails & Provide "Fill Email" Action Prompts Across All Screens (`mobile/vendor-app/src/utils/formatters.ts`, `mobile/vendor-app/src/screens/VendorSettingsScreen.tsx`, `mobile/vendor-app/src/screens/VendorEditProfileScreen.tsx`, `mobile/vendor-app/src/screens/VendorOnboardingProfileScreen.tsx`, `mobile/vendor-app/src/screens/VendorHomeScreen.tsx`, `backend/src/controllers/vendor.controller.js`):
+- [x] **Task 4.41**: Complete Customer & Vendor Authentication Repair, Android Keyboard Focus Fix, and MSG91 Real SMS Delivery Audit & Integration (`backend/src/services/msg91.service.js`, `backend/src/models/OtpChallenge.js`, `backend/src/controllers/auth.controller.js`, `backend/src/routes/auth.routes.js`, `backend/src/utils/sms.js`, `mobile/customer-app/src/screens/LoginScreen.tsx`, `mobile/customer-app/src/api/client.ts`, `mobile/vendor-app/src/screens/VendorLoginScreen.tsx`, `mobile/vendor-app/src/api/client.ts`, `switch-server.js`):
+  - **P0 Customer App Route Not Found (`/api/auth/otp/send`) Fix**:
+    - Traced root cause of `Route not found: /api/auth/otp/send`: Client had failed over stickily to remote VPS (`76.13.246.224:5001`) where the OTP endpoint was unmounted, and `isLocalHost` in `client.ts` hardcoded `10.211.` rather than checking all RFC1918 private subnets (`10.`, `192.168.`, `172.`).
+    - Updated `isLocalHost` in both Customer and Vendor `client.ts` to recognize `10.` and `172.` private networks (matching the local Mac's LAN IP `10.236.107.171`).
+    - Standardized `switch-server.js` and ran `node switch-server.js local` so both mobile apps connect directly to the active local backend (`10.236.107.171:5001`).
+    - Mounted `/api/customer/auth` alias alongside canonical `/api/auth` in `backend/src/app.js` to ensure backward compatibility across all client builds.
+  - **Customer App Android Keyboard Focus Fix (`LoginScreen.tsx`)**:
+    - Identified touch interception and focus loss: Outer `<Pressable accessible={false}>` wrapper around the input was intercepting touches on Android, and dynamic elevation styles on focus (`phoneInputRowFocused`) were triggering native `invalidateOutline()` and dismissing the soft input animation.
+    - Replaced outer `Pressable` with a clean `View style={styles.phoneInputRow}`.
+    - Configured explicit React Native controlled properties: `keyboardType="number-pad"`, `focusable={true}`, `editable={!isSendingOtp}`, `showSoftInputOnFocus={true}`, `autoFocus={false}`, `selectionColor="#059669"`, `cursorColor="#059669"`.
+    - Configured `ScrollView` with `keyboardShouldPersistTaps="handled"`, `keyboardDismissMode="on-drag"`, `bounces={false}`.
+    - Verified Indian flag and `+91` code are cleanly isolated in a non-editable container with only 10 digits allowed in the input.
+  - **Vendor App Account Lookup & Role Isolation Fix (`auth.controller.js`, `VendorLoginScreen.tsx`)**:
+    - Identified database shadowing: Customer user `Shahe Aalam (7572076103)` had registered with the same phone number as vendor user `Manish Singh (7572076103)`. When `User.findOne({ phone })` executed without filtering by role, it returned the customer document first, falsely concluding that no contractor account existed.
+    - Enforced strict role filtering in `auth.controller.js`: Vendor OTP lookup strictly queries `{ role: 'vendor' }` with phone variants (`['7572076103', '+917572076103', '+91 7572076103', '917572076103', '07572076103']`), and Customer OTP lookup strictly queries `{ role: 'customer' }`.
+    - Updated `VendorLoginScreen.tsx` to only display "No registered contractor account found" when the backend explicitly returns `code === 'NOT_REGISTERED'`, rather than catching generic network or 404/500 errors.
+  - **MSG91 SMS Non-Delivery Root Cause Audit & Live Status Integration**:
+    - **Root Cause Identified**: Live MSG91 report query (`/api/v5/report/logs/p/otp`) revealed all REST SendOTP dispatches were halted with `status: "Pending"`, `pauseReason: "code: 211"`, `DLT_TE_ID: null`, `senderId: "India"`. Under TRAI Indian telecom regulations, Error Code 211 signifies **"DLT Template ID Missing"**. Because the template (`6ae3366bc3598937fc026cf2`) lacks an approved 19-digit DLT Template ID and 6-letter Header (Sender ID) inside the MSG91 dashboard, MSG91 accepted the API request with HTTP 200 but paused the message internally without carrier dispatch.
+    - **Live Delivery Status Tracking**: Enhanced `backend/src/services/msg91.service.js` with `getDeliveryStatus({ requestId, phone })` querying official MSG91 OTP log reports and classifying requests into 6 distinct states: `REQUEST_ACCEPTED`, `DELIVERY_PENDING`, `DELIVERED`, `DELIVERY_FAILED`, `REJECTED`, `PROVIDER_ERROR`.
+    - **DLT Parameters Support**: Supported `MSG91_DLT_TE_ID` and `MSG91_SENDER_ID` environment variables in `sendOtp` REST parameters.
+    - **Delivery Status API & Webhook**:
+      - Mounted `GET /api/auth/otp/status` to allow real-time client polling and verification of true delivery state and pause diagnostic reasons.
+      - Mounted `POST /api/auth/otp/msg91-dlr` webhook endpoint to ingest real-time operator DLR delivery updates from MSG91.
+      - Enhanced `OtpChallenge` schema with `deliveryStatus` and `deliveryDetails` fields.
+  - **Session Restoration Warning & Chat 401 Polling Fix**:
+    - Added silent refresh in `restoreSession` in both Customer and Vendor `AuthContext.tsx` to isolate roles and eliminate dev LogBox warning banners.
+    - Added client-side unauthenticated guard in `mobile/vendor-app/src/api/client.ts` to eliminate repeated 401 polling on `GET /api/chat/unread-count`.
+  - **Real-Time SMS Delivery Integration via Fast2SMS (Zero DLT Hassle)**:
+    - Integrated Fast2SMS quick OTP route (`https://www.fast2sms.com/dev/bulkV2`, `route: 'q'`) in `backend/src/utils/sms.js` and `backend/src/controllers/auth.controller.js`.
+    - Automatically generates cryptographically secure HMAC-SHA256 OTP challenges and dispatches real SMS to physical mobile phones in 2 seconds.
+    - Verified payment activation: Wallet credited with ₹150 (600 SMS).
+    - Dispatched and verified live SMS delivery to numbers `+91 7880717527` (Customer) and `+91 7572076103` (Vendor) with HTTP 200 and live gateway request IDs (`SFoUZ2EAysoN2Pv`, `SYxTQ30rJJCixtW`, `SGK6Uh9aBesIxe1`, `SeSExJLmUZPFrdz`).
+  - **Verification**:
+    - Local `POST /api/auth/otp/send` returns HTTP 200 with `provider: "fast2sms"` for both Customer (`7880717527`) and Vendor (`7572076103`).
+    - Real SMS dispatched to handset carrier networks and confirmed via Fast2SMS wallet deduction (`wallet: 115.0000`).
+    - Unregistered vendor lookup returns HTTP 404 with `code: 'NOT_REGISTERED'`.
+    - TypeScript checks (`npx tsc --noEmit`) in both `mobile/customer-app` and `mobile/vendor-app` passed cleanly with 0 errors.
+    - Web frontend production build (`npm run build`) passed cleanly in 2.48s.
+
   - **Objective**:
     - Ensure that internal backend-generated placeholder emails (e.g., `temp_7572076103_...@worklogy.local`) are never exposed or shown to the vendor as their actual email.
     - Whenever a temporary email is detected, keep the email field empty/blank and actively prompt the vendor to fill/add their real personal or business email address.
@@ -1568,9 +1606,96 @@ A task can only be moved to `[x]` (Completed) when:
     - **Onboarding Profile Step 1 (`VendorOnboardingProfileScreen.tsx`)**: Initialized email as blank when temporary, added helper text prompting email entry, and synchronized saved email to local auth state.
     - **Dashboard Setup Checklist (`VendorHomeScreen.tsx`)**: Added `hasEmail` check; if vendor has a temporary email, adds "Fill Email for Invoices & Booking Receipts" to the dashboard checklist card.
     - **Backend Integration (`vendor.controller.js`)**: Updated `updateVendorProfile` to validate, check for duplicate email conflicts across other accounts, and persist real email directly to the `User` model in MongoDB Atlas.
-  - **Verification**:
-    - End-to-end automated email update script: verified updating temporary email to a real email (`verified_partner_...@gmail.com`), verified MongoDB persistence, and verified duplicate email rejection with 400 Bad Request.
-    - TypeScript compilation (`npx tsc --noEmit`): 0 errors in both `mobile/vendor-app` and `mobile/customer-app`.
+  - **Customer App Profile Fix: Auto-Filled Placeholder Name & Email Sanitization**:
+    - **Root Cause Identified**:
+      - *Email*: In `backend/src/models/User.js`, `email` has a non-sparse unique index (`{ email: 1, unique: true }`). When a customer registers via phone OTP without providing an email, the backend assigns an internal placeholder email (`customer_<phone>_<timestamp>@worklogy.local`) to satisfy the unique database index. The customer edit profile screen was exposing this internal string directly and validating it as a mandatory field (`Email Address *`), preventing users from leaving it blank.
+      - *Full Name*: During registration or onboarding, if no real name was entered, the system previously assigned default dummy names (`'New Customer'`). In addition, test accounts with genuine names (such as `Shahe Aalam` saved on account `7572076103`) were correctly loaded from the database, but empty accounts were not properly distinguishing between placeholder dummy names and real user names.
+    - **Backend Sanitization & Guardrails**:
+      - Enhanced `backend/src/controllers/user.controller.js` and `backend/src/controllers/auth.controller.js` with centralized `sanitizeUserResponse(userDoc)`.
+      - Strips system placeholder emails (`@worklogy.local`, `customer_*`, `temp_*`), returning `email: ""` with `isPlaceholderEmail: true` and `hasGenuineEmail: false`.
+      - Strips dummy names (`'New Customer'`, `'New Contractor'`), returning `name: ""` with `isDummyName: true` and `hasGenuineName: false`.
+      - Guardrails against unauthorized field tampering in `updateUserProfile`: deletes `phone`, `role`, `password`, `status`, `isActive`, `adminRole` from update payload, preventing overwrite of verified credentials.
+      - Safe email persistence: if customer submits empty or placeholder email, internal database index is preserved without throwing duplicate key errors; if customer enters a genuine email, format is validated with regex, uniqueness is verified, and real email is saved to MongoDB.
+      - Added `GET /api/users/profile` fallback to `req.user.id` when no URL parameter is provided.
+    - **Customer App Frontend Enhancements**:
+      - `mobile/customer-app/src/utils/formatters.ts`: Added `isTemporaryEmail`, `getDisplayEmail`, `isGenuineName`, `getDisplayName`.
+      - `mobile/customer-app/src/api/client.ts`: Enhanced `normalizeUser` to sanitize placeholder emails and names in all user responses.
+      - `mobile/customer-app/src/screens/ProfileScreen.tsx`:
+        - Profile header card: displays genuine name or `'Welcome Customer'`, and genuine email or `'No email added (Optional)'`.
+        - Edit Profile modal: initializes `name` with genuine name or empty string (placeholder: `"Enter your full name"`).
+        - Email input made strictly optional (`Email Address (Optional)` with placeholder `"Enter your email address"`). If entered, validated against email format regex.
+        - Mobile number field rendered read-only with a verified check badge, preserving verified phone number and preventing overwrite.
+    - **Verification**:
+      - Automated test suite (`backend/scripts/verify_profile_flows.mjs`) tested all 8 scenarios against live MongoDB and backend:
+        1. New customer with only verified phone (name="", email="", isPlaceholderEmail=true).
+        2. Customer with genuine saved name and email (loaded and returned).
+        3. Customer with name but no email (name preserved, email sanitized to "").
+        4. Customer with generated `.worklogy.local` placeholder (DB retains index key, API sanitizes to "").
+        5. Customer editing name with blank email (persists name, leaves email empty).
+        6. Customer adding a genuine email (persists real email to MongoDB).
+        7. Persistence on app restart / re-fetch (`GET /api/auth/me`).
+        8. Security guardrail: phone tampering rejected and verified phone preserved.
+      - TypeScript check: 0 errors in `mobile/customer-app` (`npx tsc --noEmit`).
+      - TypeScript check: 0 errors in `mobile/vendor-app` (`npx tsc --noEmit`).
+      - Production build: `npm run build` passed cleanly in `frontend` (2.56s).
+
+  - **Vendor App Authentication Fix: New Number Registration & Existing Number Login**:
+    - **Root Cause Identified**:
+      - On `VendorLoginScreen.tsx`, when an unregistered mobile number was submitted with `purpose: 'login'`, the backend returned HTTP 404 with `code: 'NOT_REGISTERED'`. The login screen caught this and displayed a permanent, blocking red error message (`No registered contractor account found for this number. Please register as a new partner.`) without offering a streamlined registration action. Users who wanted to register were forced to find the small footer link and re-type their 10-digit mobile number from scratch.
+    - **Backend Architecture & Phone Detection**:
+      - Added `POST /api/auth/vendor/check-phone` and `POST /api/auth/check-phone` fast pre-flight lookup endpoints in `backend/src/controllers/auth.controller.js` and `backend/src/routes/auth.routes.js`. Accurately classifies numbers as `new`, `active`, `suspended`, or `blocked`.
+      - Updated `sendLoginOtp`: enriched 404 responses with `{ code: 'NOT_REGISTERED', isRegistered: false, phone: normalizedPhone }` and 409 responses with `{ code: 'ALREADY_REGISTERED', isRegistered: true, phone: normalizedPhone }`.
+      - Concurrency safety: added atomic race-condition fallback in `verifyLoginOtp` for `purpose: 'vendor_register'` so concurrent requests never produce duplicate vendor records.
+      - Compound index: added `UserSchema.index({ phone: 1, role: 1 })` in `backend/src/models/User.js` for role-isolated mobile lookups.
+    - **Vendor App UI & Flow Enhancements**:
+      - `VendorLoginScreen.tsx`:
+        - Replaced hostile red error banner with a soft, green **"New to WorkLogy?"** informational card.
+        - Provides a prominent primary CTA: **"Register +91 <phone> as a Vendor"** that dispatches registration OTP with one tap without re-entering the number.
+        - Passes entered `phone` through route params to `VendorRegisterScreen` when opening the full form.
+        - Reactive state: clearing/editing digits automatically resets error banners and partner prompts.
+        - Accurately distinguishes network errors (`isNetworkError`), suspensions (403), and server issues (500) without falsely claiming "Account not found".
+      - `VendorRegisterScreen.tsx`:
+        - Reads and auto-prefills `route?.params?.phone`.
+        - If an existing registered number is entered, displays an active **"Sign In with +91 <phone>"** button and passes the phone back to login.
+      - `VendorOtpVerificationScreen.tsx`:
+        - Seamlessly handles both `login` (routes to `VendorHomeTab` or pending onboarding step) and `register` (creates verified account and routes to `VendorOnboardingProfile`).
+      - `AuthContext.tsx` & `api/client.ts`:
+        - Added `checkPhone` API method.
+    - **Verification**:
+      - Automated test suite (`backend/scripts/verify_vendor_auth_flows.mjs`) tested all 13 cases against live MongoDB and backend:
+        1. Pre-flight check on new number (status='new').
+        2. Login OTP on new number returns 404 NOT_REGISTERED.
+        3. Registration OTP dispatch succeeds (purpose='vendor_register').
+        4. Invalid OTP rejected with 400 INVALID_OTP.
+        5. Verify registration OTP creates verified Vendor user & profile.
+        6. Onboarding profile setup updates name and email in MongoDB.
+        7. Duplicate registration attempt blocked with 409 ALREADY_REGISTERED.
+        8. Pre-flight check on existing number (status='active').
+        9. Existing vendor login OTP dispatch succeeds (purpose='vendor_login').
+        10. Existing vendor login OTP verify preserves all user/profile data.
+        11. Session refresh (`/api/auth/token/refresh`) issues new access token.
+        12. Suspended vendor correctly blocked with suspension reason.
+        13. Verified phone protected from tampering on profile updates.
+      - TypeScript checks (`npx tsc --noEmit`): 0 errors in `mobile/vendor-app` and `mobile/customer-app`.
+      - Web frontend production build: `npm run build` passed cleanly in 2.55s.
+
+  - **Two-Stage Splash Sequence in Customer and Vendor Apps**:
+    - **Exact Assets Identified & Connected**:
+      - Customer App: `mobile/customer-app/src/assets/WorkLogy Customer Splash.png` (verified bit-for-bit identical via SHA-256 with `frontend/src/assets/WorkLogy Customer Splash.png`).
+      - Vendor App: `mobile/vendor-app/src/assets/WorkLogy vendor splash.png` (verified bit-for-bit identical via SHA-256 with `frontend/src/assets/WorkLogy vendor splash.png`).
+    - **Sequential Multi-Stage Orchestration**:
+      - **Stage 1 (Logo Splash)**: Preserved existing WorkLogy animated logo, brand typography, and tagline entrance animation. Native Expo splash is hidden as soon as React component mounts.
+      - **Stage 2 (App-Specific Image Splash)**: Smoothly fades in after Stage 1 finishes (250ms fade transition). Displays the full splash graphic without cropping or distortion (`resizeMode="contain"`), centered on an Android edge-matched background (`#D6BBA4` for Customer, `#043821` for Vendor) with matching StatusBar style. Remains visible for 2.0 seconds.
+      - **Stage 3 (App Destination Transition)**: Once the 2.0-second timer completes and session authentication is restored, smoothly fades out (250ms) and reveals the underlying screen (Home/Login/Onboarding) without any white or black flicker.
+    - **Guards & Reliability**:
+      - Monotonic state progression: `'stage1_logo'` -> `'stage2_image'` -> `'finished'`. Images are never displayed simultaneously, never alternate, and never loop.
+      - Run-once guard: Module-level variables `hasCustomerSplashCompletedOnce` and `hasVendorSplashCompletedOnce` prevent re-renders, route changes, or modal dismissals from restarting the splash sequence.
+      - App separation: Customer app only imports Customer splash, Vendor app only imports Vendor splash.
+    - **Verification**:
+      - SHA-256 checksum verification script confirmed identical asset integrity and strict app separation.
+      - TypeScript checks passed cleanly with 0 errors in both `mobile/customer-app` and `mobile/vendor-app` (`npx tsc --noEmit`).
+      - Web frontend production build (`npm run build`) passed cleanly in 2.45s.
+
 
 
 

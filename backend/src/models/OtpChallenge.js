@@ -10,7 +10,16 @@ const OtpChallengeSchema = new mongoose.Schema(
     },
     codeHash: {
       type: String,
-      required: true
+      default: ''
+    },
+    provider: {
+      type: String,
+      enum: ['msg91', 'msg91_widget', 'fast2sms', 'twilio', 'mock', 'local'],
+      default: 'local'
+    },
+    reqId: {
+      type: String,
+      default: ''
     },
     purpose: {
       type: String,
@@ -37,12 +46,26 @@ const OtpChallengeSchema = new mongoose.Schema(
     },
     expiresAt: {
       type: Date,
-      required: true,
-      index: true
+      required: true
     },
     ipAddress: {
       type: String,
       default: ''
+    },
+    deliveryStatus: {
+      type: String,
+      enum: ['REQUEST_ACCEPTED', 'DELIVERY_PENDING', 'DELIVERED', 'DELIVERY_FAILED', 'REJECTED', 'PROVIDER_ERROR'],
+      default: 'REQUEST_ACCEPTED',
+      index: true
+    },
+    deliveryDetails: {
+      status: { type: String, default: '' },
+      pauseReason: { type: String, default: '' },
+      failureReason: { type: String, default: '' },
+      dltTeId: { type: String, default: '' },
+      senderId: { type: String, default: '' },
+      deliveredAt: { type: Date, default: null },
+      updatedAt: { type: Date, default: null }
     }
   },
   {

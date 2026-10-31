@@ -189,4 +189,9 @@ BookingSchema.virtual('isOtpVerified').get(function () {
   );
 });
 
+// Compound indexes for high-throughput query performance
+BookingSchema.index({ customer: 1, status: 1, createdAt: -1 });
+BookingSchema.index({ vendor: 1, status: 1, createdAt: -1 });
+BookingSchema.index({ job: 1 });
+
 export default mongoose.models.Booking || mongoose.model('Booking', BookingSchema);

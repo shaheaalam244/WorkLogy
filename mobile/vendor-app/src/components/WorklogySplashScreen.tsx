@@ -1,18 +1,20 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   StatusBar,
-  Dimensions,
   Animated,
   Easing,
-  Platform
+  Platform,
+  Image,
+  Dimensions
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as SplashScreen from 'expo-splash-screen';
 
-const WORKLOGY_LOGO = require('../assets/worklogy-logo.png');
+const VENDOR_SPLASH_IMAGE = require('../assets/worklogy-vendor-splash-seamless.png');
 
 interface WorklogySplashScreenProps {
   isReady?: boolean;
@@ -23,186 +25,277 @@ export const WorklogySplashScreen: React.FC<WorklogySplashScreenProps> = ({
   isReady = true,
   onFinish
 }) => {
-  const { width: screenWidth } = Dimensions.get('window');
-  // Proportional logo size (approx 34-38% screen width, clamped between 130 and 160)
-  const logoSize = Math.min(Math.max(Math.round(screenWidth * 0.36), 130), 160);
+  const insets = useSafeAreaInsets();
+  const fadeAnim = useRef(new Animated.Value(1)).current;
+  const isReadyRef = useRef(isReady);
+  isReadyRef.current = isReady;
 
-  // Animation values
-  const containerOpacity = useRef(new Animated.Value(1)).current;
-  const contentFade = useRef(new Animated.Value(0)).current;
-  const contentTranslateY = useRef(new Animated.Value(6)).current;
+  const minTimerFinishedRef = useRef(false);
+  const isTransitioningRef = useRef(false);
+  const hasHiddenNativeSplashRef = useRef(false);
 
-  const isDismissingRef = useRef(false);
+  // Responsive device dimensions calculation
+  const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
+
+  // Adaptive font sizes & spacing based on device vertical real estate
+  const isCompact = screenHeight < 720;
+  const isMedium = screenHeight >= 720 && screenHeight < 880;
+
+  const headingFontSize = isCompact ? 17 : isMedium ? 20 : 22;
+  const headingLineHeight = isCompact ? 21 : isMedium ? 25 : 27;
+  const subheadingFontSize = isCompact ? 12 : isMedium ? 13.5 : 14.5;
+  const descriptionFontSize = isCompact ? 10.5 : isMedium ? 11.5 : 12.5;
+  const descriptionLineHeight = isCompact ? 14.5 : isMedium ? 16 : 17;
+  const bottomPadding = Math.max(insets.bottom + (isCompact ? 8 : 16), isCompact ? 16 : 28);
+
+  const layout = useMemo(() => {
+    const assetWidth = 1024;
+    const assetHeight = 2275;
+    const assetRatio = assetWidth / assetHeight; // ~0.4501
+    const screenRatio = screenWidth / screenHeight;
+
+    if (screenRatio > 0.65) {
+      // Wide screens / Tablets: fit height, center horizontally
+      const imgHeight = screenHeight;
+      const imgWidth = Math.round(screenHeight * assetRatio);
+      const left = Math.round((screenWidth - imgWidth) / 2);
+      return { width: imgWidth, height: imgHeight, top: 0, left };
+    }
+
+    if (screenRatio >= assetRatio) {
+      // Standard phones (9:16) to modern tall phones (19.5:9, 20:9):
+      // Match screen width 100%, anchor from top (y=0) so the WorkLogy branding,
+      // all 3 technicians, and all 6 trade icons remain in full prime view,
+      // while the seamless deep green trousers and ambient floor naturally flow
+      // all the way to the bottom edge with zero visible horizontal cut.
+      const imgWidth = screenWidth;
+      const imgHeight = Math.ceil(screenWidth / assetRatio);
+      return { width: imgWidth, height: imgHeight, top: 0, left: 0 };
+    }
+
+    // Ultra-tall screens (21:9):
+    // Match height, center horizontally with minimal side overflow
+    const imgHeight = screenHeight;
+    const imgWidth = Math.ceil(screenHeight * assetRatio);
+    const left = Math.round((screenWidth - imgWidth) / 2);
+    return { width: imgWidth, height: imgHeight, top: 0, left };
+  }, [screenWidth, screenHeight]);
+
+  const dismissNativeSplash = () => {
+    if (!hasHiddenNativeSplashRef.current) {
+      hasHiddenNativeSplashRef.current = true;
+      SplashScreen.hideAsync().catch(() => {});
+    }
+  };
+
+  const triggerFinish = () => {
+    if (isTransitioningRef.current) return;
+    isTransitioningRef.current = true;
+
+    // Ensure native splash is hidden
+    dismissNativeSplash();
+
+    // Smooth professional fade out (250ms) into the main app destination
+    Animated.timing(fadeAnim, {
+      toValue: 0,
+      duration: 250,
+      easing: Easing.in(Easing.cubic),
+      useNativeDriver: true
+    }).start(() => {
+      if (onFinish) {
+        onFinish();
+      }
+    });
+  };
 
   useEffect(() => {
-    // Hide native splash screen once React Native component is mounted
-    SplashScreen.hideAsync().catch(() => {});
+    // 1. Fallback timer to dismiss native splash quickly after React Native component mounts
+    const nativeSplashFallback = setTimeout(() => {
+      dismissNativeSplash();
+    }, 120);
 
-    // Quick subtle entrance
-    Animated.parallel([
-      Animated.timing(contentFade, {
-        toValue: 1,
-        duration: 350,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true
-      }),
-      Animated.timing(contentTranslateY, {
-        toValue: 0,
-        duration: 350,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true
-      })
-    ]).start();
+    // 2. Minimum display timer for promotional splash (2.2 seconds)
+    const minDisplayTimer = setTimeout(() => {
+      minTimerFinishedRef.current = true;
+      if (isReadyRef.current) {
+        triggerFinish();
+      }
+    }, 2200);
+
+    // 3. Absolute maximum safety timeout (5 seconds) to avoid hanging if auth stalls
+    const maxSafetyTimer = setTimeout(() => {
+      minTimerFinishedRef.current = true;
+      triggerFinish();
+    }, 5000);
+
+    return () => {
+      clearTimeout(nativeSplashFallback);
+      clearTimeout(minDisplayTimer);
+      clearTimeout(maxSafetyTimer);
+    };
   }, []);
 
-  // When isReady becomes true (session restored), smoothly transition immediately without artificial delay
+  // When isReady becomes true (session restoration completes) and min display timer has elapsed
   useEffect(() => {
-    if (isReady && !isDismissingRef.current) {
-      isDismissingRef.current = true;
-      Animated.timing(containerOpacity, {
-        toValue: 0,
-        duration: 220,
-        easing: Easing.in(Easing.cubic),
-        useNativeDriver: true
-      }).start(() => {
-        if (onFinish) {
-          onFinish();
-        }
-      });
+    if (isReady && minTimerFinishedRef.current) {
+      triggerFinish();
     }
   }, [isReady]);
 
   return (
-    <Animated.View
-      style={[styles.container, { opacity: containerOpacity }]}
-      pointerEvents={isReady && isDismissingRef.current ? 'none' : 'auto'}
-    >
+    <View style={styles.rootOverlay} pointerEvents="auto">
       <StatusBar
-        barStyle="dark-content"
-        backgroundColor="#FFFFFF"
+        barStyle="light-content"
+        backgroundColor="#014B2D"
         translucent={Platform.OS === 'android'}
       />
-      <Animated.View
-        style={[
-          styles.content,
-          {
-            opacity: contentFade,
-            transform: [{ translateY: contentTranslateY }]
-          }
-        ]}
-      >
-        {/* Approved WorkLogy Handyman/House Logo (No Cards, No Shadows) */}
-        <Animated.Image
-          source={WORKLOGY_LOGO}
+      <Animated.View style={[styles.imageContainer, { opacity: fadeAnim }]}>
+        <Image
+          source={VENDOR_SPLASH_IMAGE}
           style={[
-            styles.logo,
+            styles.splashImage,
             {
-              width: logoSize,
-              height: Math.round(logoSize * 0.95)
+              width: layout.width,
+              height: layout.height,
+              top: layout.top,
+              left: layout.left
             }
           ]}
-          resizeMode="contain"
+          resizeMode="cover"
+          onLoadEnd={dismissNativeSplash}
           fadeDuration={0}
         />
 
-        {/* Brand Name */}
-        <Text style={styles.brandTitle}>WorkLogy Pro</Text>
+        {/* ── SEAMLESS BOTTOM BRANDING & VALUE PROPOSITION ── */}
+        <View
+          style={[
+            styles.bottomContent,
+            { paddingBottom: bottomPadding }
+          ]}
+          pointerEvents="none"
+        >
+          {/* Main Heading */}
+          <Text
+            style={[
+              styles.mainHeading,
+              { fontSize: headingFontSize, lineHeight: headingLineHeight }
+            ]}
+          >
+            Your Skills. More Opportunities.
+          </Text>
 
-        {/* Tagline */}
-        <Text style={styles.tagline}>Your Skills. More Opportunities.</Text>
+          {/* Subheading */}
+          <Text
+            style={[
+              styles.subheading,
+              { fontSize: subheadingFontSize }
+            ]}
+          >
+            Grow Your Business with WorkLogy
+          </Text>
 
-        {/* Supporting Message */}
-        <Text style={styles.supportingText}>
-          Connect with local customers. Grow your business.
-        </Text>
+          {/* Description */}
+          <Text
+            style={[
+              styles.description,
+              { fontSize: descriptionFontSize, lineHeight: descriptionLineHeight }
+            ]}
+          >
+            Connect with nearby customers, discover local jobs and build your professional reputation.
+          </Text>
 
-        {/* Subtle Trust / Value Points */}
-        <View style={styles.trustContainer}>
-          <View style={styles.trustItem}>
-            <View style={styles.iconCircle}>
-              <Ionicons name="shield-checkmark" size={15} color="#059669" />
+          {/* Trust Highlights */}
+          <View style={styles.trustRow}>
+            <View style={styles.trustItem}>
+              <View style={styles.trustIconWrapper}>
+                <Ionicons name="shield-checkmark" size={12} color="#34D399" />
+              </View>
+              <Text style={styles.trustText}>Trusted Professionals</Text>
             </View>
-            <Text style={styles.trustText}>Trusted Professionals</Text>
-          </View>
 
-          <View style={styles.trustItem}>
-            <View style={styles.iconCircle}>
-              <Ionicons name="briefcase" size={14} color="#059669" />
+            <View style={styles.trustItem}>
+              <View style={styles.trustIconWrapper}>
+                <Ionicons name="briefcase" size={11} color="#34D399" />
+              </View>
+              <Text style={styles.trustText}>More Local Opportunities</Text>
             </View>
-            <Text style={styles.trustText}>Local Jobs. Real Opportunities.</Text>
           </View>
         </View>
       </Animated.View>
-    </Animated.View>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
+  rootOverlay: {
     ...StyleSheet.absoluteFill,
-    backgroundColor: '#FFFFFF',
-    zIndex: 99999,
+    backgroundColor: '#01381F',
+    zIndex: 999999,
+    elevation: 999999,
+    overflow: 'hidden'
+  },
+  imageContainer: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: '#01381F',
+    overflow: 'hidden'
+  },
+  splashImage: {
+    position: 'absolute'
+  },
+  bottomContent: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 24
+    paddingHorizontal: 20
   },
-  content: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '100%',
-    maxWidth: 380,
-    marginTop: -20
-  },
-  logo: {
-    marginBottom: 20
-  },
-  brandTitle: {
-    fontSize: 28,
+  mainHeading: {
+    color: '#FFFFFF',
     fontWeight: '800',
-    color: '#0F172A',
-    letterSpacing: -0.5,
-    textAlign: 'center'
-  },
-  tagline: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#059669',
-    marginTop: 8,
-    letterSpacing: -0.2,
-    textAlign: 'center'
-  },
-  supportingText: {
-    fontSize: 13,
-    fontWeight: '400',
-    color: '#475569',
-    marginTop: 6,
     textAlign: 'center',
-    lineHeight: 18,
-    paddingHorizontal: 12
+    letterSpacing: -0.4
   },
-  trustContainer: {
-    marginTop: 26,
+  subheading: {
+    color: '#34D399',
+    fontWeight: '700',
+    textAlign: 'center',
+    letterSpacing: -0.2,
+    marginTop: 4
+  },
+  description: {
+    color: '#E2E8F0',
+    fontWeight: '400',
+    textAlign: 'center',
+    marginTop: 6,
+    maxWidth: 380,
+    opacity: 0.9
+  },
+  trustRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    gap: 10
+    justifyContent: 'center',
+    flexWrap: 'wrap',
+    gap: 14,
+    marginTop: 12
   },
   trustItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8
+    gap: 6
   },
-  iconCircle: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#ECFDF5',
+  trustIconWrapper: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(52, 211, 153, 0.15)',
     alignItems: 'center',
     justifyContent: 'center'
   },
   trustText: {
-    fontSize: 12.5,
+    color: '#F1F5F9',
+    fontSize: 12,
     fontWeight: '600',
-    color: '#334155',
     letterSpacing: 0.1
   }
 });

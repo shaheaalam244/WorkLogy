@@ -1,11 +1,51 @@
 import User from '../models/User.js';
 import CustomerProfile from '../models/CustomerProfile.js';
 
+/**
+ * Sanitizes user document for client responses:
+ * - Hides internal system-generated placeholder emails (customer_<phone>_...@worklogy.local, temp_...)
+ * - Clears placeholder names ('New Customer', 'New Contractor') so UI can show proper empty state & placeholder
+ * - Never returns password hashes
+ */
+export function sanitizeUserResponse(userDoc) {
+  if (!userDoc) return null;
+  const user = userDoc.toObject ? userDoc.toObject() : { ...userDoc };
+  delete user.password;
+
+  const rawEmail = (user.email || '').trim().toLowerCase();
+  const isPlaceholderEmail =
+    !rawEmail ||
+    rawEmail.endsWith('@worklogy.local') ||
+    rawEmail.startsWith('customer_') ||
+    rawEmail.startsWith('temp_');
+
+  user.isPlaceholderEmail = isPlaceholderEmail;
+  user.hasGenuineEmail = !isPlaceholderEmail;
+  if (isPlaceholderEmail) {
+    user.email = '';
+  }
+
+  const rawName = (user.name || '').trim();
+  const isDummyName =
+    !rawName ||
+    rawName.toLowerCase() === 'new customer' ||
+    rawName.toLowerCase() === 'new contractor';
+
+  user.isDummyName = isDummyName;
+  user.hasGenuineName = !isDummyName;
+  if (isDummyName) {
+    user.name = '';
+  }
+
+  return user;
+}
+
 export const getUserProfile = async (req, res, next) => {
   try {
-    const user = await User.findById(req.params.id).select('-password');
+    const targetId = req.params.id || req.user?.id || req.user?._id;
+    const user = await User.findById(targetId).select('-password');
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-    res.status(200).json({ success: true, user });
+    res.status(200).json({ success: true, user: sanitizeUserResponse(user) });
   } catch (error) {
     next(error);
   }
@@ -13,8 +53,73 @@ export const getUserProfile = async (req, res, next) => {
 
 export const updateUserProfile = async (req, res, next) => {
   try {
-    const user = await User.findByIdAndUpdate(req.user.id, req.body, { new: true });
-    res.status(200).json({ success: true, user });
+    const updateData = { ...req.body };
+
+    // Security & Integrity Guardrails: Protect read-only / immutable credentials
+    delete updateData.phone;
+    delete updateData.role;
+    delete updateData.password;
+    delete updateData.status;
+    delete updateData.isActive;
+    delete updateData.adminRole;
+
+    // Sanitize email update: don't overwrite with empty string or placeholder
+    if (updateData.email !== undefined) {
+      const cleanEmail = (updateData.email || '').trim().toLowerCase();
+      if (!cleanEmail || cleanEmail.endsWith('@worklogy.local') || cleanEmail.startsWith('customer_') || cleanEmail.startsWith('temp_')) {
+        // If user submitted empty or placeholder, do not overwrite existing DB email with placeholder or wipe it
+        delete updateData.email;
+      } else {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(cleanEmail)) {
+          return res.status(400).json({
+            success: false,
+            message: 'Please provide a valid email address.'
+          });
+        }
+        const existing = await User.findOne({ email: cleanEmail, _id: { $ne: req.user.id } });
+        if (existing) {
+          return res.status(400).json({
+            success: false,
+            message: 'This email is already registered with another account.'
+          });
+        }
+        updateData.email = cleanEmail;
+      }
+    }
+
+    if (updateData.name !== undefined) {
+      const cleanName = (updateData.name || '').trim();
+      if (!cleanName || cleanName.toLowerCase() === 'new customer') {
+        return res.status(400).json({
+          success: false,
+          message: 'Please enter a valid full name (at least 2 characters).'
+        });
+      }
+      if (cleanName.length < 2) {
+        return res.status(400).json({
+          success: false,
+          message: 'Full name must be at least 2 characters.'
+        });
+      }
+      updateData.name = cleanName;
+    }
+
+    const user = await User.findByIdAndUpdate(req.user.id, updateData, {
+      new: true,
+      runValidators: true
+    }).select('-password');
+
+    // Also update CustomerProfile onboardingStep if step was profile_pending
+    if (user.role === 'customer') {
+      const profile = await CustomerProfile.findOne({ user: user._id });
+      if (profile && profile.onboardingStep === 'profile_pending') {
+        profile.onboardingStep = profile.addresses?.length > 0 ? 'completed' : 'address_pending';
+        await profile.save();
+      }
+    }
+
+    res.status(200).json({ success: true, user: sanitizeUserResponse(user) });
   } catch (error) {
     next(error);
   }

@@ -23,6 +23,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../hooks/useAuth';
 import { COLORS } from '../theme/colors';
 import { api } from '../api/client';
+import { getDisplayEmail, isTemporaryEmail, isGenuineName, getDisplayName } from '../utils/formatters';
 import { secureStorage } from '../storage/secureStorage';
 import { STORAGE_KEYS } from '../constants';
 import { saveLocation, detectGpsLocation } from '../services/locationService';
@@ -349,8 +350,12 @@ export default function ProfileScreen({ navigation }: any) {
 
   // Open Edit Profile Modal
   const openEditProfile = () => {
-    setEditName(user?.name || '');
-    setEditEmail(user?.email || '');
+    // If name is a placeholder ('New Customer', etc.), display empty string so placeholder is visible
+    const initialName = isGenuineName(user?.name) ? (user?.name || '').trim() : '';
+    // If email is a temporary/placeholder email, display empty string
+    const initialEmail = getDisplayEmail(user?.email);
+    setEditName(initialName);
+    setEditEmail(initialEmail);
     setEditPhone(user?.phone || '');
     setEditAvatar(user?.avatar || DEFAULT_AVATAR);
     setPickedImageUri(null);
@@ -361,22 +366,22 @@ export default function ProfileScreen({ navigation }: any) {
   const validateProfileForm = (): boolean => {
     const errors: { name?: string; email?: string; phone?: string } = {};
 
-    if (!editName.trim()) {
+    const trimmedName = editName.trim();
+    if (!trimmedName) {
       errors.name = 'Full name is required.';
-    } else if (editName.trim().length < 2) {
+    } else if (trimmedName.length < 2) {
       errors.name = 'Full name must be at least 2 characters.';
+    } else if (!isGenuineName(trimmedName)) {
+      errors.name = 'Please enter your genuine full name.';
     }
 
-    if (!editEmail.trim()) {
-      errors.email = 'Email address is required.';
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(editEmail.trim())) {
-      errors.email = 'Please enter a valid email address.';
-    }
-
-    if (editPhone.trim()) {
-      const cleanPhone = editPhone.replace(/[\s\-\+\(\)]/g, '');
-      if (cleanPhone.length < 10) {
-        errors.phone = 'Please enter a valid 10-digit mobile number.';
+    // Email is optional. But if filled, must be valid format and not a temporary placeholder
+    const trimmedEmail = editEmail.trim();
+    if (trimmedEmail) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+        errors.email = 'Please enter a valid email address.';
+      } else if (isTemporaryEmail(trimmedEmail)) {
+        errors.email = 'Please enter a genuine personal or work email address.';
       }
     }
 
@@ -410,8 +415,8 @@ export default function ProfileScreen({ navigation }: any) {
 
       await updateProfile({
         name: editName.trim(),
-        email: editEmail.trim(),
-        phone: editPhone.trim(),
+        email: editEmail.trim(), // Can be empty string if customer leaves it blank
+        phone: user?.phone || editPhone.trim(), // Phone is read-only and preserved
         avatar: finalAvatarUrl
       });
 
@@ -910,9 +915,9 @@ export default function ProfileScreen({ navigation }: any) {
         onPress: async () => {
           await logout();
           if (navigation.resetTo) {
-            navigation.resetTo('HomeTab');
+            navigation.resetTo('Login');
           } else {
-            navigation.navigate('HomeTab');
+            navigation.navigate('Login');
           }
         }
       }
@@ -1025,10 +1030,10 @@ export default function ProfileScreen({ navigation }: any) {
               {/* Name, Email, Phone */}
               <View style={styles.profileInfoCol}>
                 <Text style={styles.profileName} numberOfLines={1}>
-                  {user?.name || 'Customer'}
+                  {getDisplayName(user?.name, 'Welcome Customer')}
                 </Text>
                 <Text style={styles.profileEmail} numberOfLines={1}>
-                  {user?.email || 'Logged in via WorkLogy'}
+                  {getDisplayEmail(user?.email) || 'No email added (Optional)'}
                 </Text>
 
                 {user?.phone ? (
@@ -1523,13 +1528,15 @@ export default function ProfileScreen({ navigation }: any) {
                   setEditName(val);
                   if (fieldErrors.name) setFieldErrors((prev) => ({ ...prev, name: undefined }));
                 }}
-                placeholder="e.g. Rahul Sharma"
+                placeholder="Enter your full name"
                 placeholderTextColor={COLORS.textMuted}
+                autoCapitalize="words"
+                returnKeyType="next"
               />
               {fieldErrors.name && <Text style={styles.fieldErrorText}>{fieldErrors.name}</Text>}
 
-              {/* Email Address Field */}
-              <Text style={styles.inputLabel}>Email Address *</Text>
+              {/* Email Address Field (Optional) */}
+              <Text style={styles.inputLabel}>Email Address (Optional)</Text>
               <TextInput
                 style={[styles.textInput, fieldErrors.email ? styles.inputError : null]}
                 value={editEmail}
@@ -1537,39 +1544,38 @@ export default function ProfileScreen({ navigation }: any) {
                   setEditEmail(val);
                   if (fieldErrors.email) setFieldErrors((prev) => ({ ...prev, email: undefined }));
                 }}
-                placeholder="e.g. rahul.sharma@example.com"
+                placeholder="Enter your email address"
                 placeholderTextColor={COLORS.textMuted}
                 autoCapitalize="none"
                 keyboardType="email-address"
+                autoCorrect={false}
               />
               {fieldErrors.email ? (
                 <Text style={styles.fieldErrorText}>{fieldErrors.email}</Text>
               ) : (
                 <Text style={styles.inputHelp}>
-                  Used for verified WorkLogy invoices, booking receipts, and account recovery.
+                  Optional. Used for verified WorkLogy invoices, booking receipts, and account recovery.
                 </Text>
               )}
 
-              {/* Phone Number Field */}
-              <Text style={styles.inputLabel}>Phone Number</Text>
+              {/* Phone Number Field (Verified & Read-only) */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                <Text style={[styles.inputLabel, { marginBottom: 0 }]}>Phone Number</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#ECFDF5', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 12 }}>
+                  <Ionicons name="checkmark-circle" size={13} color="#059669" />
+                  <Text style={{ fontSize: 11, fontWeight: '600', color: '#059669', marginLeft: 4 }}>Verified</Text>
+                </View>
+              </View>
               <TextInput
-                style={[styles.textInput, fieldErrors.phone ? styles.inputError : null]}
-                value={editPhone}
-                onChangeText={(val) => {
-                  setEditPhone(val);
-                  if (fieldErrors.phone) setFieldErrors((prev) => ({ ...prev, phone: undefined }));
-                }}
-                placeholder="e.g. 9876543210"
+                style={[styles.textInput, { backgroundColor: '#F8FAFC', color: '#475569', borderColor: '#E2E8F0' }]}
+                value={user?.phone || editPhone || ''}
+                editable={false}
+                placeholder="No phone number"
                 placeholderTextColor={COLORS.textMuted}
-                keyboardType="phone-pad"
               />
-              {fieldErrors.phone ? (
-                <Text style={styles.fieldErrorText}>{fieldErrors.phone}</Text>
-              ) : (
-                <Text style={styles.inputHelp}>
-                  Technicians call this number on arrival for entry coordination and OTP verification.
-                </Text>
-              )}
+              <Text style={styles.inputHelp}>
+                Technicians call this number on arrival for entry coordination and OTP verification. Mobile number is verified via OTP and cannot be edited directly.
+              </Text>
 
               <View style={styles.modalActionRow}>
                 <TouchableOpacity
