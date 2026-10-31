@@ -44,6 +44,12 @@
       ],
       "expo-secure-store",
       "expo-splash-screen"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "defa7868-3bd7-44ce-9aa8-84b7eb4188be"
+      }
+    },
+    "owner": "shaheaalam244"
   }
 }
