@@ -14,6 +14,7 @@ import {
   Alert
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../hooks/useAuth';
 import { api } from '../api/client';
@@ -21,6 +22,13 @@ import { api } from '../api/client';
 const DEFAULT_AVATAR = 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=300&q=80';
 
 export default function CustomerOnboardingProfileScreen({ navigation }: any) {
+  const insets = useSafeAreaInsets();
+  const topInset = Math.max(
+    insets.top,
+    Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 0
+  );
+  const bottomInset = insets.bottom;
+
   const { user, completeProfileStep } = useAuth();
 
   const [name, setName] = useState(
@@ -58,7 +66,6 @@ export default function CustomerOnboardingProfileScreen({ navigation }: any) {
         const asset = result.assets[0];
         setIsUploadingPhoto(true);
         try {
-          // Attempt image upload to server/Cloudinary
           const uploadRes = await api.media.uploadImage(asset.uri, asset.mimeType || 'image/jpeg');
           if (uploadRes?.url) {
             setAvatarUri(uploadRes.url);
@@ -66,7 +73,6 @@ export default function CustomerOnboardingProfileScreen({ navigation }: any) {
             setAvatarUri(asset.uri);
           }
         } catch {
-          // Fallback to local URI
           setAvatarUri(asset.uri);
         } finally {
           setIsUploadingPhoto(false);
@@ -117,18 +123,13 @@ export default function CustomerOnboardingProfileScreen({ navigation }: any) {
   };
 
   const handleSkip = async () => {
-    // If name is entered, save it; otherwise use polite default or prompt for name
-    if (!name.trim()) {
-      setErrors({ name: 'Please enter your name so technicians know whom to address.' });
-      return;
-    }
-
     setIsSubmitting(true);
     try {
+      const fallbackName = name.trim() || user?.name || 'Customer';
       await completeProfileStep({
-        name: name.trim(),
-        email: undefined,
-        avatar: undefined
+        name: fallbackName,
+        email: email.trim() || undefined,
+        avatar: avatarUri || undefined
       });
 
       navigation.replace('CustomerOnboardingAddress');
@@ -139,6 +140,14 @@ export default function CustomerOnboardingProfileScreen({ navigation }: any) {
     }
   };
 
+  const handleClose = () => {
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+    } else {
+      navigation.resetTo ? navigation.resetTo('HomeTab') : navigation.navigate('HomeTab');
+    }
+  };
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
@@ -146,22 +155,32 @@ export default function CustomerOnboardingProfileScreen({ navigation }: any) {
     >
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
 
-      {/* Top Header */}
-      <View style={styles.topHeader}>
+      {/* Top Header with Dynamic Safe Area & Status Bar Padding */}
+      <View
+        style={[
+          styles.topHeader,
+          { paddingTop: topInset + (Platform.OS === 'ios' ? 8 : 12) }
+        ]}
+      >
         <View style={styles.stepBadge}>
           <Text style={styles.stepBadgeText}>Step 1 of 2</Text>
         </View>
         <TouchableOpacity
+          style={styles.skipBtn}
           onPress={handleSkip}
           disabled={isSubmitting}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          activeOpacity={0.7}
         >
           <Text style={styles.skipBtnText}>Skip for now</Text>
         </TouchableOpacity>
       </View>
 
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingBottom: Math.max(bottomInset + 24, 36) }
+        ]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
@@ -278,6 +297,17 @@ export default function CustomerOnboardingProfileScreen({ navigation }: any) {
               </View>
             )}
           </TouchableOpacity>
+
+          {/* Close Action */}
+          <TouchableOpacity
+            style={styles.closeBtn}
+            onPress={handleClose}
+            activeOpacity={0.7}
+            hitSlop={{ top: 10, bottom: 10, left: 14, right: 14 }}
+          >
+            <Ionicons name="close" size={16} color="#64748B" style={{ marginRight: 4 }} />
+            <Text style={styles.closeBtnText}>Close</Text>
+          </TouchableOpacity>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -294,23 +324,31 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingTop: Platform.OS === 'android' ? 16 : 8,
-    paddingBottom: 12,
+    paddingBottom: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9'
+    borderBottomColor: '#F1F5F9',
+    backgroundColor: '#FFFFFF'
   },
   stepBadge: {
     backgroundColor: '#F0FDF4',
     paddingHorizontal: 12,
-    paddingVertical: 4,
+    paddingVertical: 5,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#DCFCE7'
+    borderColor: '#DCFCE7',
+    alignItems: 'center',
+    justifyContent: 'center'
   },
   stepBadgeText: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#059669'
+    color: '#059669',
+    letterSpacing: 0.1
+  },
+  skipBtn: {
+    paddingVertical: 5,
+    paddingHorizontal: 6,
+    justifyContent: 'center'
   },
   skipBtnText: {
     fontSize: 14,
@@ -320,7 +358,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
     paddingHorizontal: 24,
-    paddingVertical: 24,
+    paddingTop: 24,
     alignItems: 'center'
   },
   contentCard: {
@@ -474,6 +512,28 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#FFFFFF',
     letterSpacing: 0.2
+  },
+  closeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginTop: 28,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 1
+  },
+  closeBtnText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#64748B'
   }
 });
-

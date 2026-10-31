@@ -1297,3 +1297,31 @@ A backlog item transitions to **Done** if and only if:
   2. Verified TypeScript compiler checks (`npx tsc --noEmit`) and Android bundle export (`npx expo export --platform android`) cleanly with 0 errors.
 - **Acceptance Criteria**: Exact 6-box OTP layout matching Customer App; zero screen flickering or keyboard jumping during manual entry; isolated countdown timer; automatic SMS OTP autofill; multi-digit paste support; passes `tsc --noEmit` and `expo export --platform android`.
 - **Status**: Done
+
+---
+
+### TSK-MOB-062: Customer Profile Setup Screen Safe Area & Status Bar Overlap Fix
+- **Title**: Dynamic Top Safe Area Insets & Status Bar Alignment for Customer Profile Setup Screen
+- **Priority**: P0
+- **Relevant Area**: Customer App Onboarding & Profile Setup Flow
+- **Problem Statement**:
+  1. "Step 1 of 2" badge and "Skip for now" header button in `CustomerOnboardingProfileScreen.tsx` had a fixed `paddingTop: 16px` on Android, causing them to render underneath the status bar clock ("7:14"), camera punch hole, and system icons (5G, battery).
+  2. The top header was cramped and clashed visually with Android edge-to-edge system overlays.
+- **Expected Behavior**:
+  - Dynamically respect Android status bar height (`StatusBar.currentHeight`) and safe-area top inset (`insets.top`).
+  - Position all header elements (`Step 1 of 2` badge and `Skip for now`) completely below the status bar.
+  - Keep badge and skip button on the same horizontal row, vertically center-aligned.
+  - Safe-area aware bottom padding (`bottomInset`) so the Continue button and Close action never clash with Android gesture pills.
+  - Preserve all existing profile fields (Photo picker, Full Name, Email, Continue button, validation, and navigation).
+  - Modify strictly `CustomerOnboardingProfileScreen.tsx` without modifying other screens or backend APIs.
+- **Implementation Scope**:
+  1. Updated [`mobile/customer-app/src/screens/CustomerOnboardingProfileScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/customer-app/src/screens/CustomerOnboardingProfileScreen.tsx):
+     - Integrated `useSafeAreaInsets` from `react-native-safe-area-context`.
+     - Computed dynamic `topInset = Math.max(insets.top, Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 0)`.
+     - Positioned `topHeader` with `paddingTop: topInset + (Platform.OS === 'ios' ? 8 : 12)` and `paddingBottom: 14`.
+     - Vertically and horizontally aligned `stepBadge` and `skipBtn` in the header row.
+     - Added dynamic `bottomInset` padding to `scrollContent` (`Math.max(bottomInset + 24, 36)`).
+     - Added graceful `handleClose` fallback to `navigation.goBack()` or `HomeTab`.
+  2. Verified TypeScript compiler checks (`npx tsc --noEmit`) and Android bundle export (`npx expo export --platform android`) cleanly with 0 errors.
+- **Acceptance Criteria**: Zero status bar overlap; `Step 1 of 2` badge and `Skip for now` fully visible below camera cutout and status bar; clean horizontal row alignment; passes `tsc --noEmit` and `expo export --platform android`.
+- **Status**: Done
