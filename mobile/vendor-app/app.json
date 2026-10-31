@@ -6,11 +6,6 @@
     "orientation": "portrait",
     "icon": "./src/assets/worklogy-app-icon-v2.png",
     "userInterfaceStyle": "light",
-    "splash": {
-      "image": "./src/assets/native-splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#FFFFFF"
-    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "in.worklogy.vendor"
@@ -21,17 +16,20 @@
         "foregroundImage": "./src/assets/worklogy-adaptive-icon-v2.png",
         "backgroundColor": "#FFFFFF"
       },
-      "splash": {
-        "image": "./src/assets/native-splash.png",
-        "resizeMode": "contain",
-        "backgroundColor": "#FFFFFF"
-      },
       "package": "in.worklogy.vendor"
     },
     "web": {
       "favicon": "./src/assets/favicon.png"
     },
     "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "image": "./src/assets/native-splash.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#FFFFFF"
+        }
+      ],
       [
         "expo-notifications",
         {
@@ -41,7 +39,7 @@
         }
       ],
       "expo-secure-store",
-      "expo-splash-screen"
+      "expo-font"
     ]
   }
 }
