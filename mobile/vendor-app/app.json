@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "WorkLogy Pro",
-    "slug": "worklogy-vendor-app",
+    "name": "WorkLogy",
+    "slug": "worklogy-vendor",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./src/assets/worklogy-app-icon-v2.png",
@@ -16,7 +16,8 @@
         "foregroundImage": "./src/assets/worklogy-adaptive-icon-v2.png",
         "backgroundColor": "#FFFFFF"
       },
-      "package": "in.worklogy.vendor"
+      "package": "in.worklogy.vendor",
+      "versionCode": 1
     },
     "web": {
       "favicon": "./src/assets/favicon.png"
