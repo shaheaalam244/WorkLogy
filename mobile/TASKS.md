@@ -1288,16 +1288,12 @@ A backlog item transitions to **Done** if and only if:
   - Customer App and backend MSG91 integration remain completely untouched.
 - **Implementation Scope**:
   1. Completely rewrote [`mobile/vendor-app/src/screens/VendorOtpVerificationScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/vendor-app/src/screens/VendorOtpVerificationScreen.tsx):
-     - Created 6-box input architecture using `inputsRef` array and `focusedIndex` state.
-     - Implemented `handleChangeText` handling single-digit entry, auto-focus forward, and multi-digit SMS autofill / clipboard paste.
-     - Implemented `handleKeyPress` handling Backspace navigation backwards.
-     - Added `isSubmittingRef` duplicate request guard and automatic submission on 6th digit.
-     - Implemented top header with back button and centered "Verification" title.
-     - Designed green chat bubble security badge matching Customer App pixel-perfect reference.
-     - Masked phone pill badge with "Change number" callback.
-     - Error state banner with `alert-circle` icon.
-     - Full-width "Verify & Continue" button with forward arrow.
-     - Resend timer countdown and action button.
+     - **Resolved Screen Flickering Root Cause**: Replaced multiple native `TextInput` instances with a single authoritative hidden `TextInput` (`maxLength={6}`, `keyboardType="number-pad"`, `textContentType="oneTimeCode"`, `autoComplete="sms-otp"`), coupled with memoized visual cells (`OtpBoxes`). This eliminates Android `InputMethodService` soft-keyboard reconnects, window resize jitter, and subpixel border redraws.
+     - **Isolated Resend Countdown**: Extracted the 1-second interval timer into `ResendCountdownSection` wrapped in `React.memo`, preventing the main verification screen and inputs from re-rendering every second.
+     - **Static Dimensions & Elevation**: Locked box border width (1.5px) and eliminated dynamic elevation toggling during typing to prevent Android hardware layer invalidation and white/black redraw flashes.
+     - **SMS AutoFill & Paste**: Supports immediate single-keystroke entry, multi-digit paste, and native Android SMS AutoFill via native `oneTimeCode` handler.
+     - **Single Verification Execution**: Maintained `isSubmittingRef` duplicate request guard and automatic submission upon the 6th digit.
+     - **Visual Parity**: Centered "Verification" header, emerald chat bubble icon (72×72), masked phone badge (`+91 ******XXXX`), "Change number" action, and "Verify & Continue" button.
   2. Verified TypeScript compiler checks (`npx tsc --noEmit`) and Android bundle export (`npx expo export --platform android`) cleanly with 0 errors.
-- **Acceptance Criteria**: Exact 6-box OTP layout matching Customer App; automatic SMS OTP autofill; multi-digit paste support; auto-advance and backspace navigation; single verification execution; passes `tsc --noEmit` and `expo export --platform android`.
+- **Acceptance Criteria**: Exact 6-box OTP layout matching Customer App; zero screen flickering or keyboard jumping during manual entry; isolated countdown timer; automatic SMS OTP autofill; multi-digit paste support; passes `tsc --noEmit` and `expo export --platform android`.
 - **Status**: Done

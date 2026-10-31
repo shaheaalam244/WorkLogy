@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -15,115 +15,150 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../hooks/useAuth';
 import { COLORS } from '../theme/colors';
 
+// ── ISOLATED RESEND COUNTDOWN COMPONENT ──────────────────────────────
+// Keeps 1-second interval re-renders completely isolated from the main screen
+interface ResendSectionProps {
+  cooldownSeconds: number;
+  onResend: () => Promise<void>;
+  isResending: boolean;
+}
+
+const ResendCountdownSection = React.memo<ResendSectionProps>(({
+  cooldownSeconds,
+  onResend,
+  isResending
+}) => {
+  const [countdown, setCountdown] = useState(cooldownSeconds);
+
+  useEffect(() => {
+    setCountdown(cooldownSeconds);
+  }, [cooldownSeconds]);
+
+  useEffect(() => {
+    if (countdown <= 0) return;
+    const timer = setInterval(() => {
+      setCountdown((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [countdown]);
+
+  return (
+    <View style={styles.resendContainer}>
+      <Text style={styles.resendPreText}>Didn't receive code? </Text>
+      {countdown > 0 ? (
+        <Text style={styles.countdownText}>
+          Resend in <Text style={{ fontWeight: '700' }}>{countdown}s</Text>
+        </Text>
+      ) : (
+        <TouchableOpacity
+          onPress={onResend}
+          disabled={isResending}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          {isResending ? (
+            <ActivityIndicator size="small" color={COLORS.primary} />
+          ) : (
+            <Text style={styles.resendLink}>Resend OTP</Text>
+          )}
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+});
+
+// ── ISOLATED 6-CELL OTP DISPLAY COMPONENT ────────────────────────────
+// Visual representation of the 6 digits; eliminates multiple native EditText switches
+interface OtpBoxesProps {
+  otp: string;
+  isInputFocused: boolean;
+  hasError: boolean;
+  onPress: () => void;
+}
+
+const OtpBoxes = React.memo<OtpBoxesProps>(({
+  otp,
+  isInputFocused,
+  hasError,
+  onPress
+}) => {
+  return (
+    <TouchableOpacity
+      style={styles.otpBoxesRow}
+      onPress={onPress}
+      activeOpacity={1}
+      accessible={true}
+      accessibilityLabel="OTP Entry"
+    >
+      {[0, 1, 2, 3, 4, 5].map((index) => {
+        const digit = otp[index] || '';
+        const isFocused = isInputFocused && (otp.length === index || (otp.length === 6 && index === 5));
+
+        return (
+          <View
+            key={index}
+            style={[
+              styles.otpBox,
+              digit ? styles.otpBoxFilled : null,
+              isFocused ? styles.otpBoxFocused : null,
+              hasError ? styles.otpBoxError : null
+            ]}
+          >
+            <Text style={styles.otpDigit}>{digit}</Text>
+          </View>
+        );
+      })}
+    </TouchableOpacity>
+  );
+});
+
+// ── MAIN VENDOR OTP VERIFICATION SCREEN ─────────────────────────────
 export default function VendorOtpVerificationScreen({ navigation, route }: any) {
-  const { phone = '', purpose = 'login', cooldownSeconds = 60, debugCode } = route.params || {};
+  const { phone = '', purpose = 'login', cooldownSeconds = 60, debugCode } = route?.params || {};
   const { verifyOtp, sendOtp } = useAuth();
 
-  const [digits, setDigits] = useState<string[]>(['', '', '', '', '', '']);
-  const [focusedIndex, setFocusedIndex] = useState<number>(0);
+  // Authoritative single 6-digit OTP state
+  const [otp, setOtp] = useState('');
+  const [isInputFocused, setIsInputFocused] = useState(true);
   const [isVerifying, setIsVerifying] = useState(false);
   const [isResending, setIsResending] = useState(false);
-  const [countdown, setCountdown] = useState(cooldownSeconds);
+  const [currentCooldown, setCurrentCooldown] = useState(cooldownSeconds);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [devOtp, setDevOtp] = useState<string | null>(debugCode || null);
 
-  const inputsRef = useRef<Array<TextInput | null>>([]);
+  const inputRef = useRef<TextInput>(null);
   const isSubmittingRef = useRef<boolean>(false);
 
-  // Resend Countdown Timer
+  // Auto-focus the single native input on mount
   useEffect(() => {
-    let timer: any = null;
-    if (countdown > 0) {
-      timer = setInterval(() => {
-        setCountdown((prev) => (prev > 0 ? prev - 1 : 0));
-      }, 1000);
-    }
-    return () => {
-      if (timer) clearInterval(timer);
-    };
-  }, [countdown]);
-
-  // Focus first input on mount
-  useEffect(() => {
-    const focusTimer = setTimeout(() => {
-      inputsRef.current[0]?.focus();
-    }, 250);
-    return () => clearTimeout(focusTimer);
+    const timer = setTimeout(() => {
+      inputRef.current?.focus();
+    }, 200);
+    return () => clearTimeout(timer);
   }, []);
 
-  // Handle digit changes with multi-digit paste / SMS autofill support
-  const handleChangeText = (text: string, index: number) => {
-    if (errorMessage) setErrorMessage(null);
-    const numeric = text.replace(/\D/g, '');
+  // Handle single digit, rapid entry, paste, and Android SMS autofill
+  const handleOtpChange = useCallback((text: string) => {
+    const cleaned = text.replace(/\D/g, '').slice(0, 6);
+    setOtp(cleaned);
+    setErrorMessage(null);
 
-    // Case 1: Multi-digit text (Pasting or SMS AutoFill)
-    if (numeric.length > 1) {
-      const pasted = numeric.slice(0, 6).split('');
-      const nextDigits = ['', '', '', '', '', ''];
-      for (let i = 0; i < pasted.length; i++) {
-        nextDigits[i] = pasted[i];
-      }
-      setDigits(nextDigits);
-
-      // Focus the last filled box or next available box
-      const targetFocus = Math.min(pasted.length, 5);
-      inputsRef.current[targetFocus]?.focus();
-
-      // If full 6 digits arrived, trigger automatic verification
-      if (pasted.length === 6) {
-        triggerSubmit(nextDigits.join(''));
-      }
-      return;
+    // Auto-verify as soon as all 6 digits are populated
+    if (cleaned.length === 6) {
+      submitOtp(cleaned);
     }
+  }, [phone]);
 
-    // Case 2: Single digit entered
-    const nextDigits = [...digits];
-    nextDigits[index] = numeric;
-    setDigits(nextDigits);
-
-    if (numeric) {
-      // Auto-advance to next box
-      if (index < 5) {
-        inputsRef.current[index + 1]?.focus();
-      }
-
-      // Check if all 6 boxes are now filled
-      const fullCode = nextDigits.join('');
-      if (fullCode.length === 6 && !nextDigits.includes('')) {
-        triggerSubmit(fullCode);
-      }
-    }
-  };
-
-  // Handle backspace navigation across boxes
-  const handleKeyPress = (e: any, index: number) => {
-    if (e.nativeEvent.key === 'Backspace') {
-      if (!digits[index] && index > 0) {
-        // Current box is empty, clear previous box and focus it
-        const nextDigits = [...digits];
-        nextDigits[index - 1] = '';
-        setDigits(nextDigits);
-        inputsRef.current[index - 1]?.focus();
-      } else if (digits[index]) {
-        // Clear current box
-        const nextDigits = [...digits];
-        nextDigits[index] = '';
-        setDigits(nextDigits);
-      }
-    }
-  };
-
-  // Submit OTP for verification
-  const triggerSubmit = async (codeToVerify?: string) => {
+  // Submit OTP for verification with duplicate request prevention
+  const submitOtp = useCallback(async (codeToVerify?: string) => {
     if (isSubmittingRef.current || isVerifying) return;
-    const fullCode = (codeToVerify || digits.join('')).trim();
+    const cleanCode = (codeToVerify || otp).trim();
 
-    if (!fullCode) {
+    if (!cleanCode) {
       setErrorMessage('Please enter the 6-digit verification code sent to your phone.');
       return;
     }
 
-    if (fullCode.length !== 6) {
+    if (cleanCode.length !== 6) {
       setErrorMessage('Please enter all 6 digits of the verification code.');
       return;
     }
@@ -133,9 +168,7 @@ export default function VendorOtpVerificationScreen({ navigation, route }: any) 
     setErrorMessage(null);
 
     try {
-      const res = await verifyOtp({ phone, otp: fullCode });
-
-      // Determine destination based on onboarding step
+      const res = await verifyOtp({ phone, otp: cleanCode });
       const step = res?.onboardingStep || 'completed';
 
       if (res?.isNewUser || step === 'profile_pending') {
@@ -153,34 +186,38 @@ export default function VendorOtpVerificationScreen({ navigation, route }: any) 
       setIsVerifying(false);
       isSubmittingRef.current = false;
     }
-  };
+  }, [otp, phone, isVerifying, verifyOtp, navigation]);
 
-  // Handle Resend OTP
-  const handleResend = async () => {
-    if (countdown > 0 || isResending) return;
+  // Handle Resend OTP action
+  const handleResend = useCallback(async () => {
+    if (isResending) return;
     setIsResending(true);
     setErrorMessage(null);
 
     try {
       const res = await sendOtp(phone, purpose);
-      setCountdown(res?.cooldownSeconds || 60);
+      setCurrentCooldown(res?.cooldownSeconds || 60);
       if (res?.debugCode) {
         setDevOtp(res.debugCode);
       }
-      setDigits(['', '', '', '', '', '']);
-      inputsRef.current[0]?.focus();
+      setOtp('');
+      inputRef.current?.focus();
     } catch (err: any) {
       setErrorMessage(err.message || 'Failed to resend code. Please try again.');
     } finally {
       setIsResending(false);
     }
-  };
+  }, [isResending, phone, purpose, sendOtp]);
+
+  const focusInput = useCallback(() => {
+    inputRef.current?.focus();
+  }, []);
 
   const maskedPhone = phone.length >= 10
     ? `+91 ******${phone.slice(-4)}`
     : `+91 ${phone}`;
 
-  const isOtpComplete = digits.join('').length === 6 && !digits.includes('');
+  const isOtpComplete = otp.length === 6;
 
   return (
     <KeyboardAvoidingView
@@ -195,6 +232,7 @@ export default function VendorOtpVerificationScreen({ navigation, route }: any) 
           style={styles.backBtn}
           onPress={() => navigation.goBack()}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          activeOpacity={0.7}
         >
           <Ionicons name="arrow-back" size={24} color="#0F172A" />
         </TouchableOpacity>
@@ -224,46 +262,38 @@ export default function VendorOtpVerificationScreen({ navigation, route }: any) 
             <TouchableOpacity
               onPress={() => navigation.goBack()}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              activeOpacity={0.7}
             >
               <Text style={styles.changeNumberText}>Change number</Text>
             </TouchableOpacity>
           </View>
 
-          {/* Six Individual OTP Boxes */}
-          <View style={styles.otpBoxesRow}>
-            {[0, 1, 2, 3, 4, 5].map((index) => {
-              const digit = digits[index];
-              const isFocused = focusedIndex === index;
-              return (
-                <View
-                  key={index}
-                  style={[
-                    styles.otpBox,
-                    digit ? styles.otpBoxFilled : null,
-                    isFocused ? styles.otpBoxFocused : null,
-                    errorMessage ? styles.otpBoxError : null
-                  ]}
-                >
-                  <TextInput
-                    ref={(el) => {
-                      inputsRef.current[index] = el;
-                    }}
-                    style={styles.otpBoxInput}
-                    value={digit}
-                    onChangeText={(text) => handleChangeText(text, index)}
-                    onKeyPress={(e) => handleKeyPress(e, index)}
-                    onFocus={() => setFocusedIndex(index)}
-                    keyboardType="number-pad"
-                    maxLength={6} // Allow multi-digit paste/autofill into any box
-                    selectTextOnFocus={true}
-                    textContentType={index === 0 ? 'oneTimeCode' : undefined}
-                    autoComplete={index === 0 ? 'sms-otp' : undefined}
-                    editable={!isVerifying}
-                  />
-                </View>
-              );
-            })}
-          </View>
+          {/* Single Hidden Real TextInput for Native Keyboard & SMS AutoFill */}
+          {/* Using 1 native input completely prevents soft-keyboard flickering, IME restarts, and focus jumps */}
+          <TextInput
+            ref={inputRef}
+            style={styles.hiddenInput}
+            value={otp}
+            onChangeText={handleOtpChange}
+            keyboardType="number-pad"
+            maxLength={6}
+            autoFocus={true}
+            showSoftInputOnFocus={true}
+            textContentType="oneTimeCode"
+            autoComplete="sms-otp"
+            editable={!isVerifying}
+            onFocus={() => setIsInputFocused(true)}
+            onBlur={() => setIsInputFocused(false)}
+            caretHidden={true}
+          />
+
+          {/* 6 Visual OTP Cells */}
+          <OtpBoxes
+            otp={otp}
+            isInputFocused={isInputFocused}
+            hasError={Boolean(errorMessage)}
+            onPress={focusInput}
+          />
 
           {/* Development/Testing helper (visible only in __DEV__ when debugCode exists) */}
           {devOtp && __DEV__ && (
@@ -289,7 +319,7 @@ export default function VendorOtpVerificationScreen({ navigation, route }: any) 
               styles.primaryBtn,
               (isVerifying || !isOtpComplete) ? styles.primaryBtnDisabled : null
             ]}
-            onPress={() => triggerSubmit()}
+            onPress={() => submitOtp()}
             disabled={isVerifying || !isOtpComplete}
             activeOpacity={0.85}
           >
@@ -303,27 +333,12 @@ export default function VendorOtpVerificationScreen({ navigation, route }: any) 
             )}
           </TouchableOpacity>
 
-          {/* Resend Cooldown Section */}
-          <View style={styles.resendContainer}>
-            <Text style={styles.resendPreText}>Didn't receive code? </Text>
-            {countdown > 0 ? (
-              <Text style={styles.countdownText}>
-                Resend in <Text style={{ fontWeight: '700' }}>{countdown}s</Text>
-              </Text>
-            ) : (
-              <TouchableOpacity
-                onPress={handleResend}
-                disabled={isResending}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                {isResending ? (
-                  <ActivityIndicator size="small" color={COLORS.primary} />
-                ) : (
-                  <Text style={styles.resendLink}>Resend OTP</Text>
-                )}
-              </TouchableOpacity>
-            )}
-          </View>
+          {/* Resend Cooldown Section (Isolated timer, zero screen re-renders) */}
+          <ResendCountdownSection
+            cooldownSeconds={currentCooldown}
+            onResend={handleResend}
+            isResending={isResending}
+          />
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -417,12 +432,21 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: COLORS.primary
   },
+  // Single hidden native input (off-screen, never causes keyboard flicker)
+  hiddenInput: {
+    position: 'absolute',
+    width: 1,
+    height: 1,
+    opacity: 0.01,
+    left: -100
+  },
   otpBoxesRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     width: '100%',
     marginBottom: 20
   },
+  // Fixed dimensions and border width prevent layout shifts
   otpBox: {
     flex: 1,
     height: 56,
@@ -440,26 +464,16 @@ const styles = StyleSheet.create({
   },
   otpBoxFocused: {
     borderColor: COLORS.primary,
-    borderWidth: 2,
-    backgroundColor: '#FFFFFF',
-    shadowColor: COLORS.primary,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-    elevation: 2
+    backgroundColor: '#FFFFFF'
   },
   otpBoxError: {
     borderColor: COLORS.error,
     backgroundColor: COLORS.errorBg
   },
-  otpBoxInput: {
-    width: '100%',
-    height: '100%',
-    textAlign: 'center',
+  otpDigit: {
     fontSize: 22,
     fontWeight: '800',
-    color: '#0F172A',
-    padding: 0
+    color: '#0F172A'
   },
   devBanner: {
     flexDirection: 'row',
