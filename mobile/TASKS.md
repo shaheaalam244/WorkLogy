@@ -1264,3 +1264,40 @@ A backlog item transitions to **Done** if and only if:
   2. Verified TypeScript compiler checks and Android Expo release exports.
 - **Acceptance Criteria**: Seamless typography integration; zero overlap with couple or coffee table; zero clipping on navigation bars; passes `tsc --noEmit` and `expo export --platform android`.
 - **Status**: Done
+
+---
+
+### TSK-MOB-061: WorkLogy Vendor App OTP Verification UI & AutoFill
+- **Title**: Six-Box OTP Verification Screen with Android SMS AutoFill, Multi-Digit Paste, and Auto-Advance
+- **Priority**: P0
+- **Relevant Area**: Vendor App Authentication & Onboarding Flow
+- **Problem Statement**:
+  1. The Vendor App previously used a single input displaying masked dots or grouped characters (`• • • • • •`), creating a visual discrepancy with the Customer App OTP verification interface.
+  2. Automatic SMS OTP autofill, clipboard paste parsing across 6 discrete digits, and seamless backspace navigation across boxes were missing.
+- **Expected Behavior**:
+  - Header: Back button with hitSlop, centered title "Verification", matching Customer App.
+  - Security Icon: 72x72 rounded container (borderRadius 20, `#F0FDF4`, border `#DCFCE7`) with `chatbubble-ellipses` green icon (`#08765A`).
+  - Typography: Heading "Verify your mobile number", subheading "Enter the 6-digit code sent via SMS to".
+  - Phone Row: Pill badge with masked number (`+91 ******XXXX`) and "Change number" action navigating back.
+  - Six Discrete Boxes: Exactly 6 boxes in a horizontal row (`[ ][ ][ ][ ][ ][ ]`), displaying centered 22px bold digits with smooth focus indicator (green border `#08765A`, subtle green background when filled `#F0FDF4`, red on error `#DC2626`).
+  - SMS AutoFill & Multi-Digit Paste: `textContentType="oneTimeCode"` and `autoComplete="sms-otp"` on first box; `handleChangeText` intercepts multi-digit strings (up to 6 digits) and distributes them cleanly across all 6 boxes.
+  - Focus Navigation: Auto-advances to the next box upon typing; backspace navigates to and clears the previous box if the current box is empty.
+  - Auto-Submission: Once all 6 boxes are filled, automatically triggers verification with `isSubmittingRef` guard against duplicate calls.
+  - Primary Action Button: Full-width "Verify & Continue" button with forward arrow and loading spinner.
+  - Resend OTP: Countdown timer ("Resend in Xs") transitioning to active "Resend OTP" button that re-invokes `sendOtp(phone, purpose)`.
+  - Customer App and backend MSG91 integration remain completely untouched.
+- **Implementation Scope**:
+  1. Completely rewrote [`mobile/vendor-app/src/screens/VendorOtpVerificationScreen.tsx`](file:///Users/shaheaalam/Desktop/worklogy/mobile/vendor-app/src/screens/VendorOtpVerificationScreen.tsx):
+     - Created 6-box input architecture using `inputsRef` array and `focusedIndex` state.
+     - Implemented `handleChangeText` handling single-digit entry, auto-focus forward, and multi-digit SMS autofill / clipboard paste.
+     - Implemented `handleKeyPress` handling Backspace navigation backwards.
+     - Added `isSubmittingRef` duplicate request guard and automatic submission on 6th digit.
+     - Implemented top header with back button and centered "Verification" title.
+     - Designed green chat bubble security badge matching Customer App pixel-perfect reference.
+     - Masked phone pill badge with "Change number" callback.
+     - Error state banner with `alert-circle` icon.
+     - Full-width "Verify & Continue" button with forward arrow.
+     - Resend timer countdown and action button.
+  2. Verified TypeScript compiler checks (`npx tsc --noEmit`) and Android bundle export (`npx expo export --platform android`) cleanly with 0 errors.
+- **Acceptance Criteria**: Exact 6-box OTP layout matching Customer App; automatic SMS OTP autofill; multi-digit paste support; auto-advance and backspace navigation; single verification execution; passes `tsc --noEmit` and `expo export --platform android`.
+- **Status**: Done
