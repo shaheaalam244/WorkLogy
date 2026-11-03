@@ -633,7 +633,7 @@ export const sendLoginOtp = async (req, res, next) => {
         purpose: otpPurpose,
         deliveryStatus: 'REQUEST_ACCEPTED',
         deliveryDetails: {
-          status: 'Dispatched via Fast2SMS Quick Route',
+          status: 'Dispatched via Fast2SMS OTP Route',
           updatedAt: new Date()
         },
         expiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 minutes

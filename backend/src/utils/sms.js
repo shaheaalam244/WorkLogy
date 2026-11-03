@@ -63,11 +63,11 @@ export async function sendOtpSms({ phone, otp, purpose = 'vendor_login' }) {
   const provider = (process.env.SMS_PROVIDER || (process.env.FAST2SMS_API_KEY ? 'fast2sms' : (process.env.MSG91_AUTH_KEY ? 'msg91' : 'local'))).toLowerCase();
   const messageText = `Your WorkLogy verification code is ${otp}. Valid for 5 minutes. Do not share this code with anyone.`;
 
-  // 1. FAST2SMS Provider (India Quick OTP Route - No DLT or PE ID required)
+  // 1. FAST2SMS Provider (Dedicated OTP Route - Cost: ~₹0.20 vs ₹7.00 for Quick SMS)
   if (provider === 'fast2sms' && process.env.FAST2SMS_API_KEY) {
     const apiKey = process.env.FAST2SMS_API_KEY.trim();
     try {
-      // Try Quick route first, or OTP route
+      // Primary: Fast2SMS dedicated OTP route (TRAI pre-approved template, ~₹0.20 per SMS)
       let response = await fetch('https://www.fast2sms.com/dev/bulkV2', {
         method: 'POST',
         headers: {
@@ -75,18 +75,17 @@ export async function sendOtpSms({ phone, otp, purpose = 'vendor_login' }) {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          route: 'q',
-          message: `Your WorkLogy verification code is ${otp}. Valid for 5 minutes.`,
-          language: 'english',
-          flash: 0,
+          route: 'otp',
+          variables_values: String(otp),
           numbers: normalizedPhone
         })
       });
 
       let result = await response.json().catch(() => ({}));
 
-      // If 'q' route requires different format, try 'otp' route
+      // Fallback: If 'otp' route encounters an issue, fallback to 'q' (Quick SMS route)
       if (!response.ok || result.return === false) {
+        console.warn('[SMS Service] Fast2SMS OTP route message:', result?.message || response.status, 'Trying Quick SMS route...');
         response = await fetch('https://www.fast2sms.com/dev/bulkV2', {
           method: 'POST',
           headers: {
@@ -94,8 +93,10 @@ export async function sendOtpSms({ phone, otp, purpose = 'vendor_login' }) {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            route: 'otp',
-            variables_values: String(otp),
+            route: 'q',
+            message: `Your WorkLogy verification code is ${otp}. Valid for 5 minutes.`,
+            language: 'english',
+            flash: 0,
             numbers: normalizedPhone
           })
         });
