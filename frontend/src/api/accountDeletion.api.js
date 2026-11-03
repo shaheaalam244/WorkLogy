@@ -23,3 +23,4 @@ export const accountDeletionAPI = {
     return res.data;
   }
 };
+

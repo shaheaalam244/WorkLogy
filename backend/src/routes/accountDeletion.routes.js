@@ -13,3 +13,4 @@ router.post('/submit', submitDeletionRequest);
 router.post('/status', checkDeletionStatus);
 
 export default router;
+
