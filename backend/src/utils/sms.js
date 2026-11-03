@@ -60,11 +60,51 @@ export async function sendOtpSms({ phone, otp, purpose = 'vendor_login' }) {
     throw new Error('Invalid 10-digit Indian mobile number');
   }
 
-  const provider = (process.env.SMS_PROVIDER || (process.env.FAST2SMS_API_KEY ? 'fast2sms' : (process.env.MSG91_AUTH_KEY ? 'msg91' : 'local'))).toLowerCase();
+  const provider = (process.env.SMS_PROVIDER || (process.env.APITXT_AUTH_KEY ? 'apitxt' : (process.env.FAST2SMS_API_KEY ? 'fast2sms' : (process.env.MSG91_AUTH_KEY ? 'msg91' : 'local')))).toLowerCase();
   const messageText = `Your WorkLogy verification code is ${otp}. Valid for 5 minutes. Do not share this code with anyone.`;
 
-  // 1. FAST2SMS Provider (Primary: Dedicated OTP Route @ ~₹0.20-0.25 | Fallback: Quick SMS)
-  if (provider === 'fast2sms' && process.env.FAST2SMS_API_KEY) {
+  // 1. APITXT Provider (Primary: Direct SendOTP)
+  if ((provider === 'apitxt' || process.env.APITXT_AUTH_KEY) && process.env.APITXT_AUTH_KEY) {
+    const authKey = process.env.APITXT_AUTH_KEY.trim();
+    try {
+      const response = await fetch('https://apitxt.com/api/sendOTP', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: new URLSearchParams({
+          authkey: authKey,
+          mobile: normalizedPhone,
+          otp: String(otp)
+        })
+      });
+
+      const result = await response.json().catch(() => ({}));
+      if (response.ok && (result.status === 'success' || result.status === 200)) {
+        const reqId = result.data?.request_id || result.request_id || `apitxt_${Date.now()}`;
+        console.log(`[SMS Cost Audit] Provider: APITxT | Route: sendOTP | Recipient: +91 ******${normalizedPhone.slice(-4)} | ReqID: ${reqId} | Timestamp: ${new Date().toISOString()}`);
+        return {
+          success: true,
+          provider: 'apitxt',
+          messageId: reqId
+        };
+      }
+
+      const errMsg = result.message || `APITxT failed with status ${response.status}`;
+      console.warn('[SMS Service] APITxT error:', errMsg, '- attempting fallback to Fast2SMS...');
+      if (!process.env.FAST2SMS_API_KEY) {
+        throw new Error(errMsg);
+      }
+    } catch (err) {
+      console.warn('[SMS Service] APITxT dispatch error:', err.message, '- attempting fallback to Fast2SMS...');
+      if (!process.env.FAST2SMS_API_KEY) {
+        throw new Error(`APITxT delivery failed: ${err.message}`);
+      }
+    }
+  }
+
+  // 2. FAST2SMS Provider (Fallback)
+  if ((provider === 'fast2sms' || process.env.FAST2SMS_API_KEY) && process.env.FAST2SMS_API_KEY) {
     const apiKey = process.env.FAST2SMS_API_KEY.trim();
     try {
       // Step 1: Try Fast2SMS dedicated OTP route first (Tariff: ~₹0.20 to ₹0.25 per SMS)
