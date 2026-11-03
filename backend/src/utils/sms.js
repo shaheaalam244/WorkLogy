@@ -63,26 +63,49 @@ export async function sendOtpSms({ phone, otp, purpose = 'vendor_login' }) {
   const provider = (process.env.SMS_PROVIDER || (process.env.FAST2SMS_API_KEY ? 'fast2sms' : (process.env.MSG91_AUTH_KEY ? 'msg91' : 'local'))).toLowerCase();
   const messageText = `Your WorkLogy verification code is ${otp}. Valid for 5 minutes. Do not share this code with anyone.`;
 
-  // 1. FAST2SMS Provider (Active Production Route)
+  // 1. FAST2SMS Provider (Primary: Dedicated OTP Route @ ~₹0.20-0.25 | Fallback: Quick SMS)
   if (provider === 'fast2sms' && process.env.FAST2SMS_API_KEY) {
     const apiKey = process.env.FAST2SMS_API_KEY.trim();
     try {
-      const response = await fetch('https://www.fast2sms.com/dev/bulkV2', {
+      // Step 1: Try Fast2SMS dedicated OTP route first (Tariff: ~₹0.20 to ₹0.25 per SMS)
+      let response = await fetch('https://www.fast2sms.com/dev/bulkV2', {
         method: 'POST',
         headers: {
           authorization: apiKey,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          route: 'q',
-          message: `Your WorkLogy verification code is ${otp}. Valid for 5 minutes. Do not share this code with anyone.`,
-          language: 'english',
-          flash: 0,
+          route: 'otp',
+          variables_values: String(otp),
           numbers: normalizedPhone
         })
       });
 
-      const result = await response.json().catch(() => ({}));
+      let result = await response.json().catch(() => ({}));
+      let activeRoute = 'otp';
+
+      // Step 2: If OTP route is pending KYC (Code 996), fallback to Quick SMS so app never breaks
+      if (!response.ok || result.return === false || result.status_code) {
+        if (result.status_code === 996 || !response.ok) {
+          console.warn('[SMS Service] Fast2SMS OTP route (₹0.25) returned:', result?.message || response.status, 'Falling back to Quick SMS route...');
+          response = await fetch('https://www.fast2sms.com/dev/bulkV2', {
+            method: 'POST',
+            headers: {
+              authorization: apiKey,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              route: 'q',
+              message: `Your WorkLogy verification code is ${otp}. Valid for 5 minutes. Do not share this code with anyone.`,
+              language: 'english',
+              flash: 0,
+              numbers: normalizedPhone
+            })
+          });
+          result = await response.json().catch(() => ({}));
+          activeRoute = 'q';
+        }
+      }
 
       if (!response.ok || result.return === false) {
         const rawMsg = Array.isArray(result.message) ? result.message.join('. ') : (result.message || '');
@@ -99,12 +122,14 @@ export async function sendOtpSms({ phone, otp, purpose = 'vendor_login' }) {
         ? result.request_id[0]
         : (result.request_id || `f2s_${Date.now()}`);
 
-      console.log(`[SMS Service] Real OTP successfully sent via Fast2SMS to +91 ******${normalizedPhone.slice(-4)} (reqId: ${reqId})`);
+      const unitCost = activeRoute === 'otp' ? 0.25 : 7.00;
+      console.log(`[SMS Cost Audit] Provider: Fast2SMS | Route: ${activeRoute} | Tariff: ₹${unitCost} | Recipient: +91 ******${normalizedPhone.slice(-4)} | ReqID: ${reqId} | Timestamp: ${new Date().toISOString()}`);
 
       return {
         success: true,
         provider: 'fast2sms',
-        route: 'q',
+        route: activeRoute,
+        unitCostEstimate: unitCost,
         messageId: reqId
       };
     } catch (err) {
