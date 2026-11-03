@@ -20,7 +20,7 @@ import {
 } from '../controllers/auth.controller.js';
 import { protect, optionalAuth } from '../middleware/auth.middleware.js';
 import { validateRegister, validateLogin } from '../validators/auth.validator.js';
-import { authLimiter } from '../middleware/rateLimiter.js';
+import { authLimiter, otpLimiter } from '../middleware/rateLimiter.js';
 
 const router = express.Router();
 
@@ -36,10 +36,10 @@ router.post('/logout', logout);
 // ── Mobile OTP & Persistent Session Routes ──
 router.post('/vendor/check-phone', checkVendorPhone);
 router.post('/check-phone', checkVendorPhone);
-router.post('/otp/send', sendLoginOtp);
+router.post('/otp/send', otpLimiter, sendLoginOtp);
 router.post('/otp/verify', verifyLoginOtp);
 router.post('/otp/verify-widget', verifyWidgetAccessToken);
-router.post('/otp/retry', retryOtpController);
+router.post('/otp/retry', otpLimiter, retryOtpController);
 router.get('/otp/status', getOtpDeliveryStatus);
 router.post('/otp/msg91-dlr', handleMsg91DlrWebhook);
 router.post('/token/refresh', refreshTokenSession);

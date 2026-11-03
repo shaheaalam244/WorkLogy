@@ -31,3 +31,15 @@ export const authLimiter = rateLimit({
   }
 });
 
+export const otpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: isDev ? 1000 : 15, // Prevent brute-force & SMS flooding: 15 OTP requests per 15 min per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: () => isDev,
+  message: {
+    success: false,
+    message: 'Too many OTP requests from this network. Please try again after 15 minutes.'
+  }
+});
+

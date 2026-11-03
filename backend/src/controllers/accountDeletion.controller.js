@@ -126,7 +126,12 @@ export const requestDeletionOtp = async (req, res) => {
         reqId: smsResult.messageId || `f2s_${Date.now()}`,
         purpose: otpPurpose,
         deliveryStatus: 'REQUEST_ACCEPTED',
-        deliveryDetails: { status: 'Dispatched via Fast2SMS', updatedAt: new Date() },
+        deliveryDetails: {
+          status: 'Dispatched via Fast2SMS OTP Route',
+          route: 'otp',
+          unitCostEstimate: 0.25,
+          updatedAt: new Date()
+        },
         expiresAt: new Date(Date.now() + 10 * 60 * 1000),
         ipAddress: req.ip || ''
       });
