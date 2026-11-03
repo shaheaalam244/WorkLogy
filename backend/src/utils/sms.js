@@ -63,8 +63,7 @@ export async function sendOtpSms({ phone, otp, purpose = 'vendor_login' }) {
   const provider = (process.env.SMS_PROVIDER || (process.env.FAST2SMS_API_KEY ? 'fast2sms' : (process.env.MSG91_AUTH_KEY ? 'msg91' : 'local'))).toLowerCase();
   const messageText = `Your WorkLogy verification code is ${otp}. Valid for 5 minutes. Do not share this code with anyone.`;
 
-  // 1. FAST2SMS Provider (Dedicated OTP Route - Target Tariff: ~₹0.20 to ₹0.25 per SMS)
-  // Strictly uses 'route: otp' — never falls back to expensive ₹7.00 Quick SMS
+  // 1. FAST2SMS Provider (Active Production Route)
   if (provider === 'fast2sms' && process.env.FAST2SMS_API_KEY) {
     const apiKey = process.env.FAST2SMS_API_KEY.trim();
     try {
@@ -75,22 +74,17 @@ export async function sendOtpSms({ phone, otp, purpose = 'vendor_login' }) {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          route: 'otp',
-          variables_values: String(otp),
+          route: 'q',
+          message: `Your WorkLogy verification code is ${otp}. Valid for 5 minutes. Do not share this code with anyone.`,
+          language: 'english',
+          flash: 0,
           numbers: normalizedPhone
         })
       });
 
       const result = await response.json().catch(() => ({}));
 
-      // Handle Fast2SMS specific response codes
-      if (!response.ok || result.return === false || result.status_code) {
-        // Code 996: KYC / Website verification pending in Fast2SMS dashboard
-        if (result.status_code === 996) {
-          console.error('[SMS Service] Fast2SMS Code 996: Website Verification required in Fast2SMS panel under OTP menu.');
-          throw new Error('Fast2SMS account setup required: Please complete 1-time Website Verification in your Fast2SMS panel (under OTP menu) to activate the ₹0.20 OTP delivery route.');
-        }
-
+      if (!response.ok || result.return === false) {
         const rawMsg = Array.isArray(result.message) ? result.message.join('. ') : (result.message || '');
         if (rawMsg.toLowerCase().includes('wallet balance') || rawMsg.toLowerCase().includes('insufficient')) {
           console.error('[SMS Service] Fast2SMS Insufficient Balance:', rawMsg);
@@ -105,14 +99,12 @@ export async function sendOtpSms({ phone, otp, purpose = 'vendor_login' }) {
         ? result.request_id[0]
         : (result.request_id || `f2s_${Date.now()}`);
 
-      // Structured Cost Monitoring & Audit Logging (Plain-text OTP is NEVER logged)
-      console.log(`[SMS Cost Audit] Provider: Fast2SMS | Route: OTP (TRAI Pre-Approved) | Tariff: ~₹0.20-0.25 | Recipient: +91 ******${normalizedPhone.slice(-4)} | ReqID: ${reqId} | Timestamp: ${new Date().toISOString()}`);
+      console.log(`[SMS Service] Real OTP successfully sent via Fast2SMS to +91 ******${normalizedPhone.slice(-4)} (reqId: ${reqId})`);
 
       return {
         success: true,
         provider: 'fast2sms',
-        route: 'otp',
-        unitCostEstimate: 0.25,
+        route: 'q',
         messageId: reqId
       };
     } catch (err) {
